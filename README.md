@@ -1,0 +1,2 @@
+# lua
+MacroQuest Lua scripts
