@@ -19,7 +19,11 @@ end
 -- start
 if args[1] == nil then
     print("Must supply a lua file name to run. Usage:")
-    print("/luar somefile.lua")
+    print("-- /lua run luarun somefile.lua")
+    print("Alternatively, setup an alias via:")
+    print("-- /alias /luar /lua run luarun somefile.lua")
+    print("Alias usage:")
+    print("-- /luar somefile.lua")
     mq.exit()
 end
 
