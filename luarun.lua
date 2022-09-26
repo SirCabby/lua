@@ -1,24 +1,21 @@
---region includes===========================================================
 local mq = require("mq")
-require "filesystem.filesystem"
---endregion includes===========================================================
+local FileSystem = require "filesystem.filesystem"
 
---region fields=================================================================
 local args = {...}
 local LUA_DIR = mq.TLO.Lua.Dir()
---endregion fields=================================================================
 
---region local functions=========================================================
---- Adds ".lua" to end of supplied fileName
+---Adds ".lua" to end of supplied fileName
+---@param fileName string @the file to find, that is possibly missing an extension of .lua
+---@return string @The file name is returned, and ensured to have it suffixed with .lua
 local function AddLuaExtensionIfMissing(fileName)
     if not string.find(string.lower(fileName), ".lua") then
         return fileName..".lua"
     end
     return fileName
 end
---endregion local functions=========================================================
 
---region start===================================================================
+
+-- start
 do
     if args[1] == nil then
         print("Must supply a lua file name to run. Usage:")
@@ -31,8 +28,8 @@ do
     end
 
     local luaFileName = AddLuaExtensionIfMissing(args[1])
-    local luaFile = FindFile(LUA_DIR, luaFileName, true)
-    if luaFile == nil then
+    local luaFile = FileSystem:FindFile(LUA_DIR, luaFileName, true)
+    if luaFile == "" then
         print("Unable to find lua file to run: "..luaFileName)
         mq.exit()
     else
@@ -41,4 +38,3 @@ do
 
     mq.cmdf("/lua run %s", luaFile)
 end
---endregion start===================================================================
