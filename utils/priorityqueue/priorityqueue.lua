@@ -1,30 +1,24 @@
 local Timer = require "utils.timer.timer"
 
----@class PriorityQueue
-local PriorityQueue = {
-    maxSize = 0,
-    jobs = {},
-    currentJobKey = 0
-}
-
 ---@class Job
-local Job = {
-    key = 0,
-    priority = 0,
-    command = "",
-    timer = Timer:new(0)
-}
+---@field key integer
+---@field priority number
+---@field command string
+---@field timer Timer
+local Job = {}
 
----ctor
----@param maxSize number Maximum size of the queue
----@return PriorityQueue
-function PriorityQueue:new(maxSize)
-    local priorityQueue = {}
-    setmetatable(priorityQueue, self)
-    self.__index = self
-    self.maxSize = maxSize
-    self.jobs = {}
-    self.currentJobKey = -1
+---Creates a new job for queueing
+---@param priorityQueue PriorityQueue - queue containing metadata to leverage
+---@param priority number Priority of request to put into the queue, lower number is higher priority
+---@param command string The command to execute
+---@param time number Seconds the job goes invisible for once read
+---@return table - The created job
+function Job:new(priorityQueue, priority, command, time)
+    local newJob = {}
+    setmetatable(newJob, self)
+    newJob.priority = priority
+    newJob.command = command
+    newJob.timer = Timer:new(time)
 
     ---Generates a unique key for a job
     ---@param priorityQueue PriorityQueue - queue containing metadata to leverage
@@ -50,6 +44,30 @@ function PriorityQueue:new(maxSize)
         print("Unable to find a unique key! Priority Queue might be full")
         return -1
     end
+
+    ---Is this job visible
+    ---@return boolean - True if visible
+    function newJob:IsVisible()
+        return self.timer:timer_expired()
+    end
+
+    newJob.key = GenerateJobKey(priorityQueue)
+    return newJob
+end
+
+---@class PriorityQueue
+local PriorityQueue = {}
+
+---ctor
+---@param maxSize number Maximum size of the queue
+---@return PriorityQueue
+function PriorityQueue:new(maxSize)
+    local priorityQueue = {}
+    setmetatable(priorityQueue, self)
+    self.__index = self
+    self.maxSize = maxSize
+    self.jobs = {}
+    self.currentJobKey = -1
 
     ---Determines if the command is unique to the queue. If one already exists, no new job is added.
     ---@param priorityQueue PriorityQueue - queue containing metadata to leverage
@@ -79,28 +97,6 @@ function PriorityQueue:new(maxSize)
         return -1
     end
 
-    ---Is this job visible
-    ---@param job Job The unique job key
-    ---@return boolean - True if visible
-    local function IsVisible(job)
-        return job.timer:timer_expired()
-    end
-
-    ---Creates a new job for queueing
-    ---@param priorityQueue PriorityQueue - queue containing metadata to leverage
-    ---@param priority number Priority of request to put into the queue, lower number is higher priority
-    ---@param command string The command to execute
-    ---@param time number Seconds the job goes invisible for once read
-    ---@return table - The created job
-    local function CreateJob(priorityQueue, priority, command, time)
-        local newJob = {}
-        newJob.key = GenerateJobKey(priorityQueue)
-        newJob.priority = priority
-        newJob.command = command
-        newJob.timer = Timer:new(time)
-        return newJob
-    end
-
     ---Removes Job from queue by index
     ---@param priorityQueue PriorityQueue - queue containing metadata to leverage
     ---@param index integer job's place in the queue
@@ -116,7 +112,7 @@ function PriorityQueue:new(maxSize)
         if #self.jobs > 0 then
             for _,job in ipairs(self.jobs)
             do
-                if IsVisible(job) then
+                if job:IsVisible() then
                     self.currentJobKey = job.key
                     break
                 end
@@ -138,7 +134,7 @@ function PriorityQueue:new(maxSize)
             return
         end
 
-        local newJob = CreateJob(self, priority, command, time)
+        local newJob = Job:new(self, priority, command, time)
 
         -- Determine where to insert
         for i = 1, self.maxSize, 1
