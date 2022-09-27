@@ -147,7 +147,6 @@ function PriorityQueue:new(maxSize)
         local jobIndex = GetJobIndex(self, key)
         if (jobIndex > 0) then
             RemoveJobByIndex(self, jobIndex)
-            self.currentJobKey = -1
         end
     end
 
