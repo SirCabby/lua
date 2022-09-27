@@ -45,7 +45,7 @@ function Job:new(priorityQueue, priority, command, time)
     end
 
     ---Is this job visible
-    ---@return boolean - True if visible
+    ---@return boolean - true if visible
     function newJob:IsVisible()
         return self.timer:timer_expired()
     end
@@ -71,7 +71,7 @@ function PriorityQueue:new(maxSize)
     ---Determines if the command is unique to the queue. If one already exists, no new job is added.
     ---@param priorityQueue PriorityQueue - queue containing metadata to leverage
     ---@param command string The command to check for
-    ---@return boolean true if this is a unique job to add, false to abort
+    ---@return boolean - true if this is a unique job to add, false to abort
     local function IsUnique(priorityQueue, command)
         for _,job in ipairs(priorityQueue.jobs) do
             if job.command == command then
@@ -150,12 +150,12 @@ function PriorityQueue:new(maxSize)
         end
     end
 
-    --- Completes and removes the current job in the queue
+    ---Completes and removes the current job in the queue
     function PriorityQueue:CompleteCurrentJob()
         priorityQueue:CompleteJobByKey(self.currentJobKey)
     end
 
-    --- Prints the status of this PriorityQueue
+    ---Prints the status of this PriorityQueue
     function PriorityQueue:Print()
         if (#self.jobs < 1) then
             print("Priority Queue is empty")
