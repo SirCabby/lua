@@ -26,8 +26,7 @@ function Job:new(priorityQueue, priority, command, time)
     local function GenerateJobKey(priorityQueue)
         if #priorityQueue.jobs < 1 then return 1 end
 
-        for newKey = 1, priorityQueue.maxSize, 1
-        do
+        for newKey = 1, priorityQueue.maxSize, 1 do
             local found = false
             for _,job in ipairs(priorityQueue.jobs)
             do
@@ -74,8 +73,7 @@ function PriorityQueue:new(maxSize)
     ---@param command string The command to check for
     ---@return boolean true if this is a unique job to add, false to abort
     local function IsUnique(priorityQueue, command)
-        for _,job in ipairs(priorityQueue.jobs)
-        do
+        for _,job in ipairs(priorityQueue.jobs) do
             if job.command == command then
                 return false
             end
@@ -88,8 +86,7 @@ function PriorityQueue:new(maxSize)
     ---@param key integer - The job's unique key
     ---@return integer - job index in the queue
     local function GetJobIndex(priorityQueue, key)
-        for idx,job in ipairs(priorityQueue.jobs)
-        do
+        for idx,job in ipairs(priorityQueue.jobs) do
             if job.key == key then
                 return idx
             end
@@ -110,8 +107,7 @@ function PriorityQueue:new(maxSize)
     function PriorityQueue:SetNextJob()
         self.currentJobKey = -1
         if #self.jobs > 0 then
-            for _,job in ipairs(self.jobs)
-            do
+            for _,job in ipairs(self.jobs) do
                 if job:IsVisible() then
                     self.currentJobKey = job.key
                     break
@@ -137,8 +133,7 @@ function PriorityQueue:new(maxSize)
         local newJob = Job:new(self, priority, command, time)
 
         -- Determine where to insert
-        for i = 1, self.maxSize, 1
-        do
+        for i = 1, self.maxSize, 1 do
             if i > #self.jobs or self.jobs[i].priority > priority then
                 table.insert(self.jobs, i, newJob)
                 return
@@ -168,8 +163,7 @@ function PriorityQueue:new(maxSize)
         end
         print("Priority Queue:")
         print("===============")
-        for idx,job in ipairs(self.jobs)
-        do
+        for idx,job in ipairs(self.jobs) do
             print("Index("..idx..") Priority("..job.priority..") Key("..job.key..") Timer("..job.timer:time_remaining()..") Job: "..job.command) 
         end
         print("===============")
