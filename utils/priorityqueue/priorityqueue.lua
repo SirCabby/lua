@@ -3,7 +3,6 @@ local Timer = require "utils.timer.timer"
 ---@class PriorityQueue
 local PriorityQueue = {
     maxSize = 0,
-    size = 0,
     jobs = {},
     currentJobKey = 0
 }
@@ -24,7 +23,6 @@ function PriorityQueue:new(maxSize)
     setmetatable(priorityQueue, self)
     self.__index = self
     self.maxSize = maxSize
-    self.size = 0
     self.jobs = {}
     self.currentJobKey = -1
 
@@ -32,14 +30,14 @@ function PriorityQueue:new(maxSize)
     ---@param priorityQueue PriorityQueue - queue containing metadata to leverage
     ---@return integer - new unique key, or -1 if unable to generate a key (queue is full)
     local function GenerateJobKey(priorityQueue)
-        if priorityQueue.size < 1 then return 1 end
+        if #priorityQueue.jobs < 1 then return 1 end
 
         for newKey = 1, priorityQueue.maxSize, 1
         do
             local found = false
-            for i = 1, priorityQueue.size, 1
+            for _,job in ipairs(priorityQueue.jobs)
             do
-                if priorityQueue.jobs[i].key == newKey then
+                if job.key == newKey then
                     found = true
                     break
                 end
@@ -58,9 +56,9 @@ function PriorityQueue:new(maxSize)
     ---@param command string The command to check for
     ---@return boolean true if this is a unique job to add, false to abort
     local function IsUnique(priorityQueue, command)
-        for i = 1, priorityQueue.size, 1
+        for _,job in ipairs(priorityQueue.jobs)
         do
-            if priorityQueue.jobs[i].command == command then
+            if job.command == command then
                 return false
             end
         end
@@ -72,10 +70,10 @@ function PriorityQueue:new(maxSize)
     ---@param key integer - The job's unique key
     ---@return integer - job index in the queue
     local function GetJobIndex(priorityQueue, key)
-        for i = 1, priorityQueue.size, 1
+        for idx,job in ipairs(priorityQueue.jobs)
         do
-            if priorityQueue.jobs[i].key == key then
-                return i
+            if job.key == key then
+                return idx
             end
         end
         return -1
@@ -107,20 +105,19 @@ function PriorityQueue:new(maxSize)
     ---@param priorityQueue PriorityQueue - queue containing metadata to leverage
     ---@param index integer job's place in the queue
     local function RemoveJobByIndex(priorityQueue, index)
-        if index <= priorityQueue.size then
+        if index <= #priorityQueue.jobs then
             table.remove(priorityQueue.jobs, index)
-            priorityQueue.size = priorityQueue.size - 1
         end
     end
 
     ---Sets next job to pull from the queue
     function PriorityQueue:SetNextJob()
         self.currentJobKey = -1
-        if self.size > 0 then
-            for i = 1, self.size, 1
+        if #self.jobs > 0 then
+            for _,job in ipairs(self.jobs)
             do
-                if IsVisible(self.jobs[i]) then
-                    self.currentJobKey = self.jobs[i].key
+                if IsVisible(job) then
+                    self.currentJobKey = job.key
                     break
                 end
             end
@@ -146,9 +143,8 @@ function PriorityQueue:new(maxSize)
         -- Determine where to insert
         for i = 1, self.maxSize, 1
         do
-            if i > self.size or self.jobs[i].priority > priority then
+            if i > #self.jobs or self.jobs[i].priority > priority then
                 table.insert(self.jobs, i, newJob)
-                self.size = self.size + 1
                 return
             end
         end
@@ -170,15 +166,15 @@ function PriorityQueue:new(maxSize)
 
     --- Prints the status of this PriorityQueue
     function PriorityQueue:Print()
-        if (self.size < 1) then
+        if (#self.jobs < 1) then
             print("Priority Queue is empty")
             return
         end
         print("Priority Queue:")
         print("===============")
-        for i = 1, self.size, 1
+        for idx,job in ipairs(self.jobs)
         do
-            print("Index("..i..") Priority("..self.jobs[i].priority..") Key("..self.jobs[i].key..") Timer("..self.jobs[i].timer:time_remaining()..") Job: "..self.jobs[i].command) 
+            print("Index("..idx..") Priority("..job.priority..") Key("..job.key..") Timer("..job.timer:time_remaining()..") Job: "..job.command) 
         end
         print("===============")
     end
