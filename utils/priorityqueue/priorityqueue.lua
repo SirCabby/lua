@@ -5,17 +5,18 @@ local Timer = require("utils.timer.timer")
 ---@field priority number
 ---@field command string
 ---@field timer Timer
-Job = {}
+local Job = {}
 
 ---Creates a new job for queueing
 ---@param priorityQueue PriorityQueue - queue containing metadata to leverage
 ---@param priority number Priority of request to put into the queue, lower number is higher priority
 ---@param command string The command to execute
----@param time number Seconds the job goes invisible for once read
+---@param time number Seconds the job goes invisible for once created
 ---@return table - The created job
 function Job:new(priorityQueue, priority, command, time)
     local newJob = {}
     setmetatable(newJob, self)
+    self.__index = self
     newJob.priority = priority
     newJob.command = command
     newJob.timer = Timer:new(time)
@@ -174,7 +175,7 @@ function PriorityQueue:new(maxSize)
         print("Priority Queue:")
         print("===============")
         for idx,job in ipairs(self.jobs) do
-            print("Index("..idx..") Priority("..job.priority..") Key("..job.key..") Timer("..job.timer:time_remaining()..") Job: "..job.command) 
+            print("Index("..idx..") Priority("..job.priority..") Key("..job.key..") Timer("..job.timer:time_remaining()..") Command: "..job.command) 
         end
         print("===============")
     end
@@ -182,4 +183,4 @@ function PriorityQueue:new(maxSize)
     return priorityQueue
 end
 
-return PriorityQueue
+return PriorityQueue,Job
