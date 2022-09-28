@@ -1,3 +1,4 @@
+---@diagnostic disable: deprecated, undefined-global, lowercase-global
 -- Assorted global functions that don't belong in their own file.
 
 -- 5.3 compatibility

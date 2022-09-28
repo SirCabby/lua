@@ -1,3 +1,4 @@
+---@diagnostic disable: deprecated
 -- new string-related functions, all of them placed in table string
 -- and thus callable with str:foo()
 

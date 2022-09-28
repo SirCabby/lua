@@ -1,3 +1,4 @@
+---@diagnostic disable: lowercase-global
 -- math-related functions
 
 inf = math.huge

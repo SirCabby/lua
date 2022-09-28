@@ -1,3 +1,4 @@
+---@diagnostic disable: deprecated
 require 'flags'
 
 -- 5.3 compatibility

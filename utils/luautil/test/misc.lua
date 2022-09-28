@@ -1,3 +1,4 @@
+---@diagnostic disable: deprecated
 require 'misc'
 
 -- 5.3 compatibility

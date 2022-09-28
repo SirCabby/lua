@@ -1,3 +1,4 @@
+---@diagnostic disable: lowercase-global
 -- new functions related to tables
 -- functions that handle tables-as-lists go in list.lua
 

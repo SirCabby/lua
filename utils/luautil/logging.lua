@@ -1,3 +1,4 @@
+---@diagnostic disable: cast-local-type, lowercase-global
 local LOG_LEVEL = 2 -- WARNING
 local OUT = io.stdout
 local flush

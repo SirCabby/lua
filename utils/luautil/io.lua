@@ -1,3 +1,4 @@
+---@diagnostic disable: lowercase-global
 -- printf(format, ...)
 function printf(...)
   return io.output():printf(...)
