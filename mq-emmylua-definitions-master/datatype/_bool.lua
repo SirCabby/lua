@@ -1,2 +1,0 @@
---- @class bool
---- @field public ToString "TRUE" for non-zero, or "FALSE" for zero

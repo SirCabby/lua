@@ -1,4 +1,0 @@
---- @class plugin
---- @field public Name string Name of the plugin
---- @field public Version float Version number of the plugin
---- @field public ToString string Same as Name

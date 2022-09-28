@@ -1,6 +1,0 @@
---- @class xtarget
---- @field public ID number ID of specified XTarget
---- @field public Name string Name of specified XTarget
---- @field public PctAggro number PctAggro of specified XTarget
---- @field public TargetType string Extended target type
---- @field public ToString number Number of current extended targets

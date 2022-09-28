@@ -1,4 +1,0 @@
---- @class race
---- @field public ID number The ID of the race
---- @field public Name string The name of the race
---- @field public ToString string The name of the race
