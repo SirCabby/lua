@@ -1,6 +1,6 @@
 ---@type Mq
 local mq = require('mq')
-local Timer = require "utils.timer.timer"
+local Timer = require("utils.timer.timer")
 
 mq.cmd("/mqclear")
 

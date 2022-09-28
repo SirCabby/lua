@@ -1,5 +1,5 @@
 local mq = require("mq")
-local FileSystem = require "filesystem.filesystem"
+local FileSystem = require("utils.filesystem")
 
 local args = {...}
 local LUA_DIR = mq.TLO.Lua.Dir()
@@ -13,7 +13,6 @@ local function AddLuaExtensionIfMissing(fileName)
     end
     return fileName
 end
-
 
 -- start
 do
