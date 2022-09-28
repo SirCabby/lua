@@ -44,3 +44,6 @@ examples/*
 IntegrationTests/*
 mq/*
 .vscode/*
+
+# experimentation file to omit
+test.lua
