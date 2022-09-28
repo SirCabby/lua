@@ -1,11 +1,11 @@
-local Timer = require "utils.timer.timer"
+local Timer = require("utils.timer.timer")
 
 ---@class Job
 ---@field key integer
 ---@field priority number
 ---@field command string
 ---@field timer Timer
-local Job = {}
+Job = {}
 
 ---Creates a new job for queueing
 ---@param priorityQueue PriorityQueue - queue containing metadata to leverage
@@ -23,13 +23,12 @@ function Job:new(priorityQueue, priority, command, time)
     ---Generates a unique key for a job
     ---@param priorityQueue PriorityQueue - queue containing metadata to leverage
     ---@return integer - new unique key, or -1 if unable to generate a key (queue is full)
-    local function GenerateJobKey(priorityQueue)
+    function Job.GenerateJobKey(priorityQueue)
         if #priorityQueue.jobs < 1 then return 1 end
 
         for newKey = 1, priorityQueue.maxSize, 1 do
             local found = false
-            for _,job in ipairs(priorityQueue.jobs)
-            do
+            for _,job in ipairs(priorityQueue.jobs) do
                 if job.key == newKey then
                     found = true
                     break
@@ -46,11 +45,11 @@ function Job:new(priorityQueue, priority, command, time)
 
     ---Is this job visible
     ---@return boolean - true if visible
-    function newJob:IsVisible()
+    function Job:IsVisible()
         return self.timer:timer_expired()
     end
 
-    newJob.key = GenerateJobKey(priorityQueue)
+    newJob.key = Job.GenerateJobKey(priorityQueue)
     return newJob
 end
 
@@ -104,16 +103,27 @@ function PriorityQueue:new(maxSize)
     end
 
     ---Sets next job to pull from the queue
+    ---@return Job|nil
     function PriorityQueue:SetNextJob()
         self.currentJobKey = -1
         if #self.jobs > 0 then
             for _,job in ipairs(self.jobs) do
                 if job:IsVisible() then
                     self.currentJobKey = job.key
-                    break
+                    return PriorityQueue:GetCurrentJob()
                 end
             end
         end
+        return nil
+    end
+
+    ---Returns the job table for the current job
+    ---@return Job|nil
+    function PriorityQueue:GetCurrentJob()
+        local currentJobIndex = GetJobIndex(self, self.currentJobKey)
+        if currentJobIndex < 0 then return nil end
+
+        return self.jobs[currentJobIndex]
     end
 
     ---Creates and queues a new job based on priority
