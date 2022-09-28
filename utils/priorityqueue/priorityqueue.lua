@@ -12,7 +12,7 @@ local Job = {}
 ---@param priority number Priority of request to put into the queue, lower number is higher priority
 ---@param command string The command to execute
 ---@param time number Seconds the job goes invisible for once created
----@return table - The created job
+---@return Job - The created job
 function Job:new(priorityQueue, priority, command, time)
     local newJob = {}
     setmetatable(newJob, self)
@@ -55,6 +55,9 @@ function Job:new(priorityQueue, priority, command, time)
 end
 
 ---@class PriorityQueue
+---@field jobs table
+---@field maxSize number
+---@field currentJobKey number
 local PriorityQueue = {}
 
 ---ctor
@@ -64,9 +67,9 @@ function PriorityQueue:new(maxSize)
     local priorityQueue = {}
     setmetatable(priorityQueue, self)
     self.__index = self
-    self.maxSize = maxSize
-    self.jobs = {}
-    self.currentJobKey = -1
+    priorityQueue.maxSize = maxSize
+    priorityQueue.jobs = {}
+    priorityQueue.currentJobKey = -1
 
     ---Determines if the command is unique to the queue. If one already exists, no new job is added.
     ---@param priorityQueue PriorityQueue - queue containing metadata to leverage
@@ -86,12 +89,14 @@ function PriorityQueue:new(maxSize)
     ---@param key integer - The job's unique key
     ---@return integer - job index in the queue
     local function GetJobIndex(priorityQueue, key)
+        local result = -1
         for idx,job in ipairs(priorityQueue.jobs) do
             if job.key == key then
-                return idx
+                result = idx
+                break
             end
         end
-        return -1
+        return result
     end
 
     ---Removes Job from queue by index
@@ -111,7 +116,7 @@ function PriorityQueue:new(maxSize)
             for _,job in ipairs(self.jobs) do
                 if job:IsVisible() then
                     self.currentJobKey = job.key
-                    return PriorityQueue:GetCurrentJob()
+                    return self:GetCurrentJob()
                 end
             end
         end
@@ -163,7 +168,7 @@ function PriorityQueue:new(maxSize)
 
     ---Completes and removes the current job in the queue
     function PriorityQueue:CompleteCurrentJob()
-        priorityQueue:CompleteJobByKey(self.currentJobKey)
+        self:CompleteJobByKey(self.currentJobKey)
     end
 
     ---Prints the status of this PriorityQueue
@@ -183,4 +188,4 @@ function PriorityQueue:new(maxSize)
     return priorityQueue
 end
 
-return PriorityQueue,Job
+return PriorityQueue

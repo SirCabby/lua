@@ -1,20 +1,32 @@
----@type Mq
 local mq = require("mq")
-local PriorityQueue = require "utils.priorityqueue.priorityqueue"
+local PriorityQueue = require("utils.priorityqueue.priorityqueue")
 
 mq.cmd("/mqclear")
 
----@type PriorityQueue
 local pq = PriorityQueue:new(200)
+local pqToTestMultipleQueues = PriorityQueue:new(10)
+assert(pq.maxSize == 200, "secondary queue reset maxsize of first queue")
 
 pq:Print()
 print("should have been empty...")
 print()
+assert(#pq.jobs == 0, "Queue should have been empty")
 
 pq:InsertNewJob(3, "foo", 0, false)
 pq:Print()
 print("added foo")
 print()
+local newJob = pq:GetCurrentJob()
+assert(#pq.jobs == 1, "Queue size should be 1")
+assert(newJob == nil, "currentJob should still be nil")
+---@type Job
+newJob = pq.jobs[1]
+newJob:IsVisible()
+assert(newJob.command == "foo", "new job should be foo")
+assert(newJob.IsVisible(newJob), "new job should be visible")
+assert(newJob.priority == 3, "new job priority should be 3")
+pqToTestMultipleQueues:Print()
+assert(#pqToTestMultipleQueues.jobs == 0, "Secondary queue should not be altered")
 
 pq:InsertNewJob(4, "bar", 0, false)
 pq:Print()
@@ -47,7 +59,10 @@ print("added duplicate foo")
 print()
 
 pq:SetNextJob()
+assert(pqToTestMultipleQueues.currentJobKey == -1, "Secondary Queue should not be updating keys")
+pqToTestMultipleQueues:InsertNewJob(1, "alt", 0, false)
 pq:CompleteCurrentJob()
+assert(#pqToTestMultipleQueues.jobs == 1, "completing job shouldn't impact alternate queue")
 pq:Print()
 print("completed current job")
 print()
