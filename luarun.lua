@@ -1,5 +1,5 @@
 local mq = require("mq")
-local FileSystem = require("utils.filesystem")
+local FileSystem = require("utils.FileSystem")
 
 local args = {...}
 local LUA_DIR = mq.TLO.Lua.Dir()

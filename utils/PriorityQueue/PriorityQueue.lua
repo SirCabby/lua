@@ -1,4 +1,4 @@
-local Job = require("utils.priorityqueue.priorityQueueJob")
+local Job = require("utils.PriorityQueue.PriorityQueueJob")
 
 ---@class PriorityQueue
 ---@field jobs table
