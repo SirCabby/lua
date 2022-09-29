@@ -2,7 +2,7 @@ local PackageMan = require("mq/PackageMan")
 local lfs = PackageMan.Require("luafilesystem", "lfs")
 
 ---@class FileSystem
-local FileSystem = { author = "judged"}
+local FileSystem = { author = "judged" }
 local DIR_SEP = package.config:sub(1,1)
 
 
