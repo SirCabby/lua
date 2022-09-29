@@ -5,7 +5,7 @@ local Timer = require("utils.timer.timer")
 ---@field priority number
 ---@field command string
 ---@field timer Timer
-local Job = {}
+local Job = { author = "judged" }
 
 ---Creates a new job for queueing
 ---@param priorityQueue PriorityQueue - queue containing metadata to leverage

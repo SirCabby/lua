@@ -4,7 +4,7 @@ local Job = require("utils.priorityqueue.priorityQueueJob")
 ---@field jobs table
 ---@field maxSize number
 ---@field currentJobKey number
-local PriorityQueue = {}
+local PriorityQueue = { author = "judged" }
 
 ---ctor
 ---@param maxSize number Maximum size of the queue
