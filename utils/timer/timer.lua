@@ -46,7 +46,7 @@ end
 ---Get the time remaining before the timer expires
 ---@return number @Returns the number of seconds remaining until the timer expires
 function Timer:time_remaining()
-    return self.expiration - os.difftime(Timer.current_time(), self.start_time)
+    return math.max(self.expiration - os.difftime(Timer.current_time(), self.start_time), 0)
 end
 
 return Timer
