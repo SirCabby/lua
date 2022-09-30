@@ -11,7 +11,7 @@ local Job = { author = "judged" }
 ---@param priorityQueue PriorityQueue - queue containing metadata to leverage
 ---@param priority number Priority of request to put into the queue, lower number is higher priority
 ---@param content any The content to be queued
----@param time number Seconds the job goes invisible for once created
+---@param time? number Seconds the job goes invisible for once created
 ---@return Job - The created job
 function Job:new(priorityQueue, priority, content, time)
     local newJob = {}
@@ -19,7 +19,7 @@ function Job:new(priorityQueue, priority, content, time)
     self.__index = self
     newJob.priority = priority
     newJob.content = content
-    newJob.timer = Timer:new(time)
+    newJob.timer = Timer:new(time or 0)
 
     ---Generates a unique key for a job
     ---@param priorityQueue PriorityQueue - queue containing metadata to leverage
@@ -48,6 +48,11 @@ function Job:new(priorityQueue, priority, content, time)
     ---@return boolean - true if visible
     function Job:IsVisible()
         return self.timer:timer_expired()
+    end
+
+    ---Reset visibility timer of this job
+    function Job:ResetTimer()
+        self.timer:reset()
     end
 
     newJob.key = Job.GenerateJobKey(priorityQueue)

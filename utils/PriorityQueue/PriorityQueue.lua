@@ -55,7 +55,7 @@ function PriorityQueue:new(maxSize)
     end
 
     ---Sets next job to pull from the queue
-    ---@return Job|nil
+    ---@return Job?
     function PriorityQueue:SetNextJob()
         self.currentJobKey = -1
         if #self.jobs > 0 then
@@ -70,7 +70,7 @@ function PriorityQueue:new(maxSize)
     end
 
     ---Returns the current job
-    ---@return Job|nil
+    ---@return Job?
     function PriorityQueue:GetCurrentJob()
         local currentJobIndex = GetJobIndex(self, self.currentJobKey)
         if currentJobIndex < 0 then return nil end
@@ -81,8 +81,8 @@ function PriorityQueue:new(maxSize)
     ---Creates and queues a new job based on priority
     ---@param priority number Priority of request to put into the queue, lower number is higher priority
     ---@param content any The content to queue
-    ---@param time number|nil (Optional) Seconds the job goes invisible for once read
-    ---@param onlyUnique boolean|nil (Optional) If true, will not add the job if it already exists in the queue
+    ---@param time number? (Optional) Seconds the job goes invisible for once read
+    ---@param onlyUnique boolean? (Optional) If true, will not add the job if it already exists in the queue
     function PriorityQueue:InsertNewJob(priority, content, time, onlyUnique)
         onlyUnique = onlyUnique or false
         time = time or 0
