@@ -1,5 +1,8 @@
 local mq = require("mq")
-local PriorityQueue = require("utils.priorityqueue.priorityqueue")
+---@type PriorityQueue
+local PriorityQueue = require("utils.PriorityQueue.PriorityQueue")
+---@type FunctionContent
+local pqFunctionContent = require("utils.PriorityQueue.PriorityQueueFunctionContent")
 
 mq.cmd("/mqclear")
 
@@ -12,7 +15,7 @@ print("should have been empty...")
 print()
 assert(#pq.jobs == 0, "Queue should have been empty")
 
-pq:InsertNewJob(3, "foo", 0, false)
+pq:InsertNewJob(3, "foo")
 pq:Print()
 print("added foo")
 print()
@@ -22,45 +25,45 @@ assert(newJob == nil, "currentJob should still be nil")
 ---@type Job
 newJob = pq.jobs[1]
 newJob:IsVisible()
-assert(newJob.command == "foo", "new job should be foo")
+assert(newJob.content == "foo", "new job should be foo")
 assert(newJob.IsVisible(newJob), "new job should be visible")
 assert(newJob.priority == 3, "new job priority should be 3")
 pqToTestMultipleQueues:Print()
 assert(#pqToTestMultipleQueues.jobs == 0, "Secondary queue should not be altered")
 
-pq:InsertNewJob(4, "bar", 0, false)
+pq:InsertNewJob(4, "bar")
 pq:Print()
 print("added bar")
 print()
 
-pq:InsertNewJob(5, "zoo", 0, false)
+pq:InsertNewJob(5, "zoo")
 pq:Print()
 print("added zoo")
 print()
 
-pq:InsertNewJob(3, "bazzar", 3, false)
+pq:InsertNewJob(3, "bazzar", 3)
 pq:Print()
 print("added bazzar after foo with small timer")
 print()
 
-pq:InsertNewJob(1, "skip", 0, false)
+pq:InsertNewJob(1, "skip")
 pq:Print()
 print("skip to front")
 print()
 
-pq:InsertNewJob(3, "foo", 0, true)
+pq:InsertNewJob(3, "foo")
 pq:Print()
 print("tried to add duplicate foo, but was set to unique only")
 print()
 
-pq:InsertNewJob(3, "foo", 0, false)
+pq:InsertNewJob(3, "foo", nil, false)
 pq:Print()
 print("added duplicate foo")
 print()
 
 pq:SetNextJob()
 assert(pqToTestMultipleQueues.currentJobKey == -1, "Secondary Queue should not be updating keys")
-pqToTestMultipleQueues:InsertNewJob(1, "alt", 0, false)
+pqToTestMultipleQueues:InsertNewJob(1, "alt")
 pq:CompleteCurrentJob()
 assert(#pqToTestMultipleQueues.jobs == 1, "completing job shouldn't impact alternate queue")
 pq:Print()
@@ -118,7 +121,32 @@ pq:Print()
 print("completed next job, delayed 1s")
 print()
 
-pq:InsertNewJob(3, "foo", 0, false)
+pq:InsertNewJob(3, "foo")
 pq:Print()
 print("added foo")
 print()
+
+
+local wasCalled = false
+local TestFunction = function(someInt, someString)
+    wasCalled = true
+    print("called test function")
+    return someInt == someString
+end
+pqToTestMultipleQueues:InsertNewJob(3, function() TestFunction(3, "3") end)
+pqToTestMultipleQueues:Print()
+print("Test to add a function to a queue and print it")
+print()
+pqToTestMultipleQueues.jobs[2].content()
+assert(wasCalled, "Did not call the test function")
+
+local testContent = pqFunctionContent:new("This job will say Hello", function() print("Hello") end)
+pqToTestMultipleQueues:InsertNewJob(4, testContent)
+pqToTestMultipleQueues:Print()
+print("Testing FunctionContent")
+print()
+pqToTestMultipleQueues.jobs[3].content.Call()
+
+pqToTestMultipleQueues:InsertNewJob(4, 2)
+pqToTestMultipleQueues:Print()
+print("Testing non string")

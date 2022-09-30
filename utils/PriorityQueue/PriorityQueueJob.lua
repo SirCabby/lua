@@ -3,22 +3,22 @@ local Timer = require("utils.timer.timer")
 ---@class Job
 ---@field key integer
 ---@field priority number
----@field command string
+---@field content any
 ---@field timer Timer
 local Job = { author = "judged" }
 
 ---Creates a new job for queueing
 ---@param priorityQueue PriorityQueue - queue containing metadata to leverage
 ---@param priority number Priority of request to put into the queue, lower number is higher priority
----@param command string The command to execute
+---@param content any The content to be queued
 ---@param time number Seconds the job goes invisible for once created
 ---@return Job - The created job
-function Job:new(priorityQueue, priority, command, time)
+function Job:new(priorityQueue, priority, content, time)
     local newJob = {}
     setmetatable(newJob, self)
     self.__index = self
     newJob.priority = priority
-    newJob.command = command
+    newJob.content = content
     newJob.timer = Timer:new(time)
 
     ---Generates a unique key for a job
