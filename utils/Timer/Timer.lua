@@ -1,7 +1,9 @@
 -- Original Author: aquietone
+-- Modified by: judged
 
 ---@class Timer
 local Timer = {
+    authors = "aquietone, judged",
     expiration = 0,
     start_time = 0
 }

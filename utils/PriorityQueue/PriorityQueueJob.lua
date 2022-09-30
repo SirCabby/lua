@@ -1,4 +1,4 @@
-local Timer = require("utils.timer.timer")
+local Timer = require("utils.Timer.Timer")
 
 ---@class Job
 ---@field key integer
