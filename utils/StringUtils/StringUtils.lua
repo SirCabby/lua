@@ -28,4 +28,14 @@ function StringUtils.Join(array, delimiter)
     return joined
 end
 
+---@param str string
+---@return table - char array
+function StringUtils.ToCharArray(str)
+    local charArray = {}
+    for i = 1, #str do
+        charArray[i] = str:sub(i, i)
+    end
+    return charArray
+end
+
 return StringUtils

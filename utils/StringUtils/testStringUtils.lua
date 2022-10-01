@@ -11,3 +11,6 @@ end
 local joinedStr = StringUtils.Join(splitStr)
 print(joinedStr)
 assert(testStr == joinedStr, "Did not join string correctly")
+
+local charArray = StringUtils.ToCharArray(testStr)
+assert(#charArray == 38, "Failed to create char array")
