@@ -38,4 +38,11 @@ function StringUtils.ToCharArray(str)
     return charArray
 end
 
+---Trims whitespace from front of string
+---@param str string
+---@return string
+function StringUtils.TrimFront(str)
+    return str:match'^%s*(.*)'
+end
+
 return StringUtils
