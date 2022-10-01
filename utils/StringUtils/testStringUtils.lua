@@ -1,4 +1,7 @@
+local mq = require("mq")
 local StringUtils = require("utils.StringUtils.StringUtils")
+
+mq.cmd("/mqclear")
 
 local testStr = "The big brown cow jumped over the moon"
 
