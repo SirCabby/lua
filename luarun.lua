@@ -27,7 +27,7 @@ do
     end
 
     local luaFileName = AddLuaExtensionIfMissing(args[1])
-    local luaFile = FileSystem:FindFile(LUA_DIR, luaFileName, true)
+    local luaFile = FileSystem.FindFile(LUA_DIR, luaFileName, true)
     if luaFile == "" then
         print("Unable to find lua file to run: "..luaFileName)
         mq.exit()
