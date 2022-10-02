@@ -11,7 +11,6 @@ mq.cmd("/mqclear")
 --             "bar" = 0
 --         },
 --         {
---             "baz" = null,
 --             "boo" = "hi"
 --         },
 --     ]
@@ -56,6 +55,7 @@ print("test: table")
 Json.Print(Json.Serialize(tbl))
 print()
 print("test: deserialize table and reserialize")
+print()
 local obj = Json.Deserialize(Json.Serialize(tbl))
 Json.Print(Json.Serialize(obj))
 
@@ -63,5 +63,6 @@ print("test: array")
 Json.Print(Json.Serialize(array))
 print()
 print("test: deserialize array and reserialize")
+print()
 obj = Json.Deserialize(Json.Serialize(array))
 Json.Print(Json.Serialize(obj))
