@@ -16,7 +16,7 @@ end
 ---@param delimiter string|nil
 ---@return string
 function StringUtils.Join(array, delimiter)
-    if #array < 1 then return "" end
+    if array == nil or #array < 1 then return "" end
     if #array < 2 then return array[1] end
     delimiter = delimiter or ""
 
