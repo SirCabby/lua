@@ -18,7 +18,7 @@ end
 function StringUtils.Join(array, delimiter)
     if #array < 1 then return "" end
     if #array < 2 then return array[1] end
-    delimiter = delimiter or " "
+    delimiter = delimiter or ""
 
     local joined = array[1]
     for i = 2, #array, 1 do
