@@ -1,4 +1,3 @@
-
 ---@class TableUtils
 local TableUtils = { author = "judged" }
 
@@ -24,6 +23,12 @@ function TableUtils.ArrayContains(array, obj)
     end
 
     return false
+end
+
+---@param obj table
+function TableUtils.Print(obj)
+    local Json = require("utils.Json.Json")
+    Json.Print(Json.Serialize(obj))
 end
 
 return TableUtils
