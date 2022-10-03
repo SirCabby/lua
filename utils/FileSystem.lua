@@ -49,11 +49,13 @@ end
 
 ---Opens or Creates file, writes content into it, then closes file
 ---@param filePath string
----@param content string
+---@param content table string array of lines to write
 function FileSystem.WriteFile(filePath, content)
     local file = io.open(filePath, "w+")
     assert(file ~= nil, "Unable to create file: " .. filePath)
-    file:write(content)
+    for _, value in ipairs(content) do
+        file:write(value, "\n")
+    end
     file:close()
 end
 

@@ -219,7 +219,7 @@ function Json.Deserialize(str)
     ---@param charArray table
     ---@return string|table|number|boolean
     local function ReadValue(charArray)
-        TraverseUntil(charArray, { " " }, true)
+        TraverseUntil(charArray, { " ", "\n" }, true)
         Debug("ReadValue start: " .. charArray[1])
         if #charArray < 1 then error("Reached end of input while looking for a value") end
         if charArray[1] == "\"" then return ReadString(charArray) end
@@ -269,11 +269,11 @@ function Json.Deserialize(str)
         Debug("Making Array...")
 
         table.remove(charArray, 1) -- remove the first [
-        TraverseUntil(charArray, { " " }, true)
+        TraverseUntil(charArray, { " ", "\n" }, true)
 
         while charArray[1] ~= "]" do
             table.insert(output, ReadValue(charArray))
-            TraverseUntil(charArray, { " ", "," }, true)
+            TraverseUntil(charArray, { " ", ",", "\n" }, true)
         end
 
         table.remove(charArray, 1) -- remove the last ]
