@@ -12,4 +12,11 @@ assert(TableUtils.IsArray(testArray1))
 assert(TableUtils.IsArray(testArray2))
 assert(not TableUtils.IsArray(notArray1))
 
-print("passed")
+
+local arrayKeys1 = TableUtils.GetKeys(testArray1)
+local arrayKeys2 = TableUtils.GetKeys(testArray2)
+local notArrayKeys1 = TableUtils.GetKeys(notArray1)
+
+TableUtils.Print(arrayKeys1)
+TableUtils.Print(arrayKeys2)
+TableUtils.Print(notArrayKeys1)

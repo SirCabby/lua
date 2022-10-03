@@ -31,4 +31,15 @@ function TableUtils.Print(obj)
     Json.Print(Json.Serialize(obj))
 end
 
+function TableUtils.GetKeys(obj)
+    local result = {}
+    local count = 0
+    for key,_ in pairs(obj) do
+        count = count + 1
+        result[count] = key
+    end
+    table.sort(result)
+    return result
+end
+
 return TableUtils
