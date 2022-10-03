@@ -44,7 +44,7 @@ function Config:new(filePath)
     function Config:SaveConfig(name, obj)
         Config.store[config.filePath][name] = obj
         FileSystem.WriteFile(config.filePath, Json.Serialize(Config.store[config.filePath]))
-        print("Saved config [" .. name .. "]")
+        if Config.debug then print("Saved config [" .. name .. "]") end
     end
 
     ---Prints the config
