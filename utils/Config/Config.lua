@@ -4,9 +4,15 @@ local Json = require("utils.Json.Json")
 local TableUtils = require("utils.TableUtils.TableUtils")
 
 ---@class Config
----@field store table
----@field filePath string
-local Config = { author = "judged" }
+local Config = { author = "judged", debug = false, store = {} }
+
+-- Config.store: { <-- Global / static config manager table
+--     "filepath1": { <-- Config:new() will be scoped to this
+--         "name1": { <-- each GetConfig returns this, but static reference so more copies share state and don't thrash
+--             ...
+--         }
+--     }
+-- }
 
 ---@param filePath? string
 ---@return Config
@@ -20,33 +26,36 @@ function Config:new(filePath)
         FileSystem.WriteFile(config.filePath, { "{}" })
     end
     local configStr = FileSystem.ReadFile(config.filePath)
-    config.store = Json.Deserialize(configStr)
+    -- check if this file is already loaded
+    if Config.store[config.filePath] == nil then
+        Config.store[config.filePath] = Json.Deserialize(configStr)
+    end
 
     ---Get config by name
     ---@param name string
     ---@return table
     function Config:GetConfig(name)
-        return self.store[name] or {}
+        return Config.store[config.filePath][name] or {}
     end
 
     ---Save config by name
     ---@param name string
     ---@param obj table
     function Config:SaveConfig(name, obj)
-        self.store[name] = obj
-        FileSystem.WriteFile(self.filePath, Json.Serialize(self.store))
+        Config.store[config.filePath][name] = obj
+        FileSystem.WriteFile(config.filePath, Json.Serialize(Config.store[config.filePath]))
         print("Saved config [" .. name .. "]")
     end
 
     ---Prints the config
     ---@param name string
     function Config:Print(name)
-        TableUtils.Print(self.store[name])
+        TableUtils.Print(Config.store[config.filePath][name])
     end
 
     ---Return config names currently in use
     function Config:GetSavedNames()
-        return TableUtils.GetKeys(self.store)
+        return TableUtils.GetKeys(Config.store[config.filePath])
     end
 
     return config
