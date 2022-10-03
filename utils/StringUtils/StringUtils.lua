@@ -45,4 +45,21 @@ function StringUtils.TrimFront(str)
     return str:match'^%s*(.*)'
 end
 
+---@param tabs number
+---@param spacesPerTab number? default is 4
+---@return string - a string of spaces up until propper line start amount
+function StringUtils.TabsToSpaces(tabs, spacesPerTab)
+    spacesPerTab = spacesPerTab or 4
+    if tabs < 1 then return "" end
+
+    local spaces = tabs * spacesPerTab
+    local space = " "
+    local result = ""
+    for _ = 1, spaces do
+        result = result .. space
+    end
+
+    return result
+end
+
 return StringUtils

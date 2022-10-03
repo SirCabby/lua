@@ -12,21 +12,6 @@ local Json = {
 function Json.Serialize(obj)
     local switchType = {}
 
-    ---@param tabs number number of 4 space tabs to indent by
-    ---@return string - a string of spaces up until propper line start amount
-    local function GetPad(tabs)
-        if tabs < 1 then return "" end
-
-        local spaces = tabs * 4
-        local space = " "
-        local result = ""
-        for _ = 1, spaces do
-            result = result .. space
-        end
-
-        return result
-    end
-
     ---Updates output string array with data from inputTable
     ---@param inputTable table actual table, not an array
     ---@param output table string array
@@ -42,7 +27,7 @@ function Json.Serialize(obj)
 
         -- output each kvp
         for key, value in pairs(inputTable) do
-            output[#output + 1] =  GetPad(indent) .. "\"" .. key .. "\": "
+            output[#output + 1] =  StringUtils.TabsToSpaces(indent) .. "\"" .. key .. "\": "
             switchType[type(value)](value, output, indent)
             output[#output] = output[#output] .. ","
         end
@@ -51,7 +36,7 @@ function Json.Serialize(obj)
 
         -- set closing table brace
         indent = indent - 1
-        output[#output + 1] = GetPad(indent) .. "}"
+        output[#output + 1] = StringUtils.TabsToSpaces(indent) .. "}"
     end
 
     ---@param inputArray table must be an array table
@@ -68,7 +53,7 @@ function Json.Serialize(obj)
 
         -- ouput each unknown value type
         for index, value in ipairs(inputArray) do
-            output[#output + 1] = GetPad(indent)
+            output[#output + 1] = StringUtils.TabsToSpaces(indent)
             switchType[type(value)](value, output, indent)
 
             -- don't add comma for last item in array
@@ -79,7 +64,7 @@ function Json.Serialize(obj)
 
         -- set closing array bracket
         indent = indent - 1
-        output[#output + 1] = GetPad(indent) .. "]"
+        output[#output + 1] = StringUtils.TabsToSpaces(indent) .. "]"
     end
 
     ---Determine if table is an array type or not and handle each appropriately
@@ -100,7 +85,7 @@ function Json.Serialize(obj)
     local function SerializeString(input, output)
         if #output < 1 then
             table.insert(output, "[")
-            table.insert(output, GetPad(1) .. "\"" .. input .. "\"")
+            table.insert(output, StringUtils.TabsToSpaces(1) .. "\"" .. input .. "\"")
             table.insert(output, "]")
         else 
             output[#output] = output[#output] .. "\"" .. input .. "\""
@@ -112,7 +97,7 @@ function Json.Serialize(obj)
     local function SerializeNumOrBool(input, output)
         if #output < 1 then
             table.insert(output, "[")
-            table.insert(output, GetPad(1) .. tostring(input))
+            table.insert(output, StringUtils.TabsToSpaces(1) .. tostring(input))
             table.insert(output, "]")
         else
             output[#output] = output[#output] .. tostring(input)
@@ -123,7 +108,7 @@ function Json.Serialize(obj)
     local function SerializeNull(output)
         if #output < 1 then
             table.insert(output, "[")
-            table.insert(output, GetPad(1) .. "null")
+            table.insert(output, StringUtils.TabsToSpaces(1) .. "null")
             table.insert(output, "]")
         else
             output[#output] = output[#output] .. "null"
@@ -157,23 +142,9 @@ function Json.Deserialize(str)
 
     local _holder = {}
 
-    ---@return string - a string of spaces up until propper line start amount
-    local function GetPad()
-        if indent < 1 then return "" end
-
-        local spaces = indent * 4
-        local space = " "
-        local result = ""
-        for _ = 1, spaces do
-            result = result .. space
-        end
-
-        return result
-    end
-
     ---@param str string
     local function Debug(str)
-        if Json.debug then print(GetPad() .. str) end
+        if Json.debug then print(StringUtils.TabsToSpaces(indent) .. str) end
     end
 
     ---Traverse char array up to a point, discarding elements until stopping
