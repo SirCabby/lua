@@ -4,7 +4,7 @@ local Job = require("utils.PriorityQueue.PriorityQueueJob")
 ---@field jobs table
 ---@field maxSize number
 ---@field currentJobKey number
-local PriorityQueue = { author = "judged" }
+local PriorityQueue = { author = "judged", debug = false }
 
 ---ctor
 ---@param maxSize number Maximum size of the queue
@@ -17,13 +17,36 @@ function PriorityQueue:new(maxSize)
     priorityQueue.jobs = {}
     priorityQueue.currentJobKey = -1
 
+    ---@param str string
+    local function Debug(str)
+        if PriorityQueue.debug then print(str) end
+    end
+
+    ---@param content any
+    ---@return string
+    local function GetDisplayableJobContent(content)
+        local result = ""
+        if type(content) == "function" then
+            result = "function"
+        elseif type(content) == "table" and content["identity"] ~= nil then
+            ---@type FunctionContent
+            local functionContent = content
+            result = functionContent.identity
+        else
+            result = tostring(content)
+        end
+        return result
+    end
+
     ---Determines if the content is unique to the queue. If one already exists, no new job is added.
     ---@param priorityQueue PriorityQueue - queue containing metadata to leverage
-    ---@param content string The content to check for
+    ---@param content any The content to check for
     ---@return boolean - true if this is a unique job to add, false to abort
     local function IsUnique(priorityQueue, content)
-        for _,job in ipairs(priorityQueue.jobs) do
+        if PriorityQueue.debug then Debug("Checking for uniqueness in priorityqueue: " .. GetDisplayableJobContent(content)) end
+        for _, job in ipairs(priorityQueue.jobs) do
             if job.content == content then
+                Debug("Found matching content")
                 return false
             end
         end
@@ -36,9 +59,11 @@ function PriorityQueue:new(maxSize)
     ---@return integer - job index in the queue
     local function GetJobIndex(priorityQueue, key)
         local result = -1
-        for idx,job in ipairs(priorityQueue.jobs) do
+        Debug("Searching for job with key: " .. tostring(key))
+        for index, job in ipairs(priorityQueue.jobs) do
             if job.key == key then
-                result = idx
+                Debug("Found key at index: " .. tostring(index))
+                result = index
                 break
             end
         end
@@ -49,6 +74,7 @@ function PriorityQueue:new(maxSize)
     ---@param priorityQueue PriorityQueue - queue containing metadata to leverage
     ---@param index integer job's place in the queue
     local function RemoveJobByIndex(priorityQueue, index)
+        Debug("Removing job at index: " .. index)
         if index <= #priorityQueue.jobs then
             table.remove(priorityQueue.jobs, index)
         end
@@ -57,15 +83,19 @@ function PriorityQueue:new(maxSize)
     ---Sets next job to pull from the queue
     ---@return Job?
     function PriorityQueue:SetNextJob()
+        Debug("Setting next job...")
         self.currentJobKey = -1
         if #self.jobs > 0 then
-            for _,job in ipairs(self.jobs) do
+            for _, job in ipairs(self.jobs) do
                 if job:IsVisible() then
+                    -- wrap some debugs with an if check so we don't evaluate expensive reads while debug is off
+                    if PriorityQueue.debug then Debug("Found next job key: " .. job.key .. ", content: " .. GetDisplayableJobContent(job.content)) end
                     self.currentJobKey = job.key
                     return self:GetCurrentJob()
                 end
             end
         end
+        Debug("No jobs visible")
         return nil
     end
 
@@ -86,9 +116,11 @@ function PriorityQueue:new(maxSize)
     function PriorityQueue:InsertNewJob(priority, content, time, onlyUnique)
         onlyUnique = onlyUnique or false
         time = time or 0
+        Debug("Inserting a new job")
 
         -- If required unique but not unique, abort
         if onlyUnique and not IsUnique(self, content) then
+            if PriorityQueue.debug then Debug("Job was not unique, not inserting.  Content: " .. GetDisplayableJobContent(content)) end
             return
         end
 
@@ -97,6 +129,7 @@ function PriorityQueue:new(maxSize)
         -- Determine where to insert
         for i = 1, self.maxSize, 1 do
             if i > #self.jobs or self.jobs[i].priority > priority then
+                Debug("Inserting job at index: " .. tostring(i))
                 table.insert(self.jobs, i, newJob)
                 return
             end
@@ -106,6 +139,7 @@ function PriorityQueue:new(maxSize)
     ---Removes a job by key from the queue
     ---@param key integer - Job's unique key
     function PriorityQueue:CompleteJobByKey(key)
+        Debug("Completing job key: " .. tostring(key))
         local jobIndex = GetJobIndex(self, key)
         if (jobIndex > 0) then
             RemoveJobByIndex(self, jobIndex)
@@ -114,6 +148,7 @@ function PriorityQueue:new(maxSize)
 
     ---Completes and removes the current job in the queue
     function PriorityQueue:CompleteCurrentJob()
+        Debug("Completing current job")
         self:CompleteJobByKey(self.currentJobKey)
     end
 
@@ -128,16 +163,7 @@ function PriorityQueue:new(maxSize)
         for idx,job in ipairs(self.jobs) do
             ---@type Job
             job = job
-            local content = job.content
-            if type(job.content) == "function" then
-                content = "function"
-            elseif type(job.content) == "table" and job.content["identity"] ~= nil then
-                ---@type FunctionContent
-                local jobContent = job.content
-                content = jobContent.identity
-            elseif type(job.content) ~= string then
-                content = tostring(content)
-            end
+            local content = GetDisplayableJobContent(job.content)
             print("Index("..idx..") Priority("..job.priority..") Key("..job.key..") Timer("..job.timer:time_remaining()..") Content: "..content)
         end
         print("===============")

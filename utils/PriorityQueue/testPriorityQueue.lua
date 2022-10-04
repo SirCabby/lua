@@ -5,6 +5,7 @@ local PriorityQueue = require("utils.PriorityQueue.PriorityQueue")
 local pqFunctionContent = require("utils.PriorityQueue.PriorityQueueFunctionContent")
 
 mq.cmd("/mqclear")
+PriorityQueue.debug = true
 
 local pq = PriorityQueue:new(200)
 local pqToTestMultipleQueues = PriorityQueue:new(10)
@@ -51,12 +52,12 @@ pq:Print()
 print("skip to front")
 print()
 
-pq:InsertNewJob(3, "foo")
+pq:InsertNewJob(3, "foo", nil, true)
 pq:Print()
 print("tried to add duplicate foo, but was set to unique only")
 print()
 
-pq:InsertNewJob(3, "foo", nil, false)
+pq:InsertNewJob(3, "foo")
 pq:Print()
 print("added duplicate foo")
 print()
