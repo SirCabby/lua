@@ -3,9 +3,9 @@
 local mq = require("mq")
 local FileSystem = require("utils.FileSystem")
 local PriorityQueue = require("utils.PriorityQueue.PriorityQueue")
+local Setup = require("cabby.setup")
 
 -- Debug toggles
--- local Setup = require("cabby.setup")
 -- Setup.debug = true
 -- local Config = require("utils.Config.Config")
 -- Config.debug = true
