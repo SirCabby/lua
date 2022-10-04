@@ -4,6 +4,8 @@ local TableUtils = require("utils.TableUtils.TableUtils")
 
 mq.cmd("/mqclear")
 
+TableUtils.debug = true
+
 local testArray1 = { 1, 2, "foo", true }
 local testArray2 = {}
 local notArray1 = { one = 1, two = 2}
@@ -21,11 +23,9 @@ TableUtils.Print(arrayKeys1)
 TableUtils.Print(arrayKeys2)
 TableUtils.Print(notArrayKeys1)
 
-print("Removing 2 from testArray1")
 TableUtils.RemoveByValue(testArray1, 2)
 TableUtils.Print(testArray1)
 print()
 
-print("Removing two from table")
 TableUtils.RemoveByValue(notArray1, 2)
 TableUtils.Print(notArray1)
