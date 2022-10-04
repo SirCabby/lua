@@ -5,10 +5,10 @@ local FileSystem = require("utils.FileSystem")
 local PriorityQueue = require("utils.PriorityQueue.PriorityQueue")
 
 -- Debug toggles
-local Setup = require("cabby.setup")
-Setup.debug = true
-local Config = require("utils.Config.Config")
-Config.debug = true
+-- local Setup = require("cabby.setup")
+-- Setup.debug = true
+-- local Config = require("utils.Config.Config")
+-- Config.debug = true
 
 ---Manage and prioritize jobs
 ---@param priorityQueue PriorityQueue
