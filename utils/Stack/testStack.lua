@@ -3,6 +3,8 @@ local Stack = require("utils.Stack.Stack")
 
 mq.cmd("/mqclear")
 
+Stack.debug = true
+
 ---@type Stack
 local st = Stack:new()
 
