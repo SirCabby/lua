@@ -14,6 +14,10 @@ local Config = { author = "judged", debug = false, store = {} }
 --     }
 -- }
 
+local function Debug(str)
+    if Config.debug then print(str) end
+end
+
 ---@param filePath? string
 ---@return Config
 function Config:new(filePath)
@@ -58,6 +62,7 @@ function Config:new(filePath)
         return TableUtils.GetKeys(Config.store[config.filePath])
     end
 
+    Debug("Config loaded: " .. filePath)
     return config
 end
 
