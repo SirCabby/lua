@@ -4,6 +4,7 @@ local Owners = require("utils.Owners.Owners")
 
 mq.cmd("/mqclear")
 
+Owners.debug = true
 local filePath = FileSystem.PathJoin(mq.configDir, "test", "ownersTest.json")
 local owners = Owners:new(filePath)
 

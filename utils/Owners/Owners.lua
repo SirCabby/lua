@@ -13,6 +13,11 @@ function Owners:new(configFilePath)
     self.__index = self
     local config = Config:new(configFilePath)
 
+    ---@param str string
+    local function Debug(str)
+        if Owners.debug then print(str) end
+    end
+
     ---Adds a new owner
     ---@param name string
     function Owners:Add(name)
@@ -21,8 +26,10 @@ function Owners:new(configFilePath)
         if not TableUtils.ArrayContains(ownersConfig, name) then
             ownersConfig[#ownersConfig + 1] = name
             print("Addded [" .. name .. "] as Owner")
+            Config:SaveConfig(Owners.configKey, ownersConfig)
+            return
         end
-        Config:SaveConfig(Owners.configKey, ownersConfig)
+        Debug(name .. " was already an owner")
     end
 
     ---Removes a current owner
@@ -33,8 +40,10 @@ function Owners:new(configFilePath)
         if TableUtils.ArrayContains(ownersConfig, name) then
             TableUtils.RemoveByValue(ownersConfig, name)
             print("Removed [" .. name .. "] as Owner")
+            Config:SaveConfig(Owners.configKey, ownersConfig)
+            return
         end
-        Config:SaveConfig(Owners.configKey, ownersConfig)
+        Debug(name .. " was not an owner")
     end
 
     ---Returns true if name is listed as an owner
