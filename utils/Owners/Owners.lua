@@ -2,7 +2,6 @@ local Config = require("utils.Config.Config")
 local TableUtils = require("utils.TableUtils.TableUtils")
 
 ---@class Owners
----@field store table array of owners
 local Owners = { author = "judged", debug = false, configKey = "Owners" }
 
 ---@param configFilePath string
