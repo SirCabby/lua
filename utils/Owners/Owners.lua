@@ -55,7 +55,7 @@ function Owners:new(configFilePath)
 
     function Owners:Print()
         local ownersConfig = config:GetConfig(Owners.configKey)
-        TableUtils.PrintArray(ownersConfig)
+        print("My Owners: " .. TableUtils.ArrayToString(ownersConfig))
     end
 
     return owners
