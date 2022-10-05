@@ -32,6 +32,7 @@ function Commands:new(configFilePath, priorityQueue)
     self.__index = self
     commands.priorityQueue = priorityQueue
     local config = Config:new(configFilePath)
+    local owners = Owners:new(configFilePath)
 
     local function Debug(str)
         if Commands.debug then print(str) end
@@ -86,7 +87,7 @@ function Commands:new(configFilePath, priorityQueue)
     end
 
     -----------------------------------------------------------------------------
-    ------------------------------ COMMANDS -------------------------------------
+    ------------------------------- COMMS ---------------------------------------
     -----------------------------------------------------------------------------
 
     local function event_FollowMe(_, speaker, who)
@@ -107,35 +108,65 @@ function Commands:new(configFilePath, priorityQueue)
     end
 
     -----------------------------------------------------------------------------
-    ----------------------------END COMMANDS ------------------------------------
+    ----------------------------- END COMMS -------------------------------------
     -----------------------------------------------------------------------------
-    ------------------------------ BINDS ----------------------------------------
+    ------------------------------- BINDS ---------------------------------------
     -----------------------------------------------------------------------------
 
     local function chelpPrint()
         print("(/chelp) Cabby Help menu")
-        print(" -- Pick a help topic. Options: [Commands, Slash]")
+        print(" -- Pick a help topic. Options: [Comms, Commands]")
     end
     local function Bind_Chelp(...)
         local args = {...} or {}
         if args == nil or #args < 1 or args[1]:lower() == "help" then
             chelpPrint()
-        elseif args[1]:lower() == "commands" then
-            print("(/chelp commands) Leverage these by speaking in active channels")
+        elseif args[1]:lower() == "comms" then
+            print("(/chelp comms) Leverage these by speaking in active channels")
             print(" -- For example: /bc followme")
             print(" -- To see active channels, use /activechannels")
             print(" -- To add / remove channels, use /addchannel name, /removechannel name")
             print("Command list:")
             print(" -- followme")
             print(" -- stopfollow")
-        elseif args[1]:lower() == "slash" then
-            print("(/chelp slash) Slash Commands:")
+        elseif args[1]:lower() == "commands" then
+            print("(/chelp commands) Slash Commands:")
             print(" -- /chelp")
+            print(" -- /addowner")
+            print(" -- /removeowner")
+            print(" -- /showowner")
         else
             chelpPrint()
         end
     end
     mq.bind("/chelp", Bind_Chelp)
+
+    local function addOwner(...)
+        local args = {...} or {}
+        if args == nil or #args < 1 or args[1]:lower() == "help" then
+            print("(/addowner) Adds Owners to listen to")
+            print(" -- Usage: /addowner name")
+        else
+            owners:Add(args[1])
+        end
+    end
+    mq.bind("/addowner", addOwner)
+
+    local function removeOwner(...)
+        local args = {...} or {}
+        if args == nil or #args < 1 or args[1]:lower() == "help" then
+            print("(/removeowner) Removes Owners to listen to")
+            print(" -- Usage: /removeowner name")
+        else
+            owners:Remove(args[1])
+        end
+    end
+    mq.bind("/removeowner", removeOwner)
+
+    local function showOwners(...)
+        owners:Print()
+    end
+    mq.bind("/showowners", showOwners)
 
     -----------------------------------------------------------------------------
     ---------------------------- END BINDS --------------------------------------
