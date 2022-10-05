@@ -1,4 +1,5 @@
 local mq = require("mq")
+local Commands = require("cabby.commands")
 local GeneralConfig = require("cabby.configs.GeneralConfig")
 
 local Setup = { debug = false }
@@ -51,10 +52,11 @@ local function ConfigSetup(configFilePath)
     GeneralConfig:new(configFilePath)
 end
 
-function Setup:Init(configFilePath)
+function Setup:Init(configFilePath, priorityQueue)
     Debug("Starting Cabby Setup...")
     PluginSetup()
     ConfigSetup(configFilePath)
+    Commands:new(configFilePath, priorityQueue)
     Debug("Finished Cabby Setup")
 end
 
