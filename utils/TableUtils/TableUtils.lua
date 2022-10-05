@@ -1,3 +1,5 @@
+local StringUtils = require "utils.StringUtils.StringUtils"
+
 ---@class TableUtils
 local TableUtils = { author = "judged", debug = false }
 
@@ -92,6 +94,19 @@ function TableUtils.GetKeys(tbl)
     end
     table.sort(result)
     return result
+end
+
+---Takes array of strings and formats into single line string
+---@param array table
+---@return string
+function TableUtils.ArrayToString(array)
+    if not TableUtils.IsArray(array) then return "This is a table, not array, cannot PrintArray()" end
+    local Json = require("utils.Json.Json")
+    local jsonArray = Json.Serialize(array)
+    for _, value in jsonArray do
+        value = StringUtils.TrimFront(value)
+    end
+    return "[" .. StringUtils.Join(jsonArray, ", ") .. "]"
 end
 
 return TableUtils
