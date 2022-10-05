@@ -24,7 +24,7 @@ function Owners:new(configFilePath)
         if not TableUtils.IsArray(ownersConfig) then error("Owners config was not an array") end
         if not TableUtils.ArrayContains(ownersConfig, name) then
             ownersConfig[#ownersConfig + 1] = name
-            print("Addded [" .. name .. "] as Owner")
+            print("Added [" .. name .. "] as Owner")
             Config:SaveConfig(Owners.configKey, ownersConfig)
             return
         end
@@ -55,7 +55,7 @@ function Owners:new(configFilePath)
 
     function Owners:Print()
         local ownersConfig = config:GetConfig(Owners.configKey)
-        TableUtils.Print(ownersConfig)
+        TableUtils.PrintArray(ownersConfig)
     end
 
     return owners
