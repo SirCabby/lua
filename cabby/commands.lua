@@ -134,7 +134,7 @@ function Commands:new(configFilePath, priorityQueue)
             print(" -- /chelp")
             print(" -- /addowner")
             print(" -- /removeowner")
-            print(" -- /showowner")
+            print(" -- /showowners")
         else
             chelpPrint()
         end
