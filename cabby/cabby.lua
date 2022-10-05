@@ -32,12 +32,10 @@ mq.cmd("/mqclear")
 
 print("Loading Cabby script...")
 local configFilePath = FileSystem.PathJoin(mq.configDir, "cabby", mq.TLO.Me.Name() .. "-Config.json")
-Setup:Init(configFilePath)
 local pq = PriorityQueue:new(200)
+Setup:Init(configFilePath, pq)
 print("/chelp for help")
 print("Cabby script is running...")
-
-mq.exit()
 
 -- Keep script running
 while (true) do
