@@ -101,12 +101,17 @@ end
 ---@return string
 function TableUtils.ArrayToString(array)
     if not TableUtils.IsArray(array) then return "This is a table, not array, cannot PrintArray()" end
-    local Json = require("utils.Json.Json")
-    local jsonArray = Json.Serialize(array)
-    for _, value in jsonArray do
-        value = StringUtils.TrimFront(value)
+    
+    local result = "["
+    for index, value in ipairs(array) do
+        if index == 1 then
+            result = result .. value
+        else
+            result = result .. ", " .. value
+        end
     end
-    return "[" .. StringUtils.Join(jsonArray, ", ") .. "]"
+    result = result .. "]"
+    return result
 end
 
 return TableUtils
