@@ -1,5 +1,6 @@
 local mq = require("mq")
 local StringUtils = require("utils.StringUtils.StringUtils")
+local TableUtils = require("utils.TableUtils.TableUtils")
 
 mq.cmd("/mqclear")
 
@@ -19,3 +20,9 @@ assert(#charArray == 38, "Failed to create char array")
 local whitespaceStr = "   trim this . "
 local trimmedStr = StringUtils.TrimFront(whitespaceStr)
 assert(trimmedStr == "trim this . ", "Failed to trim whitespace from front of string: (" .. trimmedStr .. ")")
+
+local splitFile = StringUtils.Split("C:\\Users\\Somebody\\workspace\\GitHub\\macroquest\\build\\bin\\release\\lua\\test.lua", "\\lua\\")
+local cowSplit = StringUtils.Split("The big brown dog ate the little black cat")
+
+TableUtils.Print(splitFile)
+TableUtils.Print(cowSplit)

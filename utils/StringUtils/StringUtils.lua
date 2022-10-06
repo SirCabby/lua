@@ -10,11 +10,24 @@ end
 function StringUtils.Split(str, delimiter)
     delimiter = delimiter or " "
     Debug("Splitting string with delimiter [" .. delimiter .. "]: " .. str)
+    
     local split = {}
-    for match in string.gmatch(str, "([^"..delimiter.."]+)") do
-        Debug("Str split: " .. match)
-        table.insert(split, match)
+    local index = 1
+    while #str > 0 do
+        local matchStart = string.find(str, delimiter, 1, true)
+        if matchStart == nil then
+            split[index] = str
+            str = ""
+            break
+        elseif matchStart == 1 then
+            str = str:sub(#delimiter)
+        else
+            split[index] = str:sub(1, matchStart - 1)
+            str = str:sub(matchStart + #delimiter)
+            index = index + 1
+        end
     end
+    
     return split
 end
 

@@ -1,5 +1,6 @@
 local mq = require("mq")
 local FileSystem = require("utils.FileSystem")
+local StringUtils = require("utils.StringUtils.StringUtils")
 
 local args = {...}
 local LUA_DIR = mq.TLO.Lua.Dir()
@@ -9,7 +10,7 @@ local LUA_DIR = mq.TLO.Lua.Dir()
 ---@return string @The file name is returned, and ensured to have it suffixed with .lua
 local function AddLuaExtensionIfMissing(fileName)
     if not string.find(string.lower(fileName), ".lua") then
-        return fileName..".lua"
+        return fileName .. ".lua"
     end
     return fileName
 end
@@ -29,10 +30,11 @@ do
     local luaFileName = AddLuaExtensionIfMissing(args[1])
     local luaFile = FileSystem.FindFile(LUA_DIR, luaFileName, true)
     if luaFile == "" then
-        print("Unable to find lua file to run: "..luaFileName)
+        print("Unable to find lua file to run: " .. luaFileName)
         mq.exit()
     else
-        print("Found file: "..luaFile)
+        luaFile = StringUtils.Split(luaFile, "\\lua\\")[2]
+        print("Found file: " .. luaFile)
     end
 
     mq.cmdf("/lua run %s", luaFile)
