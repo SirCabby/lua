@@ -5,7 +5,7 @@ local FunctionContent = { author = "judged" }
 
 ---Optional content to use in PriorityQueueJob that enables printing of function content
 ---@param identity string Printable identity of this work
----@param func function Function to store in queue
+---@param func fun(...) : boolean Function to store in queue, returns boolean true if is complete, false to reset visibility
 ---@return FunctionContent
 function FunctionContent:new(identity, func)
     local functionContent = {}
