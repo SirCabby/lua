@@ -41,4 +41,5 @@ print("Cabby script is running...")
 while (true) do
     mq.doevents()
     DoNextJob(pq)
+    mq.delay(1)
 end
