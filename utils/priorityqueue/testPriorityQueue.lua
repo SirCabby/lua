@@ -141,12 +141,18 @@ print()
 pqToTestMultipleQueues.jobs[2].content()
 assert(wasCalled, "Did not call the test function")
 
-local testContent = pqFunctionContent:new("This job will say Hello", function() print("Hello") end)
+local testContent = pqFunctionContent:new("This job will say Hello", function() return print("Hello") end)
 pqToTestMultipleQueues:InsertNewJob(4, testContent)
 pqToTestMultipleQueues:Print()
 print("Testing FunctionContent")
 print()
 pqToTestMultipleQueues.jobs[3].content.Call()
+
+print()
+print("Attempting to add duplicate function with not allowing unique...")
+pqToTestMultipleQueues:InsertNewJob(5, testContent, 3, true)
+pqToTestMultipleQueues:Print()
+
 
 pqToTestMultipleQueues:InsertNewJob(4, 2)
 pqToTestMultipleQueues:Print()

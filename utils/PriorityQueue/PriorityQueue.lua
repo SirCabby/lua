@@ -45,7 +45,10 @@ function PriorityQueue:new(maxSize)
     local function IsUnique(priorityQueue, content)
         if PriorityQueue.debug then Debug("Checking for uniqueness in priorityqueue: " .. GetDisplayableJobContent(content)) end
         for _, job in ipairs(priorityQueue.jobs) do
-            if job.content == content then
+            if type(content) == table and content.identity ~= nil and type(job) == table and job.identity ~= nil and job.identity == content.identity then
+                Debug("Found matching FunctionContent")
+                return true
+            elseif job.content == content then
                 Debug("Found matching content")
                 return false
             end
