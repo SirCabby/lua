@@ -1,5 +1,6 @@
 local mq = require("mq")
 local Config = require("utils.Config.Config")
+local GeneralConfig = require("cabby.configs.GeneralConfig")
 local Owners = require("utils.Owners.Owners")
 local Priorities = require("cabby.priorities")
 local PriorityQueueFunctionContent = require("utils.PriorityQueue.PriorityQueueFunctionContent")
@@ -12,7 +13,8 @@ local Commands = {
     eventIds = {
         followMe = "Follow Me",
         stopFollow = "Stop Follow",
-        moveToMe = "Move to Me"
+        moveToMe = "Move to Me",
+        tellToMe = "Tell to Me"
     },
     channelTypes = {
         bc = "bc",
@@ -91,24 +93,37 @@ function Commands:new(configFilePath, priorityQueue)
     -----------------------------------------------------------------------------
 
     local function event_FollowMe(_, speaker, who)
-        local followMe = PriorityQueueFunctionContent:new("Follow Me - " .. speaker, function() print("insert follow me here") end)
+        local followMe = PriorityQueueFunctionContent:new("Follow Me - " .. speaker, function() return print("insert follow me here") end)
         ScheduleCommand(speaker, Priorities.Following, followMe, who)
     end
 
     local function event_StopFollow(_, speaker, who)
-        local followMe = PriorityQueueFunctionContent:new("Stop Follow - " .. speaker, function() print("insert follow me here") end)
-        ScheduleCommand(speaker, Priorities.Following, followMe, who)
-    end
-
-    local function RegisterAllEvents()
-        if Commands.eventsRegistered then return end
-        Commands.eventsRegistered = true
-        AddEventChannels(Commands.eventIds.followMe, "followme", event_FollowMe)
-        AddEventChannels(Commands.eventIds.stopFollow, "stopfollow", event_StopFollow)
+        local stopFollow = PriorityQueueFunctionContent:new("Stop Follow - " .. speaker, function() return print("insert follow me here") end)
+        ScheduleCommand(speaker, Priorities.Following, stopFollow, who)
     end
 
     -----------------------------------------------------------------------------
     ----------------------------- END COMMS -------------------------------------
+    -----------------------------------------------------------------------------
+    ------------------------------ EVENTS ---------------------------------------
+    -----------------------------------------------------------------------------
+
+    local function tellToMe(speaker, message)
+        local generalConfig = GeneralConfig:new(configFilePath)
+        local tellTo = generalConfig:GetRelayTellsTo()
+        if tellTo ~= speaker and mq.TLO.SpawnCount("npc speaker")() < 1 then
+            mq.cmd("/tell " .. tellTo .. " " .. speaker .. " told me: " .. message)
+        end
+        return true
+    end
+    local function event_TellToMe(_, speaker, message)
+        local tellToMeFunc = PriorityQueueFunctionContent:new("Tell to me - " .. speaker, function() return tellToMe(speaker, message) end)
+        commands.priorityQueue:InsertNewJob(Priorities.Immediate, tellToMeFunc)
+    end
+    mq.event(Commands.eventIds.tellToMe, "#1# tells you, '#2#'", event_TellToMe)
+
+    -----------------------------------------------------------------------------
+    ---------------------------- END EVENTS -------------------------------------
     -----------------------------------------------------------------------------
     ------------------------------- BINDS ---------------------------------------
     -----------------------------------------------------------------------------
@@ -141,6 +156,8 @@ function Commands:new(configFilePath, priorityQueue)
     end
     mq.bind("/chelp", Bind_Chelp)
 
+    -----------------------------------------------------------------------------
+
     local function addOwner(...)
         local args = {...} or {}
         if args == nil or #args < 1 or args[1]:lower() == "help" then
@@ -151,6 +168,8 @@ function Commands:new(configFilePath, priorityQueue)
         end
     end
     mq.bind("/addowner", addOwner)
+
+    -----------------------------------------------------------------------------
 
     local function removeOwner(...)
         local args = {...} or {}
@@ -163,14 +182,38 @@ function Commands:new(configFilePath, priorityQueue)
     end
     mq.bind("/removeowner", removeOwner)
 
+    -----------------------------------------------------------------------------
+
     local function showOwners(...)
         owners:Print()
     end
     mq.bind("/showowners", showOwners)
 
     -----------------------------------------------------------------------------
-    ---------------------------- END BINDS --------------------------------------
+
+    local function setRelayTellsToFunc(...)
+        local args = {...} or {}
+        if args == nil or #args < 1 or args[1]:lower() == "help" then
+            print("(/relaytellsto) Relays tells received to this character")
+            print(" -- Usage: /relaytellsto name")
+        else
+            local generalConfig = GeneralConfig:new(configFilePath)
+            generalConfig:SetRelayTellsTo(args[1])
+            print("Relaying future tells to: [" .. generalConfig:GetRelayTellsTo() .. "]")
+        end
+    end
+    mq.bind("/relaytellsto", setRelayTellsToFunc)
+
     -----------------------------------------------------------------------------
+    ----------------------------- END BINDS -------------------------------------
+    -----------------------------------------------------------------------------
+
+    local function RegisterAllComms()
+        if Commands.eventsRegistered then return end
+        Commands.eventsRegistered = true
+        AddEventChannels(Commands.eventIds.followMe, "followme", event_FollowMe)
+        AddEventChannels(Commands.eventIds.stopFollow, "stopfollow", event_StopFollow)
+    end
 
     ---Adds a new event channel to listen to
     ---Available types found in Commands.channelTypes
@@ -182,7 +225,7 @@ function Commands:new(configFilePath, priorityQueue)
             commandsConfig.Channels[#commandsConfig.Channels + 1] = channel
             print("Added [" .. channel .. "] to active channels")
             Config:SaveConfig(Commands.configKey, commandsConfig)
-            RegisterAllEvents()
+            RegisterAllComms()
             return
         end
         Debug(channel .. " was already an active channel")
@@ -195,7 +238,7 @@ function Commands:new(configFilePath, priorityQueue)
             TableUtils.RemoveByValue(commandsConfig, channel)
             print("Removed [" .. channel .. "] as active channel")
             Config:SaveConfig(Commands.configKey, commandsConfig)
-            RegisterAllEvents()
+            RegisterAllComms()
             return
         end
         Debug(channel .. " was not an active channel")
@@ -206,7 +249,7 @@ function Commands:new(configFilePath, priorityQueue)
         TableUtils.Print(commandsConfig)
     end
 
-    RegisterAllEvents()
+    RegisterAllComms()
 
     return commands
 end
