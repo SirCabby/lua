@@ -1,10 +1,11 @@
 local mq = require("mq")
+local Debug = require("utils.Debug.Debug")
 local FileSystem = require("utils.FileSystem")
 local Json = require("utils.Json.Json")
 local TableUtils = require("utils.TableUtils.TableUtils")
 
 ---@class Config
-local Config = { author = "judged", debug = false, store = {} }
+local Config = { author = "judged", key = "Config", store = {} }
 
 -- Config.store: { <-- Global / static config manager table
 --     "filepath1": { <-- Config:new() will be scoped to this
@@ -14,16 +15,13 @@ local Config = { author = "judged", debug = false, store = {} }
 --     }
 -- }
 
-local function Debug(str)
-    if Config.debug then print(str) end
-end
-
 ---@param filePath? string
 ---@return Config
 function Config:new(filePath)
     local config = {}
     setmetatable(config, self)
     self.__index = self
+
     config.filePath = filePath or FileSystem.PathJoin(mq.configDir, mq.TLO.Me.Name() .. "-Config.json")
     if not FileSystem.FileExists(config.filePath) then
         print("Creating config file: " .. config.filePath)
@@ -48,7 +46,7 @@ function Config:new(filePath)
     function Config:SaveConfig(name, obj)
         Config.store[config.filePath][name] = obj
         FileSystem.WriteFile(config.filePath, Json.Serialize(Config.store[config.filePath]))
-        if Config.debug then print("Saved config [" .. name .. "]") end
+        Debug:Log(Config.key, "Saved config [" .. name .. "]")
     end
 
     ---Prints the config
@@ -62,7 +60,7 @@ function Config:new(filePath)
         return TableUtils.GetKeys(Config.store[config.filePath])
     end
 
-    Debug("Config loaded: " .. filePath)
+    Debug:Log(Config.key, "Config loaded: " .. filePath)
     return config
 end
 

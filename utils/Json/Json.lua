@@ -1,10 +1,11 @@
+local Debug = require("utils.Debug.Debug")
 local StringUtils = require("utils.StringUtils.StringUtils")
 local TableUtils = require("utils.TableUtils.TableUtils")
 
 ---@class Json
 local Json = { 
     author = "judged",
-    debug = false
+    key = "Json"
 }
 
 ---@param obj any Any lua datatype to be serialized, `function` or `userdata` types will result in nulls
@@ -143,8 +144,8 @@ function Json.Deserialize(str)
     local _holder = {}
 
     ---@param str string
-    local function Debug(str)
-        if Json.debug then print(StringUtils.TabsToSpaces(indent) .. str) end
+    local function DebugLog(str)
+        Debug:Log(Json.key, StringUtils.TabsToSpaces(indent) .. str)
     end
 
     ---Traverse char array up to a point, discarding elements until stopping
@@ -163,7 +164,7 @@ function Json.Deserialize(str)
             nextChar = charArray[1]
         end
         indent = indent - 1
-        Debug("Traverse stop - next: " .. charArray[1])
+        DebugLog("Traverse stop - next: " .. charArray[1])
     end
 
     ---Traverse input char array until finding the end of the string via quotation mark
@@ -182,7 +183,7 @@ function Json.Deserialize(str)
             keyResult = keyResult .. table.remove(charArray, 1)
         end
 
-        Debug("Found string: " .. keyResult)
+        DebugLog("Found string: " .. keyResult)
         return keyResult
     end
 
@@ -191,13 +192,13 @@ function Json.Deserialize(str)
     ---@return string|table|number|boolean
     local function ReadValue(charArray)
         TraverseUntil(charArray, { " ", "\n" }, true)
-        Debug("ReadValue start: " .. charArray[1])
+        DebugLog("ReadValue start: " .. charArray[1])
         if #charArray < 1 then error("Reached end of input while looking for a value") end
         if charArray[1] == "\"" then return ReadString(charArray) end
         if charArray[1] == "{" then return _holder.DeserializeTable(charArray) end
         if charArray[1] == "[" then return _holder.DeserializeArray(charArray) end
         indent = indent + 1
-        Debug("ReadValue primitive start: " .. charArray[1])
+        DebugLog("ReadValue primitive start: " .. charArray[1])
         -- read up the value string
         local valueResult = ""
         while #charArray > 0 do
@@ -217,12 +218,12 @@ function Json.Deserialize(str)
         if valueTypeFunction == nil then error("Failed to determine type of value: (" .. valueResult .. ")") end
         local valueType = type(valueTypeFunction())
         if valueType == "number" then
-            Debug("Found number: " .. valueResult)
+            DebugLog("Found number: " .. valueResult)
             indent = indent - 1
             local result = tonumber(valueResult)
             return result or 0
         elseif valueType == "boolean" then
-            Debug("Found boolean: " .. valueResult)
+            DebugLog("Found boolean: " .. valueResult)
             indent = indent - 1
             local result = false
             if string.lower(valueResult) == "true" then result = true end
@@ -237,7 +238,7 @@ function Json.Deserialize(str)
     function _holder.DeserializeArray(charArray)
         local output = {}
         indent = indent + 1
-        Debug("Making Array...")
+        DebugLog("Making Array...")
 
         table.remove(charArray, 1) -- remove the first [
         TraverseUntil(charArray, { " ", "\n" }, true)
@@ -249,7 +250,7 @@ function Json.Deserialize(str)
 
         table.remove(charArray, 1) -- remove the last ]
 
-        Debug("Finished Array")
+        DebugLog("Finished Array")
         indent = indent - 1
         return output
     end
@@ -259,7 +260,7 @@ function Json.Deserialize(str)
     function _holder.DeserializeTable(charArray)
         local output = {}
         indent = indent + 1
-        Debug("Making table...")
+        DebugLog("Making table...")
 
         -- look for key or end of table
         TraverseUntil(charArray, { "\"", "}" }, false)
@@ -279,7 +280,7 @@ function Json.Deserialize(str)
 
         if charArray[1] == "}" then table.remove(charArray, 1) end
 
-        Debug("Finished table")
+        DebugLog("Finished table")
         indent = indent - 1
         return output
     end
