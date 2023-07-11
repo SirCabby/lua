@@ -1,5 +1,5 @@
 ---@class Debug
-local Debug = { author = "judged", toggles = { all = false } }
+local Debug = { author = "judged", _toggles = { all = false } }
 
 ---@return Debug
 function Debug:new()
@@ -11,11 +11,27 @@ function Debug:new()
     ---@param toggleKey string
     ---@param str string
     function Debug:Log(toggleKey, str)
-        if Debug.toggles[toggleKey] == nil then
-            Debug.toggles[toggleKey] = false
-        end
+        if Debug:GetToggle(toggleKey) or Debug._toggles.all then print(str) end
+    end
 
-        if Debug.toggles[toggleKey] or Debug.toggles.all then print(str) end
+    function Debug:ExistsOrDefault(toggleKey)
+        toggleKey = toggleKey:lower()
+        if Debug._toggles[toggleKey] == nil then
+            Debug._toggles[toggleKey] = false
+        end
+    end
+
+    function Debug:GetToggle(toggleKey)
+        Debug:ExistsOrDefault(toggleKey)
+        return Debug._toggles[toggleKey:lower()]
+    end
+
+    function Debug:SetToggle(toggleKey, toggleValue)
+        Debug._toggles[toggleKey:lower()] = toggleValue
+    end
+
+    function Debug:Toggle(toggleKey)
+        Debug:SetToggle(toggleKey, not Debug:GetToggle(toggleKey))
     end
 
     return debug
