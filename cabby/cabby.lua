@@ -1,14 +1,16 @@
 --- Author judged
 ---@type Mq
 local mq = require("mq")
+local Debug = require("utils.Debug.Debug")
 local FileSystem = require("utils.FileSystem")
 local PriorityQueue = require("utils.PriorityQueue.PriorityQueue")
 local Setup = require("cabby.setup")
 
 -- Debug toggles
--- Setup.debug = true
+Debug:new()
+-- Debug.toggles[Setup.key] = true
 -- local Config = require("utils.Config.Config")
--- Config.debug = true
+-- Debug.toggles[Config.key] = true
 
 ---Manage and prioritize jobs
 ---@param priorityQueue PriorityQueue

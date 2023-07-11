@@ -1,11 +1,14 @@
 local mq = require("mq")
 local Commands = require("cabby.commands")
+local Debug = require("utils.Debug.Debug")
 local GeneralConfig = require("cabby.configs.GeneralConfig")
 
-local Setup = { debug = false }
+local Setup = { key = "Setup" }
 
-local function Debug(str)
-    if Setup.debug then print(str) end
+Debug:new()
+
+local function DebugLog(str)
+    Debug:Log(Setup.key, str)
 end
 
 local function CheckPlugin(name)
@@ -22,16 +25,16 @@ end
 
 local function SetupEqbc()
     if tostring(mq.TLO.EQBC.Connected) == "FALSE" then
-        Debug("MQ2EQBC was not connected, connecting...")
+        DebugLog("MQ2EQBC was not connected, connecting...")
         mq.cmd("/bccmd connect")
         mq.delay("5s", function() return tostring(mq.TLO.EQBC.Connected) ~= "FALSE" end)
         if tostring(mq.TLO.EQBC.Connected) == "FALSE" then
             print("Could not connect to MQ2EQBC. Aborting...")
             mq.exit()
         end
-        Debug("MQ2EQBC is connected")
+        DebugLog("MQ2EQBC is connected")
         if tostring(mq.TLO.EQBC.Setting("localecho")) ~= "FALSE" then
-            Debug("Setting EQBC localecho off")
+            DebugLog("Setting EQBC localecho off")
             mq.cmd("/bccmd set localecho off")
         end
     end
@@ -53,11 +56,11 @@ local function ConfigSetup(configFilePath)
 end
 
 function Setup:Init(configFilePath, priorityQueue)
-    Debug("Starting Cabby Setup...")
+    DebugLog("Starting Cabby Setup...")
     PluginSetup()
     ConfigSetup(configFilePath)
     Commands:new(configFilePath, priorityQueue)
-    Debug("Finished Cabby Setup")
+    DebugLog("Finished Cabby Setup")
 end
 
 return Setup
