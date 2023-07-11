@@ -45,7 +45,7 @@ function PriorityQueue:new(maxSize)
     ---@param content any The content to check for
     ---@return boolean - true if this is a unique job to add, false to abort
     local function IsUnique(priorityQueue, content)
-        if PriorityQueue.debug then DebugLog("Checking for uniqueness in priorityqueue: " .. GetDisplayableJobContent(content)) end
+        DebugLog("Checking for uniqueness in priorityqueue: " .. GetDisplayableJobContent(content))
         for _, job in ipairs(priorityQueue.jobs) do
             if type(content) == table and content.identity ~= nil and type(job) == table and job.identity ~= nil and job.identity == content.identity then
                 DebugLog("Found matching FunctionContent")
