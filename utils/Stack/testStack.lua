@@ -4,7 +4,7 @@ local Stack = require("utils.Stack.Stack")
 
 mq.cmd("/mqclear")
 
-local debug = Debug:new()
+Debug:new()
 --Debug.toggles[Stack.key] = true
 
 ---@type Stack
