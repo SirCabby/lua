@@ -1,10 +1,12 @@
 local mq = require("mq")
+local Debug = require("utils.Debug.Debug")
 local StringUtils = require("utils.StringUtils.StringUtils")
 local TableUtils = require("utils.TableUtils.TableUtils")
 
 mq.cmd("/mqclear")
 
-StringUtils.debug = true
+Debug:new()
+--Debug.toggles[StringUtils.key] = true
 
 local testStr = "The big brown cow jumped over the moon"
 

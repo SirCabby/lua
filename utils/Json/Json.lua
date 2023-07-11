@@ -140,6 +140,7 @@ function Json.Deserialize(str)
     if type(str) ~= "string" then return {} end
     str = StringUtils.TrimFront(str)
     local indent = 0
+    Debug:new()
 
     local _holder = {}
 

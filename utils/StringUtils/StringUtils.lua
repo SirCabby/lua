@@ -1,7 +1,12 @@
-local StringUtils = { author = "judged", debug = false }
+local Debug = require("utils.Debug.Debug")
 
-local function Debug(str)
-    if StringUtils.debug then print(str) end
+---@class StringUtils
+local StringUtils = { author = "judged", key = "StringUtils" }
+
+Debug:new()
+
+local function DebugLog(str)
+    Debug:Log(StringUtils.key, str)
 end
 
 ---@param str string
@@ -9,7 +14,7 @@ end
 ---@return table - Array of split string
 function StringUtils.Split(str, delimiter)
     delimiter = delimiter or " "
-    Debug("Splitting string with delimiter [" .. delimiter .. "]: " .. str)
+    DebugLog("Splitting string with delimiter [" .. delimiter .. "]: " .. str)
     
     local split = {}
     local index = 1
@@ -36,20 +41,20 @@ end
 ---@return string
 function StringUtils.Join(array, delimiter)
     delimiter = delimiter or ""
-    Debug("Joining strings with delimiter [" .. delimiter .. "]")
+    DebugLog("Joining strings with delimiter [" .. delimiter .. "]")
     if array == nil or #array < 1 then
-        Debug("array was empty, returning empty string")
+        DebugLog("array was empty, returning empty string")
         return ""
     end
     if #array < 2 then
-        Debug ("Array was only 1 element, returning that element [" .. array[1] .. "]")
+        DebugLog ("Array was only 1 element, returning that element [" .. array[1] .. "]")
         return array[1]
     end
 
     local joined = array[1]
     for i = 2, #array, 1 do
         joined = joined..delimiter..array[i]
-        Debug("String joined: " .. joined)
+        DebugLog("String joined: " .. joined)
     end
 
     return joined
@@ -59,10 +64,10 @@ end
 ---@return table - char array
 function StringUtils.ToCharArray(str)
     local charArray = {}
-    Debug("Splitting str to char array: " .. str)
+    DebugLog("Splitting str to char array: " .. str)
     for i = 1, #str do
         charArray[i] = str:sub(i, i)
-        Debug(charArray[i])
+        DebugLog(charArray[i])
     end
     return charArray
 end
@@ -72,8 +77,8 @@ end
 ---@return string
 function StringUtils.TrimFront(str)
     local result = str:match'^%s*(.*)'
-    Debug("Trimming Front string: [" .. str .. "]")
-    Debug("Trimmed Front string: [" .. result .. "]")
+    DebugLog("Trimming Front string: [" .. str .. "]")
+    DebugLog("Trimmed Front string: [" .. result .. "]")
     return result
 end
 

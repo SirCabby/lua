@@ -1,10 +1,12 @@
 local mq = require("mq")
+local Debug = require("utils.Debug.Debug")
 local FileSystem = require("utils.FileSystem")
 local Owners = require("utils.Owners.Owners")
 
 mq.cmd("/mqclear")
 
-Owners.debug = true
+Debug:new()
+--Debug.toggles[FileSystem.key] = true
 local filePath = FileSystem.PathJoin(mq.configDir, "test", "ownersTest.json")
 local owners = Owners:new(filePath)
 

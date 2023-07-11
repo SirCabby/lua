@@ -21,6 +21,7 @@ function Config:new(filePath)
     local config = {}
     setmetatable(config, self)
     self.__index = self
+    Debug:new()
 
     config.filePath = filePath or FileSystem.PathJoin(mq.configDir, mq.TLO.Me.Name() .. "-Config.json")
     if not FileSystem.FileExists(config.filePath) then

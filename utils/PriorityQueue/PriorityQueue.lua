@@ -17,6 +17,7 @@ function PriorityQueue:new(maxSize)
     priorityQueue.maxSize = maxSize
     priorityQueue.jobs = {}
     priorityQueue.currentJobKey = -1
+    Debug:new()
 
     ---@param str string
     local function DebugLog(str)

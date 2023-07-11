@@ -1,4 +1,5 @@
 local mq = require("mq")
+local Debug = require("utils.Debug.Debug")
 local Json = require("utils.Json.Json")
 
 mq.cmd("/mqclear")
@@ -36,7 +37,8 @@ table.insert(array, key2arrayObj1)
 table.insert(array, key2arrayObj2)
 table.insert(array, key2arrayObj1)
 
---Json.debug = true
+Debug:new()
+--Debug.toggles[Json.key] = true
 
 print("test: \"hey\"")
 Json.Print(Json.Serialize("hey"))

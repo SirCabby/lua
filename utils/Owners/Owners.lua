@@ -12,6 +12,7 @@ function Owners:new(configFilePath)
     setmetatable(owners, self)
     self.__index = self
     local config = Config:new(configFilePath)
+    local debug = Debug:new()
 
     ---@param str string
     local function DebugLog(str)

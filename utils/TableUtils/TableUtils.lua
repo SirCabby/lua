@@ -1,25 +1,27 @@
-local StringUtils = require "utils.StringUtils.StringUtils"
+local Debug = require("utils.Debug.Debug")
 
 ---@class TableUtils
-local TableUtils = { author = "judged", debug = false }
+local TableUtils = { author = "judged", key = "TableUtils" }
 
-local function Debug(str)
-    if TableUtils.debug then print(str) end
+Debug:new()
+
+local function DebugLog(str)
+    Debug:Log(TableUtils.key, str)
 end
 
 ---@param tbl table
 ---@return boolean
 function TableUtils.IsArray(tbl)
-    Debug("Is array?")
+    DebugLog("Is array?")
     local i = 1
     for _ in pairs(tbl) do
         if tbl[i] == nil then
-            Debug("Did not find index in table [" .. tostring(i) .. "], is not an array")
+            DebugLog("Did not find index in table [" .. tostring(i) .. "], is not an array")
             return false
         end
         i = i + 1
     end
-    Debug("this table is an array")
+    DebugLog("this table is an array")
     return true
 end
 
@@ -27,17 +29,17 @@ end
 ---@param obj any
 ---@return boolean
 function TableUtils.ArrayContains(array, obj)
-    Debug("Does array contain: " .. tostring(obj))
+    DebugLog("Does array contain: " .. tostring(obj))
     if not TableUtils.IsArray(array) then error("Cannot call ArrayContains on a key-value table") end
     if type(obj) == "string" then obj = obj:lower() end
 
     for _, value in ipairs(array) do
         if type(value) == "string" then value = value:lower() end
-        Debug("Does [" .. value .. "] == [" .. obj .. "]? " .. tostring(value == obj))
+        DebugLog("Does [" .. value .. "] == [" .. obj .. "]? " .. tostring(value == obj))
         if value == obj then return true end
     end
 
-    Debug("Array did not contain: " .. tostring(obj))
+    DebugLog("Array did not contain: " .. tostring(obj))
     return false
 end
 
@@ -45,33 +47,33 @@ end
 ---@param tbl table Array or Table format
 ---@param obj any object to remove
 function TableUtils.RemoveByValue(tbl, obj)
-    Debug("Removing [" .. tostring(obj) .. "] from table")
+    DebugLog("Removing [" .. tostring(obj) .. "] from table")
     if type(obj) == "string" then obj = obj:lower() end
     if TableUtils.IsArray(tbl) then
-        Debug("Table is an array, using array removal...")
+        DebugLog("Table is an array, using array removal...")
         local indexesToRemove = {}
         -- find indexes of values to remove
         for index, value in ipairs(tbl) do
             if type(value) == "string" then value = value:lower() end
             if value == obj then
-                Debug("Value matched at index: " .. tostring(index))
+                DebugLog("Value matched at index: " .. tostring(index))
                 table.insert(indexesToRemove, index)
             end
         end
         -- remove in reverse order for iterator safety
         for i = #indexesToRemove, 1, -1 do
             table.remove(tbl, indexesToRemove[i])
-            Debug("Removed index: " .. tostring(indexesToRemove[i]))
+            DebugLog("Removed index: " .. tostring(indexesToRemove[i]))
         end
     else
-        Debug("Table is not an array, using table removal...")
+        DebugLog("Table is not an array, using table removal...")
         for key, value in pairs(tbl) do
             if type(value) == "string" then value = value:lower() end
-            Debug("Value matched")
+            DebugLog("Value matched")
             if value == obj then tbl[key] = nil end
         end
     end
-    Debug("Finished removing from table")
+    DebugLog("Finished removing from table")
 end
 
 ---@param obj table
@@ -84,13 +86,13 @@ end
 ---@param tbl table
 ---@return table - array of keys
 function TableUtils.GetKeys(tbl)
-    Debug("Getting keys from table")
+    DebugLog("Getting keys from table")
     local result = {}
     local count = 0
     for key,_ in pairs(tbl) do
         count = count + 1
         result[count] = key
-        Debug("Key [" .. tostring(key) .. "]")
+        DebugLog("Key [" .. tostring(key) .. "]")
     end
     table.sort(result)
     return result

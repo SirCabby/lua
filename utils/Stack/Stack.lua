@@ -1,24 +1,26 @@
+local Debug = require("utils.Debug.Debug")
 
 ---@class Stack
 ---@field stack table
-local Stack = { author = "judged", debug = false }
+local Stack = { author = "judged", key = "Stack" }
 
 function Stack:new()
     local stack = {}
     setmetatable(stack, self)
     self.__index = self
     stack.stack = {}
+    local debug = Debug:new()
     return stack
 end
 
-local function Debug(str)
-    if Stack.debug then print(str) end
+local function DebugLog(str)
+    Debug:Log(Stack.key, str)
 end
 
 ---@param obj any
 ---@return Stack - self
 function Stack:push(obj)
-    Debug("Pushed to top of stack: " .. tostring(obj))
+    DebugLog("Pushed to top of stack: " .. tostring(obj))
     table.insert(self.stack, obj)
     return self
 end
@@ -27,13 +29,13 @@ end
 ---@return any
 function Stack:pop(index)
     index = index or #self.stack
-    Debug("Popped from top of stack: " .. tostring(self.stack[index]))
+    DebugLog("Popped from top of stack: " .. tostring(self.stack[index]))
     return table.remove(self.stack, index)
 end
 
 ---@return any 
 function Stack:peek()
-    Debug("Peeked from top of stack: " .. tostring(self.stack[#self.stack]))
+    DebugLog("Peeked from top of stack: " .. tostring(self.stack[#self.stack]))
     return self.stack[#self.stack]
 end
 
