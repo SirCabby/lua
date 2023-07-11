@@ -1,6 +1,7 @@
 local mq = require("mq")
 local Config = require("utils.Config.Config")
 local Debug = require("utils.Debug.Debug")
+local DebugConfig = require("cabby.configs.DebugConfig")
 local GeneralConfig = require("cabby.configs.GeneralConfig")
 local Owners = require("utils.Owners.Owners")
 local Priorities = require("cabby.priorities")
@@ -36,6 +37,7 @@ function Commands:new(configFilePath, priorityQueue)
     commands.priorityQueue = priorityQueue
     local config = Config:new(configFilePath)
     local owners = Owners:new(configFilePath)
+    local debugConfig = DebugConfig:new(configFilePath)
     Debug:new()
 
     local function DebugLog(str)
@@ -168,7 +170,9 @@ function Commands:new(configFilePath, priorityQueue)
             print(" -- For example: /activechannels")
         elseif args[1]:lower() == "debug" then
             print("(/chelp debug) Debug Commands")
-            print(" -- /debug [all|follow]")
+            print(" -- To enable all debug tracing, use /debug all")
+            print(" -- To see a list of currently used debug toggles, use /debug list")
+            print(" -- To toggle a particular debug trace, find a key in the list command, then use /debug <key>")
         elseif args[1]:lower() == "follow" then
             print("(/chelp follow) Follow Commands:")
             print(" -- See also: /chelp cvc")
@@ -232,6 +236,36 @@ function Commands:new(configFilePath, priorityQueue)
         end
     end
     mq.bind("/relaytellsto", setRelayTellsToFunc)
+
+    -----------------------------------------------------------------------------
+
+    local function debugCommand(...)
+        local args = {...} or {}
+        if args == nil or #args < 1 or #args > 2 or args[1]:lower() == "help" then
+            print("(/debug) Toggle debug tracing by debug category key")
+            print(" -- Usage (toggle): /debug key")
+            print(" -- Usage (1 = on, 0 = off): /debug key <0|1>")
+            print(" -- To find a list of keys, use /debug list")
+        elseif args[1]:lower() == "list" then
+            print("Debug Toggles:")
+            debugConfig:Print()
+        elseif #args == 2 then
+            if args[2] == "0" then
+                debugConfig:SetDebugToggle(args[1], false)
+                print("Toggled debug tracing for [" .. args[1] .. "]: " .. tostring(DebugConfig:GetDebugToggle(args[1])))
+            elseif args[2] == "1" then
+                debugConfig:SetDebugToggle(args[1], true)
+                print("Toggled debug tracing for [" .. args[1] .. "]: " .. tostring(DebugConfig:GetDebugToggle(args[1])))
+            else
+                print("(/debug) Invalid second argument: [" .. args[2] .."]")
+                print(" -- Valid values: [0, 1]")
+            end
+        else
+            debugConfig:FlipDebugToggle(args[1])
+            print("Toggled debug tracing for [" .. args[1] .. "]: " .. tostring(DebugConfig:GetDebugToggle(args[1])))
+        end
+    end
+    mq.bind("/debug", debugCommand)
 
     -----------------------------------------------------------------------------
     ----------------------------- END BINDS -------------------------------------
