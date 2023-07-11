@@ -32,10 +32,10 @@ do
     if luaFile == "" then
         print("Unable to find lua file to run: " .. luaFileName)
         mq.exit()
-    else
-        luaFile = StringUtils.Split(luaFile, "\\lua\\")[2]
-        print("Found file: " .. luaFile)
     end
+    
+    luaFile = StringUtils.Split(luaFile, "\\lua\\")[2]
+    print("Found file: " .. luaFile)
 
     mq.cmdf("/lua run %s", luaFile)
 end
