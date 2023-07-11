@@ -9,7 +9,7 @@ function Stack:new()
     setmetatable(stack, self)
     self.__index = self
     stack.stack = {}
-    local debug = Debug:new()
+    Debug:new()
     return stack
 end
 
