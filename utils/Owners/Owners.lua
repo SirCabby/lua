@@ -1,5 +1,6 @@
 local Config = require("utils.Config.Config")
 local Debug = require("utils.Debug.Debug")
+local StringUtils = require("utils.StringUtils.StringUtils")
 local TableUtils = require("utils.TableUtils.TableUtils")
 
 ---@class Owners
@@ -11,8 +12,9 @@ function Owners:new(configFilePath)
     local owners = {}
     setmetatable(owners, self)
     self.__index = self
+
     local config = Config:new(configFilePath)
-    local debug = Debug:new()
+    Debug:new()
 
     ---@param str string
     local function DebugLog(str)
@@ -22,6 +24,7 @@ function Owners:new(configFilePath)
     ---Adds a new owner
     ---@param name string
     function Owners:Add(name)
+        name = name:lower()
         local ownersConfig = config:GetConfig(Owners.key)
         if not TableUtils.IsArray(ownersConfig) then error("Owners config was not an array") end
         if not TableUtils.ArrayContains(ownersConfig, name) then
@@ -36,6 +39,7 @@ function Owners:new(configFilePath)
     ---Removes a current owner
     ---@param name string
     function Owners:Remove(name)
+        name = name:lower()
         local ownersConfig = config:GetConfig(Owners.key)
         if not TableUtils.IsArray(ownersConfig) then error("Owners config was not an array") end
         if TableUtils.ArrayContains(ownersConfig, name) then
@@ -52,12 +56,12 @@ function Owners:new(configFilePath)
     ---@return boolean
     function Owners:IsOwner(name)
         local ownersConfig = config:GetConfig(Owners.key)
-        return TableUtils.ArrayContains(ownersConfig, name)
+        return TableUtils.ArrayContains(ownersConfig, name:lower())
     end
 
     function Owners:Print()
         local ownersConfig = config:GetConfig(Owners.key)
-        print("My Owners: " .. TableUtils.ArrayToString(ownersConfig))
+        print("My Owners: [" .. StringUtils.Join(ownersConfig, ", ") .. "]")
     end
 
     return owners
