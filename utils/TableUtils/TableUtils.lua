@@ -98,21 +98,19 @@ function TableUtils.GetKeys(tbl)
     return result
 end
 
----Takes array of strings and formats into single line string
----@param array table
----@return string
-function TableUtils.ArrayToString(array)
-    if not TableUtils.IsArray(array) then return "This is a table, not array, cannot PrintArray()" end
-    
-    local result = "["
-    for index, value in ipairs(array) do
-        if index == 1 then
-            result = result .. value
-        else
-            result = result .. ", " .. value
-        end
+---Returns all top-level values associated with obj
+---@param tbl table
+---@return table - array of top-level values
+function TableUtils.GetValues(tbl)
+    DebugLog("Getting top-level values from table")
+    local result = {}
+    local count = 0
+    for _,value in pairs(tbl) do
+        count = count + 1
+        result[count] = value
+        DebugLog("Value [" .. tostring(value) .. "]")
     end
-    result = result .. "]"
+    table.sort(result)
     return result
 end
 
