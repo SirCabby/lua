@@ -46,7 +46,7 @@ function StringUtils.Join(array, delimiter)
         DebugLog("array was empty, returning empty string")
         return ""
     end
-    if #array < 2 then
+    if #array == 1 then
         DebugLog ("Array was only 1 element, returning that element [" .. array[1] .. "]")
         return array[1]
     end
