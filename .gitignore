@@ -40,9 +40,9 @@ luac.out
 *.hex
 
 # default folders
-examples/*
-IntegrationTests/*
-mq/*
+examples
+integration-tests
+mq
 .vscode/*
 
 # experimentation file to omit
