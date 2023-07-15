@@ -84,7 +84,7 @@ end
 
 ---Returns all keys associated with obj
 ---@param tbl table
----@return table - array of keys
+---@return array - array of keys
 function TableUtils.GetKeys(tbl)
     DebugLog("Getting keys from table")
     local result = {}
@@ -111,6 +111,58 @@ function TableUtils.GetValues(tbl)
         DebugLog("Value [" .. tostring(value) .. "]")
     end
     table.sort(result)
+    return result
+end
+
+---@param tbl1 table
+---@param tbl2 table
+---@return boolean isEqual true if equal, false if not
+function TableUtils.Compare(tbl1, tbl2)
+    if type(tbl1) ~= "table" then
+        DebugLog("tbl1 was not a table [" .. tostring(tbl1) .. "]")
+        return false
+    end
+    if type(tbl2) ~= "table" then
+        DebugLog("tbl2 was not a table [" .. tostring(tbl2) .. "]")
+        return false
+    end
+
+    for k,v in pairs(tbl1) do
+        DebugLog("Comparing table key: [" .. k .. "]")
+        if type(v) == "boolean" or type(v) == "string" or type(v) == "number" or type(v) == "nil" then
+            if v ~= tbl2[k] then
+                DebugLog("Values were not equal: [" .. tostring(v) .. "] : [" .. tostring(tbl2[k]) .. "]")
+                return false
+            end
+        elseif type(v) == "table" then
+            if not TableUtils.Compare(v, tbl2[k]) then
+                DebugLog("Tables were not equal for key: [" .. k .. "]")
+                return false
+            end
+        end
+    end
+
+    DebugLog("Tables were equal")
+    return true
+end
+
+---@param tbl table original table to be cloned
+---@return table | nil clone deep clone of original tbl or nil if input was not a table
+function TableUtils.DeepClone(tbl)
+    if type(tbl) ~= "table" then
+        DebugLog("tbl was not a table [" .. tostring(tbl) .. "]")
+        return nil
+    end
+    local result = {}
+
+    for k,v in pairs(tbl) do
+        if type(v) == "boolean" or type(v) == "string" or type(v) == "number" or type(v) == "nil" then
+            result[k] = v
+        elseif type(v) == "table" then
+            result[k] = TableUtils.DeepClone(v)
+        end
+    end
+
     return result
 end
 
