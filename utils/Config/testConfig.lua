@@ -1,19 +1,17 @@
+
 local mq = require("mq")
 local Config = require("utils.Config.Config")
-local FileSystem = require("utils.FileSystem")
+local Debug = require("utils.Debug.Debug")
+local Json = require("utils.Json.Json")
 local TableUtils = require("utils.TableUtils.TableUtils")
+local test = require("integration-tests.mqTest")
 
 mq.cmd("/mqclear")
+local args = { ... }
+test.arguments(args)
 
-local filePath = FileSystem.PathJoin(mq.configDir, "test", mq.TLO.Me.Name() .. "-Config.json")
-local filePath2 = FileSystem.PathJoin(mq.configDir, "test", "test-Config.json")
-local config = Config:new(filePath)
-local config2 = Config:new(filePath2)
-
-local foo = config:GetConfig("foo")
-config:Print("foo")
-
-foo = {
+-- Arrange
+local fooObj = {
     foo1 = "hi",
     foo2 = {
         "test1", 2, 3, false, 5
@@ -24,29 +22,72 @@ foo = {
         }
     }
 }
+local fooStr = Json.Serialize(fooObj)
+local foo2Obj = {
+    foo4 = "new"
+}
 
-config:SaveConfig("foo", foo)
+-- Setup Mocks
+local FileExistsCalls = 0
+local WriteFileCalls = 0
+local ReadFileCalls = 0
+local fileSystemMock = {}
+function fileSystemMock.FileExists(...)
+    FileExistsCalls = FileExistsCalls + 1
+    return false
+end
+function fileSystemMock.WriteFile(...)
+    WriteFileCalls = WriteFileCalls + 1
+end
+function fileSystemMock.ReadFile(...)
+    ReadFileCalls = ReadFileCalls + 1
+    return fooStr
+end
+Config._mocks.FileSystem = fileSystemMock
 
-foo = config:GetConfig("foo")
-config:Print("foo")
+---@type ConfigInstance
+local config1
+---@type ConfigInstance
+local config2
+local file1 = "file1"
+local file2 = "file2"
 
+Debug:new()
 
-print("Config store:")
----@diagnostic disable-next-line: undefined-field
-TableUtils.Print(config.store)
-print("Config2 store:")
----@diagnostic disable-next-line: undefined-field
-TableUtils.Print(config2.store)
+-- TESTS
+test.Config.new = function()
+    config1 = Config:new(file1)
+    config2 = Config:new(file2)
 
-print("adding bar")
-config:SaveConfig("bar", { bar = "1" })
----@diagnostic disable-next-line: undefined-field
-TableUtils.Print(config.store)
+    --Debug:SetToggle(TableUtils.key, true)
+    test.equal(FileExistsCalls, 2)
+    test.equal(WriteFileCalls, 2)
+    test.equal(ReadFileCalls, 2)
+    test.assert(TableUtils.Compare(Config.store[file1], fooObj))
+    test.assert(TableUtils.Compare(Config.store[file2], fooObj))
+    --Debug:SetToggle(TableUtils.key, false)
+end
 
-print("adding baz")
-config:SaveConfig("baz", { baz = "2" })
----@diagnostic disable-next-line: undefined-field
-TableUtils.Print(config.store)
-print("Names:")
-local savedNames = config:GetSavedNames()
-TableUtils.Print(savedNames)
+test.Config.GetConfig = function()
+    test.assert(config1:GetConfig("foo1") == "hi")
+    test.assert(TableUtils.Compare(fooObj.foo2, config1:GetConfig("foo2")))
+    test.assert(TableUtils.Compare(fooObj.foo3, config1:GetConfig("foo3")))
+end
+
+test.Config.GetSavedNames = function()
+    local savedNames = config1:GetSavedNames()
+    test.assert(TableUtils.ArrayContains(savedNames, "foo1"))
+    test.assert(TableUtils.ArrayContains(savedNames, "foo2"))
+    test.assert(TableUtils.ArrayContains(savedNames, "foo3"))
+end
+
+test.Config.SaveConfig = function()
+    config1:SaveConfig("foo1", foo2Obj)
+    test.assert(TableUtils.Compare(Config.store[file1]["foo1"], foo2Obj))
+    test.assert(TableUtils.Compare(config1:GetConfig("foo1"), foo2Obj))
+    test.assert(config2:GetConfig("foo1") == "hi")
+    test.equal(WriteFileCalls, 3)
+end
+
+-- RUN TESTS
+test.summary()
