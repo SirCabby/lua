@@ -1,3 +1,4 @@
+---@type Config
 local Config = require("utils.Config.Config")
 local Debug = require("utils.Debug.Debug")
 local TableUtils = require("utils.TableUtils.TableUtils")
@@ -13,7 +14,7 @@ function DebugConfig:new(configFilePath)
     local debugConfig = {}
     setmetatable(debugConfig, self)
     self.__index = self
-    local config = Config:new(configFilePath)
+    local config = Config:buildInstance(configFilePath)
     Debug:new()
 
     ---@param str string

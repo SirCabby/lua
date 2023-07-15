@@ -1,4 +1,5 @@
 local mq = require("mq")
+---@type Config
 local Config = require("utils.Config.Config")
 local Debug = require("utils.Debug.Debug")
 local Owners = require("utils.Owners.Owners")
@@ -32,7 +33,7 @@ function GeneralConfig:new(configFilePath)
     setmetatable(generalConfig, self)
     self.__index = self
 
-    local config = Config:new(configFilePath)
+    local config = Config:buildInstance(configFilePath)
     Debug:new()
     Owners:new(configFilePath)
 
@@ -94,7 +95,7 @@ function GeneralConfig:new(configFilePath)
             generalConfig[GeneralConfig.keys.activeChannels][#generalConfig[GeneralConfig.keys.activeChannels] + 1] = channel
             print("Added [" .. channel .. "] to active channels")
         end
-        Config:SaveConfig(GeneralConfig.key, generalConfig)
+        config:SaveConfig(GeneralConfig.key, generalConfig)
         return true
     end
 
@@ -111,7 +112,7 @@ function GeneralConfig:new(configFilePath)
         if not TableUtils.ArrayContains(generalConfig[GeneralConfig.keys.activeChannels], channel) then
             generalConfig[GeneralConfig.keys.activeChannels][#generalConfig[GeneralConfig.keys.activeChannels] + 1] = channel
             print("Added [" .. channel .. "] to active channels")
-            Config:SaveConfig(GeneralConfig.key, generalConfig)
+            config:SaveConfig(GeneralConfig.key, generalConfig)
             return true
         end
         DebugLog(channel .. " was already an active channel")
@@ -131,7 +132,7 @@ function GeneralConfig:new(configFilePath)
         if TableUtils.ArrayContains(generalConfig[GeneralConfig.keys.activeChannels], channel) then
             TableUtils.RemoveByValue(generalConfig[GeneralConfig.keys.activeChannels], channel)
             print("Removed [" .. channel .. "] as active channel")
-            Config:SaveConfig(GeneralConfig.key, generalConfig)
+            config:SaveConfig(GeneralConfig.key, generalConfig)
             return true
         end
         DebugLog(channel .. " was not an active channel")

@@ -1,5 +1,6 @@
 
 local mq = require("mq")
+---@type Config
 local Config = require("utils.Config.Config")
 local Debug = require("utils.Debug.Debug")
 local Json = require("utils.Json.Json")
@@ -56,8 +57,8 @@ Debug:new()
 
 -- TESTS
 test.Config.new = function()
-    config1 = Config:new(file1)
-    config2 = Config:new(file2)
+    config1 = Config:buildInstance(file1)
+    config2 = Config:buildInstance(file2)
 
     --Debug:SetToggle(TableUtils.key, true)
     test.equal(FileExistsCalls, 2)

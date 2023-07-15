@@ -37,10 +37,8 @@ Config.store: { <-- Global / static config manager table
 
 ---@param filePath? string
 ---@return ConfigInstance
-function Config:new(filePath)
+function Config:buildInstance(filePath)
     local config = {}
-    setmetatable(config, self)
-    self.__index = self
 
     Debug:new()
     if (Config._mocks.FileSystem ~= nil) then

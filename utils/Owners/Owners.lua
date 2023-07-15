@@ -1,3 +1,4 @@
+---@type Config
 local Config = require("utils.Config.Config")
 local Debug = require("utils.Debug.Debug")
 local StringUtils = require("utils.StringUtils.StringUtils")
@@ -13,7 +14,7 @@ function Owners:new(configFilePath)
     setmetatable(owners, self)
     self.__index = self
 
-    local config = Config:new(configFilePath)
+    local config = Config:buildInstance(configFilePath)
     Debug:new()
 
     ---@param str string
@@ -30,7 +31,7 @@ function Owners:new(configFilePath)
         if not TableUtils.ArrayContains(ownersConfig, name) then
             ownersConfig[#ownersConfig + 1] = name
             print("Added [" .. name .. "] as Owner")
-            Config:SaveConfig(Owners.key, ownersConfig)
+            config:SaveConfig(Owners.key, ownersConfig)
             return
         end
         DebugLog(name .. " was already an owner")
@@ -45,7 +46,7 @@ function Owners:new(configFilePath)
         if TableUtils.ArrayContains(ownersConfig, name) then
             TableUtils.RemoveByValue(ownersConfig, name)
             print("Removed [" .. name .. "] as Owner")
-            Config:SaveConfig(Owners.key, ownersConfig)
+            config:SaveConfig(Owners.key, ownersConfig)
             return
         end
         DebugLog(name .. " was not an owner")
