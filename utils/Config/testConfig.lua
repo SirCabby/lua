@@ -10,6 +10,7 @@ local test = require("integration-tests.mqTest")
 mq.cmd("/mqclear")
 local args = { ... }
 test.arguments(args)
+Debug:new()
 
 -- Arrange
 local fooObj = {
@@ -27,6 +28,12 @@ local fooStr = Json.Serialize(fooObj)
 local foo2Obj = {
     foo4 = "new"
 }
+---@type ConfigInstance
+local config1
+---@type ConfigInstance
+local config2
+local file1 = "file1"
+local file2 = "file2"
 
 -- Setup Mocks
 local FileExistsCalls = 0
@@ -45,15 +52,6 @@ function fileSystemMock.ReadFile(...)
     return fooStr
 end
 Config._mocks.FileSystem = fileSystemMock
-
----@type ConfigInstance
-local config1
----@type ConfigInstance
-local config2
-local file1 = "file1"
-local file2 = "file2"
-
-Debug:new()
 
 -- TESTS
 test.Config.new = function()
