@@ -8,8 +8,8 @@ local Json = {
     key = "Json"
 }
 
----@param obj any Any lua datatype to be serialized, `function` or `userdata` types will result in nulls
----@return table - json pretty-printed string array of each line
+---@param obj any Any lua datatype to be serialized, `function` or `userdata` types will result in nils
+---@return table serialized - json pretty-printed string array of each line
 function Json.Serialize(obj)
     local switchType = {}
 
@@ -156,12 +156,10 @@ function Json.Deserialize(str)
     local function TraverseUntil(charArray, stopperArray, stopAt)
         if #charArray < 1 then return end
 
-        --if Json.debug then print("start") end
         local nextChar = charArray[1]
         indent = indent + 1
         while TableUtils.ArrayContains(stopperArray, nextChar) == stopAt do
-            local removed = table.remove(charArray, 1)
-            --if Json.debug then print(removed) end
+            table.remove(charArray, 1)
             nextChar = charArray[1]
         end
         indent = indent - 1
