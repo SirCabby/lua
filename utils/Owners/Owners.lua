@@ -7,14 +7,32 @@ local TableUtils = require("utils.TableUtils.TableUtils")
 ---@class Owners
 local Owners = { author = "judged", key = "Owners" }
 
+---@meta Owners
+---Adds a new owner
+---@param name string
+function Owners:Add(name) end
+---Removes a current owner
+---@param name string
+function Owners:Remove(name) end
+---Returns true if name is listed as an owner
+---@param name string
+---@return boolean
+function Owners:IsOwner(name) end
+
 ---@param configFilePath string
 ---@return Owners
 function Owners:new(configFilePath)
-    local owners = {}
-    setmetatable(owners, self)
-    self.__index = self
+    return Owners:new(Config:new(configFilePath))
+end
 
-    local config = Config:buildInstance(configFilePath)
+---Mainly used for mocking
+---@param config Config
+---@return Owners
+function Owners:new(config)
+    local owners = {}
+
+    ---@type Config
+    if (config == nil) then error("config was nil") end
     Debug:new()
 
     ---@param str string
@@ -22,9 +40,7 @@ function Owners:new(configFilePath)
         Debug:Log(Owners.key, str)
     end
 
-    ---Adds a new owner
-    ---@param name string
-    function Owners:Add(name)
+    function owners:Add(name)
         name = name:lower()
         local ownersConfig = config:GetConfig(Owners.key)
         if not TableUtils.IsArray(ownersConfig) then error("Owners config was not an array") end
@@ -37,9 +53,7 @@ function Owners:new(configFilePath)
         DebugLog(name .. " was already an owner")
     end
 
-    ---Removes a current owner
-    ---@param name string
-    function Owners:Remove(name)
+    function owners:Remove(name)
         name = name:lower()
         local ownersConfig = config:GetConfig(Owners.key)
         if not TableUtils.IsArray(ownersConfig) then error("Owners config was not an array") end
@@ -52,15 +66,12 @@ function Owners:new(configFilePath)
         DebugLog(name .. " was not an owner")
     end
 
-    ---Returns true if name is listed as an owner
-    ---@param name any
-    ---@return boolean
-    function Owners:IsOwner(name)
+    function owners:IsOwner(name)
         local ownersConfig = config:GetConfig(Owners.key)
         return TableUtils.ArrayContains(ownersConfig, name:lower())
     end
 
-    function Owners:Print()
+    function owners:Print()
         local ownersConfig = config:GetConfig(Owners.key)
         print("My Owners: [" .. StringUtils.Join(ownersConfig, ", ") .. "]")
     end
