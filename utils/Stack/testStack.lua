@@ -1,37 +1,86 @@
 local mq = require("mq")
 local Debug = require("utils.Debug.Debug")
+---@type Stack
 local Stack = require("utils.Stack.Stack")
+local TableUtils = require("utils.TableUtils.TableUtils")
+local test = require("integration-tests.mqTest")
 
 mq.cmd("/mqclear")
-
+local args = { ... }
+test.arguments(args)
 Debug:new()
---Debug.toggles[Stack.key] = true
 
+-- Arrange
 ---@type Stack
-local st = Stack:new()
+local s1
+---@type Stack
+local s2
+---@type array
+local s1Stack
+---@type array
+local s2Stack
+local pushStuff1 = { "p1", { "p2" }, 3, true, false, nil, "p7" }
+local pushStuff2 = { "2p" }
 
-assert(#st.stack == 0, "Stack created with entries")
-print("Stack created")
 
-st:push("foo")
-assert(st:peek() == "foo", "Failed to push string \"foo\"")
-print("Stack: [\"foo\"]")
+-- TESTS
+test.Stack.new = function()
+    s1 = Stack:new()
+    s2 = Stack:new()
+    s1Stack = s1._stack
+    s2Stack = s2._stack
+end
 
-st:push(2)
-assert(st:peek() == 2, "Failed to push number (2)")
-print("Stack: [\"foo\", 2]")
+test.Stack.push = function()
+    for i = 1, 7 do
+        s1:push(pushStuff1[i])
+    end
 
-st:push(3):push(4)
-print("Stack: [\"foo\", 2, 3, 4]")
-assert(st:pop(3) == 3, "Failed to pop correct index (3)")
-print("Stack: [\"foo\", 2, 4]")
-assert(st:pop() == 4, "Failed to pop correct item (4)")
-print("Stack: [\"foo\", 2]")
-st:pop()
-print("Stack: [\"foo\"]")
-st:pop()
-print("Stack: []")
-st:pop()
-print("Stack: []")
+    test.equal(#s1Stack, 7)
+    test.equal(#s2Stack, 0)
 
-assert(#st.stack == 0, "Stack should be empty")
+    for i = 1, 7 do
+        local compare = pushStuff1[i]
+        if compare == nil then compare = "nil" end
+        if type(compare) == "table" then
+            test.assert(TableUtils.Compare(s1Stack[i], compare))
+        else
+            test.equal(s1Stack[i], compare)
+        end
+    end
+
+    s2:push(pushStuff2[1])
+    test.assert(not TableUtils.ArrayContains(s1Stack, pushStuff2[1]))
+    test.equal(s2Stack[1], pushStuff2[1])
+    test.equal(#s1Stack, 7)
+    test.equal(#s2Stack, 1)
+end
+
+test.Stack.pop = function()
+    test.equal(s1:pop(), pushStuff1[7])
+    test.equal(s1:pop(4), pushStuff1[4])
+    test.equal(s1:pop(4), pushStuff1[5])
+    test.equal(s1:pop(4), "nil")
+    test.equal(#s1Stack, 3)
+    test.equal(#s2Stack, 1)
+
+    test.equal(s2:pop(), pushStuff2[1])
+    test.equal(s2:pop(), nil)
+    test.equal(s2:pop(), nil)
+    test.equal(s2:pop(), nil)
+end
+
+test.Stack.peek = function()
+    test.equal(s1:peek(), pushStuff1[3])
+    s1:pop()
+    test.equal(s1:peek(), pushStuff1[2])
+    s1:pop()
+    test.equal(s1:peek(), pushStuff1[1])
+    s1:pop()
+    test.equal(s1:peek(), nil)
+end
+
+
+
+-- RUN TESTS
+test.summary()
