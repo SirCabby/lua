@@ -35,7 +35,7 @@ function TableUtils.ArrayContains(array, obj)
 
     for _, value in ipairs(array) do
         if type(value) == "string" then value = value:lower() end
-        DebugLog("Does [" .. value .. "] == [" .. obj .. "]? " .. tostring(value == obj))
+        DebugLog("Does [" .. tostring(value) .. "] == [" .. tostring(obj) .. "]? " .. tostring(value == obj))
         if value == obj then return true end
     end
 
