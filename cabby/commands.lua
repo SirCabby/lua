@@ -2,6 +2,7 @@ local mq = require("mq")
 local Debug = require("utils.Debug.Debug")
 local DebugConfig = require("cabby.configs.DebugConfig")
 local GeneralConfig = require("cabby.configs.GeneralConfig")
+---@type Owners
 local Owners = require("utils.Owners.Owners")
 local Priorities = require("cabby.priorities")
 local PriorityQueueFunctionContent = require("utils.PriorityQueue.PriorityQueueFunctionContent")

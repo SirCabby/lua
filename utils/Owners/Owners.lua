@@ -18,6 +18,7 @@ function Owners:Remove(name) end
 ---@param name string
 ---@return boolean
 function Owners:IsOwner(name) end
+function Owners:Print() end
 
 ---@param configFilePath string
 ---@return Owners
