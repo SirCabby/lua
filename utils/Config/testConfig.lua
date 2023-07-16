@@ -2,6 +2,7 @@
 local mq = require("mq")
 ---@type Config
 local Config = require("utils.Config.Config")
+local ConfigStore = require("utils.Config.ConfigStore")
 local Debug = require("utils.Debug.Debug")
 local Json = require("utils.Json.Json")
 local TableUtils = require("utils.TableUtils.TableUtils")
@@ -28,9 +29,9 @@ local fooStr = Json.Serialize(fooObj)
 local foo2Obj = {
     foo4 = "new"
 }
----@type ConfigInstance
+---@type Config
 local config1
----@type ConfigInstance
+---@type Config
 local config2
 local file1 = "file1"
 local file2 = "file2"
@@ -51,19 +52,18 @@ function fileSystemMock.ReadFile(...)
     ReadFileCalls = ReadFileCalls + 1
     return fooStr
 end
-Config._mocks.FileSystem = fileSystemMock
 
 -- TESTS
 test.Config.new = function()
-    config1 = Config:buildInstance(file1)
-    config2 = Config:buildInstance(file2)
+    config1 = Config:new(file1, fileSystemMock)
+    config2 = Config:new(file2, fileSystemMock)
 
     --Debug:SetToggle(TableUtils.key, true)
     test.equal(FileExistsCalls, 2)
     test.equal(WriteFileCalls, 2)
     test.equal(ReadFileCalls, 2)
-    test.assert(TableUtils.Compare(Config.store[file1], fooObj))
-    test.assert(TableUtils.Compare(Config.store[file2], fooObj))
+    test.assert(TableUtils.Compare(ConfigStore.store[file1], fooObj))
+    test.assert(TableUtils.Compare(ConfigStore.store[file2], fooObj))
     --Debug:SetToggle(TableUtils.key, false)
 end
 
@@ -82,7 +82,7 @@ end
 
 test.Config.SaveConfig = function()
     config1:SaveConfig("foo1", foo2Obj)
-    test.assert(TableUtils.Compare(Config.store[file1]["foo1"], foo2Obj))
+    test.assert(TableUtils.Compare(ConfigStore.store[file1]["foo1"], foo2Obj))
     test.assert(TableUtils.Compare(config1:GetConfig("foo1"), foo2Obj))
     test.assert(config2:GetConfig("foo1") == "hi")
     test.equal(WriteFileCalls, 3)

@@ -33,7 +33,7 @@ function GeneralConfig:new(configFilePath)
     setmetatable(generalConfig, self)
     self.__index = self
 
-    local config = Config:buildInstance(configFilePath)
+    local config = Config:new(configFilePath)
     Debug:new()
     Owners:new(configFilePath)
 

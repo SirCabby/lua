@@ -14,7 +14,7 @@ function DebugConfig:new(configFilePath)
     local debugConfig = {}
     setmetatable(debugConfig, self)
     self.__index = self
-    local config = Config:buildInstance(configFilePath)
+    local config = Config:new(configFilePath)
     Debug:new()
 
     ---@param str string
