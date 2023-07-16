@@ -22,7 +22,6 @@ local s2Stack
 local pushStuff1 = { "p1", { "p2" }, 3, true, false, nil, "p7" }
 local pushStuff2 = { "2p" }
 
-
 -- TESTS
 test.Stack.new = function()
     s1 = Stack:new()
@@ -79,8 +78,6 @@ test.Stack.peek = function()
     s1:pop()
     test.equal(s1:peek(), nil)
 end
-
-
 
 -- RUN TESTS
 test.summary()
