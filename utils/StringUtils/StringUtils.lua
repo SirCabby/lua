@@ -46,6 +46,14 @@ function StringUtils.Join(array, delimiter)
         DebugLog("array was empty, returning empty string")
         return ""
     end
+
+    for i = 1, #array do
+        if type(array[i]) ~= "string" then
+            DebugLog("Array contained non-string entries: [" .. tostring(array[i] .. "]"))
+            return ""
+        end
+    end
+
     if #array == 1 then
         DebugLog ("Array was only 1 element, returning that element [" .. array[1] .. "]")
         return array[1]
@@ -84,7 +92,7 @@ end
 
 ---@param tabs number
 ---@param spacesPerTab number? default is 4
----@return string - a string of spaces up until propper line start amount
+---@return string spaces returns string of spaces equaling the amount needed for number of tabs given
 function StringUtils.TabsToSpaces(tabs, spacesPerTab)
     spacesPerTab = spacesPerTab or 4
     if tabs < 1 then return "" end
