@@ -30,9 +30,9 @@ test.Stack.new = function()
     s2Stack = s2._stack
 end
 
-test.Stack.push = function()
+test.Stack.Push_oneStack = function()
     for i = 1, 7 do
-        s1:push(pushStuff1[i])
+        s1:Push(pushStuff1[i])
     end
 
     test.equal(#s1Stack, 7)
@@ -47,36 +47,51 @@ test.Stack.push = function()
             test.equal(s1Stack[i], compare)
         end
     end
+end
 
-    s2:push(pushStuff2[1])
+test.Stack.Push_secondStack = function()
+    s2:Push(pushStuff2[1])
     test.assert(not TableUtils.ArrayContains(s1Stack, pushStuff2[1]))
     test.equal(s2Stack[1], pushStuff2[1])
     test.equal(#s1Stack, 7)
     test.equal(#s2Stack, 1)
 end
 
-test.Stack.pop = function()
-    test.equal(s1:pop(), pushStuff1[7])
-    test.equal(s1:pop(4), pushStuff1[4])
-    test.equal(s1:pop(4), pushStuff1[5])
-    test.equal(s1:pop(4), "nil")
-    test.equal(#s1Stack, 3)
+test.Stack.Pop_defaultEnd = function()
+    test.equal(s1:Pop(), pushStuff1[7])
+    test.equal(#s1Stack, 6)
     test.equal(#s2Stack, 1)
-
-    test.equal(s2:pop(), pushStuff2[1])
-    test.equal(s2:pop(), nil)
-    test.equal(s2:pop(), nil)
-    test.equal(s2:pop(), nil)
 end
 
-test.Stack.peek = function()
-    test.equal(s1:peek(), pushStuff1[3])
-    s1:pop()
-    test.equal(s1:peek(), pushStuff1[2])
-    s1:pop()
-    test.equal(s1:peek(), pushStuff1[1])
-    s1:pop()
-    test.equal(s1:peek(), nil)
+test.Stack.Pop_byIndex = function()
+    test.equal(s1:Pop(4), pushStuff1[4])
+    test.equal(s1:Pop(4), pushStuff1[5])
+    test.equal(s1:Pop(4), "nil")
+    test.equal(#s1Stack, 3)
+    test.equal(#s2Stack, 1)
+end
+
+test.Stack.Pop_afterEmpty = function()
+    test.equal(s2:Pop(), pushStuff2[1])
+    test.equal(#s2Stack, 0)
+    test.equal(s2:Pop(), nil)
+    test.equal(s2:Pop(), nil)
+    test.equal(s2:Pop(), nil)
+    test.equal(#s2Stack, 0)
+end
+
+test.Stack.Peek_fromPopulatedStack = function()
+    test.equal(s1:Peek(), pushStuff1[3])
+end
+
+test.Stack.Peek_fromEmptyStack = function()
+    s1:Pop()
+    test.equal(s1:Peek(), pushStuff1[2])
+    s1:Pop()
+    test.equal(s1:Peek(), pushStuff1[1])
+    s1:Pop()
+    test.equal(#s1Stack, 0)
+    test.equal(s1:Peek(), nil)
 end
 
 -- RUN TESTS
