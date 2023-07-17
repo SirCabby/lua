@@ -43,7 +43,7 @@ function TableUtils.ArrayContains(array, obj)
     return false
 end
 
----Removes all occurrences of obj in tbl
+---Removes all occurrences of obj (as a value) in tbl
 ---@param tbl table Array or Table format
 ---@param obj any object to remove
 function TableUtils.RemoveByValue(tbl, obj)
@@ -69,7 +69,6 @@ function TableUtils.RemoveByValue(tbl, obj)
         DebugLog("Table is not an array, using table removal...")
         for key, value in pairs(tbl) do
             if type(value) == "string" then value = value:lower() end
-            DebugLog("Value matched")
             if value == obj then tbl[key] = nil end
         end
     end
@@ -103,6 +102,10 @@ end
 ---@return table - array of top-level values
 function TableUtils.GetValues(tbl)
     DebugLog("Getting top-level values from table")
+    if TableUtils.IsArray(tbl) then
+        DebugLog("tbl was an array, returning tbl")
+        return tbl
+    end
     local result = {}
     local count = 0
     for _,value in pairs(tbl) do
@@ -118,15 +121,6 @@ end
 ---@param tbl2 table
 ---@return boolean isEqual true if equal, false if not
 function TableUtils.Compare(tbl1, tbl2)
-    if type(tbl1) ~= "table" then
-        DebugLog("tbl1 was not a table [" .. tostring(tbl1) .. "]")
-        return false
-    end
-    if type(tbl2) ~= "table" then
-        DebugLog("tbl2 was not a table [" .. tostring(tbl2) .. "]")
-        return false
-    end
-
     for k,v in pairs(tbl1) do
         DebugLog("Comparing table key: [" .. k .. "]")
         if type(v) == "boolean" or type(v) == "string" or type(v) == "number" or type(v) == "nil" then
@@ -136,6 +130,20 @@ function TableUtils.Compare(tbl1, tbl2)
             end
         elseif type(v) == "table" then
             if not TableUtils.Compare(v, tbl2[k]) then
+                DebugLog("Tables were not equal for key: [" .. k .. "]")
+                return false
+            end
+        end
+    end
+    for k,v in pairs(tbl2) do
+        DebugLog("Comparing table key: [" .. k .. "]")
+        if type(v) == "boolean" or type(v) == "string" or type(v) == "number" or type(v) == "nil" then
+            if v ~= tbl1[k] then
+                DebugLog("Values were not equal: [" .. tostring(v) .. "] : [" .. tostring(tbl1[k]) .. "]")
+                return false
+            end
+        elseif type(v) == "table" then
+            if not TableUtils.Compare(v, tbl1[k]) then
                 DebugLog("Tables were not equal for key: [" .. k .. "]")
                 return false
             end
