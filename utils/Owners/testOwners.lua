@@ -47,8 +47,8 @@ end
 
 -- TESTS
 test.Owners.new = function()
-    owners1 = Owners:new(configMock)
-    owners2 = Owners:new(configMock)
+    owners1 = Owners:new("", configMock)
+    owners2 = Owners:new("", configMock)
     test.equal(GetConfig, 0)
 end
 

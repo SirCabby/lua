@@ -21,19 +21,13 @@ function Owners:IsOwner(name) end
 function Owners:Print() end
 
 ---@param configFilePath string
----@return Owners
-function Owners:new(configFilePath)
-    return Owners:new(Config:new(configFilePath))
-end
-
----Mainly used for mocking
 ---@param config Config
 ---@return Owners
-function Owners:new(config)
+function Owners:new(configFilePath, config)
     local owners = {}
 
     ---@type Config
-    if (config == nil) then error("config was nil") end
+    config = config or Config:new(configFilePath)
     Debug:new()
 
     ---@param str string
