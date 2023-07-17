@@ -18,18 +18,10 @@ Debug:new()
 ---Manage and prioritize jobs
 ---@param priorityQueue PriorityQueue
 local function DoNextJob(priorityQueue)
-    local nextJob = priorityQueue:SetNextJob()
+    local nextJob = priorityQueue:GetNextJob()
     if nextJob == nil then return end
 
-    -- Assuming all queued jobs are FunctionContent
-    ---@type FunctionContent
-    local job = nextJob.content
-    local isDone = job.Call()
-    if (isDone) then
-        priorityQueue:CompleteCurrentJob()
-    else
-        nextJob:ResetTimer()
-    end
+    nextJob:Execute()
 end
 
 -- start

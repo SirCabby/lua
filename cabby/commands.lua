@@ -5,7 +5,7 @@ local GeneralConfig = require("cabby.configs.GeneralConfig")
 ---@type Owners
 local Owners = require("utils.Owners.Owners")
 local Priorities = require("cabby.priorities")
-local PriorityQueueFunctionContent = require("utils.PriorityQueue.PriorityQueueFunctionContent")
+local PriorityQueueJob = require("utils.PriorityQueue.PriorityQueueJob")
 local StringUtils = require("utils.StringUtils.StringUtils")
 local TableUtils = require("utils.TableUtils.TableUtils")
 
@@ -16,7 +16,6 @@ local Commands = {
     _registeredSlashCommands = {}
 }
 
----comment
 ---@param priorityQueue PriorityQueue
 ---@return Commands
 function Commands:new(configFilePath, priorityQueue)
@@ -48,13 +47,12 @@ function Commands:new(configFilePath, priorityQueue)
 
     ---Decides if should listen to command, then schedules it in the priority queue
     ---@param speaker string - Who issued command, must be listed in owners to listen
-    ---@param priority number
-    ---@param command FunctionContent
+    ---@param job PriorityQueueJob
     ---@param who? string This command was told to this name specifically
     ---@return boolean - true if command scheduled, false if ignored
-    local function ScheduleCommand(speaker, priority, command, who)
+    local function ScheduleCommand(speaker, job, who)
         who = who or "all"
-        DebugLog("Received command from [" .. speaker .. "] with priority [" .. tostring(priority) .. "] directed at: [" .. who .. "]: " .. command.identity)
+        DebugLog("Received command from [" .. speaker .. "] with priority [" .. tostring(job:GetPriority()) .. "] directed at: [" .. who .. "]: " .. job:GetIdentity())
         if who ~= "all" and who:lower() ~= mq.TLO.Me.Name():lower() then
             DebugLog("Ignoring command, was issued to: [" .. mq.TLO.Me.Name() .. "]")
             return false
@@ -65,8 +63,8 @@ function Commands:new(configFilePath, priorityQueue)
             return false
         end
 
-        DebugLog("Inserting command: " .. command.identity)
-        commands.priorityQueue:InsertNewJob(priority, command)
+        DebugLog("Inserting command: " .. job:GetIdentity())
+        commands.priorityQueue:InsertJob(job)
         return true
     end
 
@@ -75,13 +73,13 @@ function Commands:new(configFilePath, priorityQueue)
     -----------------------------------------------------------------------------
 
     local function event_FollowMe(_, speaker, who)
-        local followMe = PriorityQueueFunctionContent:new("Follow Me - " .. speaker, exeFunc)
-        ScheduleCommand(speaker, Priorities.Following, followMe, who)
+        local job = PriorityQueueJob:new("Follow me - " .. speaker, Priorities.Following, exeFunc, nil, true)
+        ScheduleCommand(speaker, job, who)
     end
 
     local function event_StopFollow(_, speaker, who)
-        local stopFollow = PriorityQueueFunctionContent:new("Stop Follow - " .. speaker, exeFunc)
-        ScheduleCommand(speaker, Priorities.Following, stopFollow, who)
+        local job = PriorityQueueJob:new("Stop Follow - " .. speaker, Priorities.Following, exeFunc, nil, true)
+        ScheduleCommand(speaker, job, who)
     end
 
     --TODO move these into follow state and setup method for registering state files
@@ -98,14 +96,14 @@ function Commands:new(configFilePath, priorityQueue)
     -----------------------------------------------------------------------------
 
     local function event_TellToMe(_, speaker, message)
-        local tellToMeFunc = PriorityQueueFunctionContent:new("Tell to me - " .. speaker, function() return GeneralConfig:TellToMe(speaker, message) end)
-        commands.priorityQueue:InsertNewJob(Priorities.Immediate, tellToMeFunc)
+        local job = PriorityQueueJob:new("Tell to me - " .. speaker, Priorities.Immediate, function() GeneralConfig:TellToMe(speaker, message) end, nil, true)
+        commands.priorityQueue:InsertJob(job)
     end
     mq.event(GeneralConfig.eventIds.tellToMe, "#1# tells you, '#2#'", event_TellToMe)
 
     local function event_GroupInvited(_, speaker)
-        local groupInvitedFunc = PriorityQueueFunctionContent:new("Tell to me - " .. speaker, function() return GeneralConfig:GroupInvited(speaker) end)
-        commands.priorityQueue:InsertNewJob(Priorities.Immediate, groupInvitedFunc)
+        local job = PriorityQueueJob:new("Invited to group by - " .. speaker, Priorities.Immediate, function() GeneralConfig:GroupInvited(speaker) end, nil, true)
+        commands.priorityQueue:InsertJob(job)
     end
     mq.event(GeneralConfig.eventIds.groupInvited, "#1# invites you to join a group.", event_GroupInvited)
 

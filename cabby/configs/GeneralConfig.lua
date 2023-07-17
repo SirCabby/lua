@@ -2,6 +2,7 @@ local mq = require("mq")
 ---@type Config
 local Config = require("utils.Config.Config")
 local Debug = require("utils.Debug.Debug")
+---@type Owners
 local Owners = require("utils.Owners.Owners")
 local StringUtils = require("utils.StringUtils.StringUtils")
 local TableUtils = require("utils.TableUtils.TableUtils")
@@ -35,7 +36,7 @@ function GeneralConfig:new(configFilePath)
 
     local config = Config:new(configFilePath)
     Debug:new()
-    Owners:new(configFilePath)
+    local owners = Owners:new(configFilePath)
 
     ---@param str string
     local function DebugLog(str)
@@ -64,7 +65,7 @@ function GeneralConfig:new(configFilePath)
     end
 
     function GeneralConfig:GroupInvited(speaker)
-        if Owners:IsOwner(speaker) then
+        if owners:IsOwner(speaker) then
             DebugLog("Joining group of speaker [" .. speaker .. "]")
             mq.cmd("/invite")
         else
