@@ -1,7 +1,7 @@
 local mq = require("mq")
 local ConfigStore = require("utils.Config.ConfigStore")
 local Debug = require("utils.Debug.Debug")
-local FileSystem = require("utils.FileSystem")
+local FileSystem = require("utils.FileSystem.FileSystem")
 local Json = require("utils.Json.Json")
 local TableUtils = require("utils.TableUtils.TableUtils")
 

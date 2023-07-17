@@ -2,7 +2,7 @@
 ---@type Mq
 local mq = require("mq")
 local Debug = require("utils.Debug.Debug")
-local FileSystem = require("utils.FileSystem")
+local FileSystem = require("utils.FileSystem.FileSystem")
 local PriorityQueue = require("utils.PriorityQueue.PriorityQueue")
 local Setup = require("cabby.setup")
 

@@ -1,5 +1,5 @@
 local mq = require("mq")
-local FileSystem = require("utils.FileSystem")
+local FileSystem = require("utils.FileSystem.FileSystem")
 local StringUtils = require("utils.StringUtils.StringUtils")
 
 local args = {...}
