@@ -1,4 +1,3 @@
-
 local mq = require("mq")
 ---@type Config
 local Config = require("utils.Config.Config")
