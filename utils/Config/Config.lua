@@ -23,12 +23,6 @@ function Config:Print(name) end
 ---@return array configNames config names currently in use
 function Config:GetSavedNames() end
 
----@param filePath? string
----@return Config
-function Config:new(filePath)
-    return Config:new(filePath, FileSystem)
-end
-
 ---@param filePath? string defaults to \config\CharName-Config.json
 ---@param fileSystem? FileSystem
 ---@return Config
