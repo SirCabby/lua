@@ -21,7 +21,7 @@ function Owners:IsOwner(name) end
 function Owners:Print() end
 
 ---@param configFilePath string
----@param config Config
+---@param config? Config
 ---@return Owners
 function Owners:new(configFilePath, config)
     local owners = {}
