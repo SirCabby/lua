@@ -1,5 +1,8 @@
+---@type Mq
+local mq = require("mq")
+
 ---@class Debug
-local Debug = { author = "judged", _toggles = { all = false } }
+local Debug = { author = "judged", writeFile = false, all = false, _toggles = { } }
 
 ---@return Debug
 function Debug:new()
@@ -7,11 +10,26 @@ function Debug:new()
     setmetatable(debug, self)
     self.__index = self
 
+    ---@param content string line to write to Debug.log
+    local function writeFile(content)
+        local filePath = mq.luaDir .. package.config:sub(1,1) .. "Debug.log"
+        local file = io.open(filePath, "a")
+        assert(file ~= nil, "Unable to create file: " .. filePath)
+        file:write(content, "\n")
+        file:close()
+    end
+
     ---Print if Debug enabled
     ---@param toggleKey string
     ---@param str string
     function Debug:Log(toggleKey, str)
-        if Debug:GetToggle(toggleKey) or Debug._toggles.all then print(str) end
+        if Debug:GetToggle(toggleKey) or Debug.all then
+            if Debug.writeFile then
+                writeFile(str)
+            else
+                print(str)
+            end
+        end
     end
 
     function Debug:ExistsOrDefault(toggleKey)

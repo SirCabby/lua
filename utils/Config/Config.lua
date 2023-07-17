@@ -29,15 +29,14 @@ function Config:new(filePath)
     return Config:new(filePath, FileSystem)
 end
 
----Overload mainly created for mocking
----@param filePath? string
----@param fileSystem FileSystem
+---@param filePath? string defaults to \config\CharName-Config.json
+---@param fileSystem? FileSystem
 ---@return Config
 function Config:new(filePath, fileSystem)
     local config = {}
 
     Debug:new()
-    if (fileSystem == nil) then error("fileSystem was nil") end
+    fileSystem = fileSystem or FileSystem
 
     config.filePath = filePath or fileSystem.PathJoin(mq.configDir, mq.TLO.Me.Name() .. "-Config.json")
 

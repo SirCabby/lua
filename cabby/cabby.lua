@@ -8,9 +8,12 @@ local Setup = require("cabby.setup")
 
 -- Debug toggles
 Debug:new()
--- Debug.toggles[Setup.key] = true
+-- Debug.writeFile = true
+-- Debug.all = true
+-- Debug:SetToggle(Setup.key, true)
+-- ---@type Config
 -- local Config = require("utils.Config.Config")
--- Debug.toggles[Config.key] = true
+-- Debug:SetToggle(Config.key, true)
 
 ---Manage and prioritize jobs
 ---@param priorityQueue PriorityQueue

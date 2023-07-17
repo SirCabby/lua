@@ -47,3 +47,4 @@ mq
 
 # experimentation file to omit
 test.lua
+Debug.log
