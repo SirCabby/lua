@@ -1,7 +1,6 @@
 local Debug = require("utils.Debug.Debug")
 
 ---@class PriorityQueue
----@field jobs table
 ---@field maxSize number
 local PriorityQueue = { author = "judged", key = "PriorityQueue" }
 

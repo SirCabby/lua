@@ -12,8 +12,6 @@ function PriorityQueueJob:IsUnique() end
 function PriorityQueueJob:IsVisible() end
 ---Reset visibility timer of this job
 function PriorityQueueJob:ResetTimer() end
----Marks this job complete
-function PriorityQueueJob:Complete() end
 ---@return boolean isComplete
 function PriorityQueueJob:IsComplete() end
 function PriorityQueueJob:Execute() end
@@ -54,10 +52,6 @@ function PriorityQueueJob:new(identity, priority, content, time, isUnique)
         newJob._timer:reset()
     end
 
-    function newJob:Complete()
-        newJob._isComplete = true
-    end
-
     function newJob:IsComplete()
         return newJob._isComplete
     end
@@ -67,7 +61,7 @@ function PriorityQueueJob:new(identity, priority, content, time, isUnique)
             if content() == true then
                 newJob:ResetTimer()
             else
-                newJob:Complete()
+                newJob._isComplete = true
             end
         end
     end
