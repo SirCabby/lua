@@ -15,8 +15,8 @@ local Config = { author = "judged", key = "Config" }
 function Config:GetConfig(name) end
 ---Save config by name
 ---@param name string Config name to save content under
----@param obj table Saved content
-function Config:SaveConfig(name, obj) end
+---@param tbl table Saved content
+function Config:SaveConfig(name, tbl) end
 ---Prints the config
 ---@param name string
 function Config:Print(name) end
@@ -38,8 +38,8 @@ function Config:new(filePath, fileSystem)
         return ConfigStore.store[config.filePath][name] or {}
     end
 
-    function config:SaveConfig(name, obj)
-        ConfigStore.store[config.filePath][name] = obj
+    function config:SaveConfig(name, tbl)
+        ConfigStore.store[config.filePath][name] = tbl
         fileSystem.WriteFile(config.filePath, Json.Serialize(ConfigStore.store[config.filePath]))
         Debug:Log(ConfigStore.key, "Saved config [" .. name .. "]")
     end
