@@ -1,7 +1,7 @@
 local mq = require("mq")
 local Commands = require("cabby.commands")
 local Debug = require("utils.Debug.Debug")
-local GeneralConfig = require("cabby.configs.GeneralConfig")
+local GeneralConfig = require("cabby.configs.generalConfig")
 
 local Setup = { key = "Setup" }
 
