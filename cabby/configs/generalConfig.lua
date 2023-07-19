@@ -19,8 +19,34 @@ local GeneralConfig = {
         group = "group"
     },
     eventIds = {
+        groupInvited = "Invited to Group",
         tellToMe = "Tell to Me",
-        groupInvited = "Invited to Group"
+        inspectRequest = "Request to inspect"
+    },
+    equipmentSlots = {
+        "charm",
+        "leftear",
+        "head",
+        "face",
+        "rightear",
+        "neck",
+        "shoulder",
+        "arms",
+        "back",
+        "leftwrist",
+        "rightwrist",
+        "ranged",
+        "hands",
+        "mainhand",
+        "offhand",
+        "leftfinger",
+        "rightfinger",
+        "chest",
+        "legs",
+        "feet",
+        "waist",
+        "powersource",
+        "ammo"
     },
     _ = {
         isInit = false,
@@ -32,6 +58,14 @@ local GeneralConfig = {
 ---@param str string
 local function DebugLog(str)
     Debug.Log(GeneralConfig.key, str)
+end
+
+--- Defined here because it is registered last in the channel update
+local function event_TellToMe(_, speaker, message)
+    local tellTo = GeneralConfig.GetRelayTellsTo()
+    if tellTo ~= speaker and mq.TLO.SpawnCount("npc " .. speaker)() < 1 then
+        mq.cmd("/tell " .. tellTo .. " " .. speaker .. " told me: " .. message)
+    end
 end
 
 ---Initialize the static object, only done once
@@ -65,13 +99,6 @@ function GeneralConfig.Init(config, owners)
         end
 
         -- Events
-        local function event_TellToMe(_, speaker, message)
-            local tellTo = GeneralConfig.GetRelayTellsTo()
-            if tellTo ~= speaker and mq.TLO.SpawnCount("npc " .. speaker)() < 1 then
-                mq.cmd("/tell " .. tellTo .. " " .. speaker .. " told me: " .. message)
-            end
-        end
-        mq.event(GeneralConfig.eventIds.tellToMe, "#1# tells you, '#2#'", event_TellToMe)
 
         local function event_GroupInvited(_, speaker)
             if GeneralConfig._.owners:IsOwner(speaker) then
@@ -83,6 +110,29 @@ function GeneralConfig.Init(config, owners)
             end
         end
         mq.event(GeneralConfig.eventIds.groupInvited, "#1# invites you to join a group.", event_GroupInvited)
+
+        local function event_InspectRequest(_, speaker, message)
+            local function doHelp()
+                mq.cmd("/tell "..speaker.." Usage: \"inspect slot\". Available Slot Types: ["..StringUtils.Join(TableUtils.GetValues(GeneralConfig.equipmentSlots), ", ").."]")
+            end
+
+            if GeneralConfig._.owners:IsOwner(speaker) then
+                local args = StringUtils.Split(StringUtils.TrimFront(message), " ")
+                if #args < 1 then
+                    doHelp()
+                    return
+                end
+
+                local slot = args[1]:lower()
+                DebugLog("Request for inspection: [" .. speaker .. "], slot: [" .. slot .. "]")
+                if TableUtils.ArrayContains(GeneralConfig.equipmentSlots, slot) then
+                    mq.cmd("/tell "..speaker.." "..slot..": "..mq.TLO.Me.Inventory(slot).ItemLink("CLICKABLE")())
+                else
+                    doHelp()
+                end
+            end
+        end
+        mq.event(GeneralConfig.eventIds.inspectRequest, "#1# tells you, 'inspect#2#'", event_InspectRequest)
 
         -- Binds
         local function Bind_SetRelayTellsToFunc(...)
@@ -215,16 +265,19 @@ function GeneralConfig.UpdateEventChannels()
         table.insert(phrasePatterns, "[#1#(msg)] <<phrase>>")
     end
     if TableUtils.ArrayContains(channels, GeneralConfig.channelTypes.tell) then
-        table.insert(phrasePatterns, "<#1#> tells you, '<<phrase>>'")
+        table.insert(phrasePatterns, "#1# tells you, '<<phrase>>'")
     end
     if TableUtils.ArrayContains(channels, GeneralConfig.channelTypes.group) then
-        table.insert(phrasePatterns, "<#1#> tells the group, '<<phrase>>'")
+        table.insert(phrasePatterns, "#1# tells the group, '<<phrase>>'")
     end
     if TableUtils.ArrayContains(channels, GeneralConfig.channelTypes.raid) then
-        table.insert(phrasePatterns, "<#1#> tells the raid, '<<phrase>>'")
+        table.insert(phrasePatterns, "#1# tells the raid, '<<phrase>>'")
     end
 
     Commands.SetChannelPatterns(phrasePatterns)
+
+    -- This is a catchall event for uncaught tell patterns and must be registered last
+    mq.event(GeneralConfig.eventIds.tellToMe, "#1# tells you, '#2#'", event_TellToMe)
 end
 
 function GeneralConfig.Print()
