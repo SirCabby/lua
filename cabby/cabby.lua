@@ -21,9 +21,9 @@ mq.cmd("/mqclear")
 print("Loading Cabby script...")
 local configFilePath = FileSystem.PathJoin(mq.configDir, "cabby", mq.TLO.Me.Name() .. "-Config.json")
 Setup:Init(configFilePath)
+local stateMachine = StateMachine:new()
 
 print("/chelp for help")
 print("Cabby script is running...")
 
-local stateMachine = StateMachine:new()
 stateMachine:Start()
