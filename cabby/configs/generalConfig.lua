@@ -276,7 +276,7 @@ function GeneralConfig.UpdateEventChannels()
 
     Commands.SetChannelPatterns(phrasePatterns)
 
-    -- This is a catchall event for uncaught tell patterns and must be registered last
+    -- This is a catchall event for uncaught tell patterns and must be registered last so other tell commands have a chance to catch first
     mq.event(GeneralConfig.eventIds.tellToMe, "#1# tells you, '#2#'", event_TellToMe)
 end
 
