@@ -1,14 +1,17 @@
 local mq = require("mq")
 local Commands = require("cabby.commands")
+---@type Config
+local Config = require("utils.Config.Config")
 local Debug = require("utils.Debug.Debug")
+local DebugConfig = require("cabby.configs.debugConfig")
 local GeneralConfig = require("cabby.configs.generalConfig")
+---@type Owners
+local Owners = require("utils.Owners.Owners")
 
 local Setup = { key = "Setup" }
 
-Debug:new()
-
 local function DebugLog(str)
-    Debug:Log(Setup.key, str)
+    Debug.Log(Setup.key, str)
 end
 
 local function CheckPlugin(name)
@@ -51,15 +54,21 @@ local function PluginSetup()
     CheckPlugin("MQ2Cast")
 end
 
+---@param configFilePath string
 local function ConfigSetup(configFilePath)
-    GeneralConfig:new(configFilePath)
+    PluginSetup()
+    local config = Config:new(configFilePath)
+    local owners = Owners:new(configFilePath)
+    GeneralConfig.Init(config, owners)
+    DebugConfig.Init(config)
 end
 
-function Setup:Init(configFilePath, priorityQueue)
+function Setup:Init(configFilePath)
     DebugLog("Starting Cabby Setup...")
-    PluginSetup()
+
     ConfigSetup(configFilePath)
-    Commands:new(configFilePath, priorityQueue)
+    Commands.Init()
+
     DebugLog("Finished Cabby Setup")
 end
 
