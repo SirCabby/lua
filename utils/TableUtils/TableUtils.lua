@@ -3,10 +3,8 @@ local Debug = require("utils.Debug.Debug")
 ---@class TableUtils
 local TableUtils = { author = "judged", key = "TableUtils" }
 
-Debug:new()
-
 local function DebugLog(str)
-    Debug:Log(TableUtils.key, str)
+    Debug.Log(TableUtils.key, str)
 end
 
 ---@param tbl table

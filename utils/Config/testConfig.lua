@@ -10,7 +10,6 @@ local test = require("integration-tests.mqTest")
 mq.cmd("/mqclear")
 local args = { ... }
 test.arguments(args)
-Debug:new()
 
 -- Arrange
 local fooObj = {
@@ -57,13 +56,13 @@ test.Config.new = function()
     config1 = Config:new(file1, fileSystemMock)
     config2 = Config:new(file2, fileSystemMock)
 
-    --Debug:SetToggle(TableUtils.key, true)
+    -- Debug.SetToggle(TableUtils.key, true)
     test.equal(FileExistsCalls, 2)
     test.equal(WriteFileCalls, 2)
     test.equal(ReadFileCalls, 2)
     test.assert(TableUtils.Compare(ConfigStore.store[file1], fooObj))
     test.assert(TableUtils.Compare(ConfigStore.store[file2], fooObj))
-    --Debug:SetToggle(TableUtils.key, false)
+    -- Debug.SetToggle(TableUtils.key, false)
 end
 
 test.Config.GetConfig = function()

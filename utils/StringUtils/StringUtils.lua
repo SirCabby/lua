@@ -3,10 +3,8 @@ local Debug = require("utils.Debug.Debug")
 ---@class StringUtils
 local StringUtils = { author = "judged", key = "StringUtils" }
 
-Debug:new()
-
 local function DebugLog(str)
-    Debug:Log(StringUtils.key, str)
+    Debug.Log(StringUtils.key, str)
 end
 
 ---@param str string

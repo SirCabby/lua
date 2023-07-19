@@ -6,10 +6,8 @@ local StringUtils = require("utils.StringUtils.StringUtils")
 ---@class FileSystem
 local FileSystem = { author = "judged", DIR_SEP = package.config:sub(1,1), key = "FileSystem" }
 
-Debug:new()
-
 local function DebugLog(str)
-    Debug:Log(FileSystem.key, str)
+    Debug.Log(FileSystem.key, str)
 end
 
 --- Find a file based on the root directory

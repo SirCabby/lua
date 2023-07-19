@@ -15,10 +15,9 @@ function Stack:Peek() end
 
 function Stack:new()
     local stack = { _stack = {} }
-    Debug:new()
 
     local function DebugLog(str)
-        Debug:Log(Stack.key, str)
+        Debug.Log(Stack.key, str)
     end
 
     function stack:Push(obj)

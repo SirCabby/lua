@@ -11,7 +11,6 @@ local test = require("integration-tests.mqTest")
 mq.cmd("/mqclear")
 local args = { ... }
 test.arguments(args)
-Debug:new()
 
 -- TESTS
 test.PriorityQueueJob.new_withTimerAndUnique = function()

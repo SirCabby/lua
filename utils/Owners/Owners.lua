@@ -28,11 +28,10 @@ function Owners:new(configFilePath, config)
 
     ---@type Config
     config = config or Config:new(configFilePath)
-    Debug:new()
 
     ---@param str string
     local function DebugLog(str)
-        Debug:Log(Owners.key, str)
+        Debug.Log(Owners.key, str)
     end
 
     function owners:Add(name)

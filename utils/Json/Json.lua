@@ -140,13 +140,12 @@ function Json.Deserialize(str)
     if type(str) ~= "string" then return {} end
     str = StringUtils.TrimFront(str)
     local indent = 0
-    Debug:new()
 
     local _holder = {}
 
     ---@param str string
     local function DebugLog(str)
-        Debug:Log(Json.key, StringUtils.TabsToSpaces(indent) .. str)
+        Debug.Log(Json.key, StringUtils.TabsToSpaces(indent) .. str)
     end
 
     ---Traverse char array up to a point, discarding elements until stopping

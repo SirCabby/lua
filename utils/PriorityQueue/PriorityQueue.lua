@@ -20,11 +20,10 @@ function PriorityQueue:new(maxSize)
     local priorityQueue = {}
 
     priorityQueue._jobs = {}
-    Debug:new()
 
     ---@param str string
     local function DebugLog(str)
-        Debug:Log(PriorityQueue.key, str)
+        Debug.Log(PriorityQueue.key, str)
     end
 
     ---Determines if the job is unique to the queue. If one already exists, no new job is added.

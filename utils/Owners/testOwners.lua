@@ -8,7 +8,6 @@ local test = require("integration-tests.mqTest")
 mq.cmd("/mqclear")
 local args = { ... }
 test.arguments(args)
-Debug:new()
 
 -- Arrange
 local ownersConfig1 = { "name1", "name2" }

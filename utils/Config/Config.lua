@@ -29,9 +29,7 @@ function Config:GetSavedNames() end
 function Config:new(filePath, fileSystem)
     local config = {}
 
-    Debug:new()
     fileSystem = fileSystem or FileSystem
-
     config.filePath = filePath or fileSystem.PathJoin(mq.configDir, mq.TLO.Me.Name() .. "-Config.json")
 
     function config:GetConfig(name)
@@ -41,7 +39,7 @@ function Config:new(filePath, fileSystem)
     function config:SaveConfig(name, tbl)
         ConfigStore.store[config.filePath][name] = tbl
         fileSystem.WriteFile(config.filePath, Json.Serialize(ConfigStore.store[config.filePath]))
-        Debug:Log(ConfigStore.key, "Saved config [" .. name .. "]")
+        Debug.Log(ConfigStore.key, "Saved config [" .. name .. "]")
     end
 
     function config:Print(name)
@@ -64,7 +62,7 @@ function Config:new(filePath, fileSystem)
         ConfigStore.store[config.filePath] = Json.Deserialize(configStr)
     end
 
-    Debug:Log(ConfigStore.key, "Config loaded: " .. filePath)
+    Debug.Log(ConfigStore.key, "Config loaded: " .. filePath)
     return config
 end
 

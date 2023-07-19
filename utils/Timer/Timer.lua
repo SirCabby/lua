@@ -12,7 +12,7 @@ local Timer = {
 }
 
 local function DebugLog(str)
-    Debug:Log(Timer.key, str)
+    Debug.Log(Timer.key, str)
 end
 
 ---Initialize a new timer instance
@@ -24,7 +24,6 @@ function Timer:new(expiration)
     self.__index = self
     t.start_time = 0
     t.expiration = expiration
-    Debug:new()
     DebugLog("Timer created with expiration: " .. tostring(expiration))
     t:reset()
     return t
