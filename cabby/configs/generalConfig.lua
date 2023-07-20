@@ -21,7 +21,8 @@ local GeneralConfig = {
     eventIds = {
         groupInvited = "Invited to Group",
         tellToMe = "Tell to Me",
-        inspectRequest = "Request to inspect"
+        inspectRequest = "Request to inspect",
+        restart = "Restart Cabby Script"
     },
     equipmentSlots = {
         "charm",
@@ -113,12 +114,12 @@ function GeneralConfig.Init(config, owners)
 
         local function event_InspectRequest(_, speaker, message)
             local function doHelp()
-                mq.cmd("/tell "..speaker.." Usage: \"inspect slot\". Available Slot Types: ["..StringUtils.Join(TableUtils.GetValues(GeneralConfig.equipmentSlots), ", ").."]")
+                mq.cmd("/tell "..speaker.."(restart) Stops the currently running lua script and restarts it.")
             end
 
             if GeneralConfig._.owners:IsOwner(speaker) then
                 local args = StringUtils.Split(StringUtils.TrimFront(message), " ")
-                if #args < 1 then
+                if #args > 0 then
                     doHelp()
                     return
                 end
@@ -133,6 +134,19 @@ function GeneralConfig.Init(config, owners)
             end
         end
         mq.event(GeneralConfig.eventIds.inspectRequest, "#1# tells you, 'inspect#2#'", event_InspectRequest)
+
+        local function event_Restart(_, speaker)
+            if GeneralConfig._.owners:IsOwner(speaker) then
+                DebugLog("Restarting on request of speaker [" .. speaker .. "]")
+                mq.cmd("/luar cabby")
+            else
+                DebugLog("Ignoring followme of speaker [" .. speaker .. "]")
+            end
+        end
+        local function restartHelp()
+            print("(restart) Tells listener(s) to restart cabby script")
+        end
+        Commands.RegisterCommEvent(GeneralConfig.eventIds.restart, "restart", event_Restart, restartHelp)
 
         -- Binds
 
@@ -184,6 +198,16 @@ function GeneralConfig.Init(config, owners)
             end
         end
         Commands.RegisterSlashCommand("owners", Bind_Owners)
+
+        local function Bind_Restart(...)
+            local args = {...} or {}
+            if #args < 1 then
+                mq.cmd("/luar cabby")
+            else
+                print("(/restart) Restart cabby script...")
+            end
+        end
+        Commands.RegisterSlashCommand("restart", Bind_Restart)
 
         GeneralConfig.UpdateEventChannels()
         GeneralConfig._.isInit = true
@@ -287,6 +311,7 @@ function GeneralConfig.UpdateEventChannels()
     Commands.SetChannelPatterns(phrasePatterns)
 
     -- This is a catchall event for uncaught tell patterns and must be registered last so other tell commands have a chance to catch first
+    mq.unevent(GeneralConfig.eventIds.tellToMe)
     mq.event(GeneralConfig.eventIds.tellToMe, "#1# tells you, '#2#'", event_TellToMe)
 end
 

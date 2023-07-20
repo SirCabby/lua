@@ -37,5 +37,7 @@ do
     luaFile = StringUtils.Split(luaFile, "\\lua\\")[2]
     print("Found file: " .. luaFile)
 
+    mq.cmdf("/lua stop %s", luaFile)
+    mq.delay("1s")
     mq.cmdf("/lua run %s", luaFile)
 end
