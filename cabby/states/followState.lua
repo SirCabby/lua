@@ -57,24 +57,25 @@ function FollowState.Init(owners)
         end
         local function followMeHelp()
             print("(followme) Tells listener(s) to begin autofollow on speaker")
-            print(" -- Assuming [bc] is an active channel, example: /bc followme")
         end
         Commands.RegisterCommEvent(FollowState.eventIds.followMe, "followme", event_FollowMe, followMeHelp)
 
         local function event_StopFollow(_, speaker)
             if FollowState._.owners:IsOwner(speaker) then
                 DebugLog("Stopping follow of speaker [" .. speaker .. "]")
-                FollowState._.followTarget = ""
-                FollowState._.currentActionIndex = 1
+                if mq.TLO.AdvPath.Monitor():lower() == FollowState._.followTarget:lower() then
+                    mq.cmd("/afollow off")
+                    FollowState._.followTarget = ""
+                    FollowState._.currentActionIndex = 0
+                end
             else
                 DebugLog("Ignoring stopfollow of speaker [" .. speaker .. "]")
             end
         end
         local function stopfollowHelp()
-            print("(followme) Tells listener(s) to begin autofollow on speaker")
-            print(" -- Assuming [bc] is an active channel, example: /bc followme")
+            print("(stopfollow) Tells listener(s) to stop autofollow on speaker")
         end
-        Commands.RegisterCommEvent(FollowState.eventIds.followMe, "followme", event_StopFollow, stopfollowHelp)
+        Commands.RegisterCommEvent(FollowState.eventIds.stopFollow, "stopfollow", event_StopFollow, stopfollowHelp)
 
         FollowState._.followMeActions[1] = function()
             mq.cmd("/mqtarget " .. FollowState._.followTarget .. " radius 200")
