@@ -63,7 +63,7 @@ end
 --- Defined here because it is registered last in the channel update
 local function event_TellToMe(_, speaker, message)
     local tellTo = GeneralConfig.GetRelayTellsTo()
-    if tellTo ~= speaker and mq.TLO.SpawnCount("npc " .. speaker)() < 1 then
+    if tellTo ~= "" and tellTo ~= nil and tellTo ~= speaker and mq.TLO.SpawnCount("npc " .. speaker)() < 1 then
         mq.cmd("/tell " .. tellTo .. " " .. speaker .. " told me: " .. message)
     end
 end
@@ -135,14 +135,24 @@ function GeneralConfig.Init(config, owners)
         mq.event(GeneralConfig.eventIds.inspectRequest, "#1# tells you, 'inspect#2#'", event_InspectRequest)
 
         -- Binds
+
         local function Bind_SetRelayTellsToFunc(...)
             local args = {...} or {}
             if args == nil or #args < 1 or args[1]:lower() == "help" then
                 print("(/relaytellsto) Relays tells received to this character")
-                print(" -- Usage: /relaytellsto name")
+                print(" -- Usage: /relaytellsto name|clear")
+                local who = GeneralConfig.GetRelayTellsTo() or ""
+                print(" -- Currently set to: [" .. who .. "]")
             else
-                GeneralConfig.SetRelayTellsTo(args[1])
-                print("Relaying future tells to: [" .. GeneralConfig.GetRelayTellsTo() .. "]")
+                arg =  args[1]:lower()
+                if arg == "clear" then
+                    GeneralConfig.SetRelayTellsTo("")
+                    print("Relaying tells is now disabled")
+                else
+                    GeneralConfig.SetRelayTellsTo(args[1])
+                    local who = GeneralConfig.GetRelayTellsTo() or ""
+                    print("Relaying future tells to: [" .. who .. "]")
+                end
             end
         end
         Commands.RegisterSlashCommand("relaytellsto", Bind_SetRelayTellsToFunc)
