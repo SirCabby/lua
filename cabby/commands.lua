@@ -8,7 +8,7 @@ local Commands = {
     key = "Commands",
     _ = {
         isInit = false,
-        registeredComms = {}, -- { eventId1 = { phrase = someString, eventFunction = someFunc }, eventId2 = {} }
+        registeredComms = {}, -- { eventId1 = { phrase = "someString", eventFunction = someFunc, helpFunction = someFunc2, registeredEvents = { "id1", "id2" } }, eventId2 = {} },
         registeredSlashCommands = {}, -- { "/cmd1", "/cmd2" }
         registeredChannelPatterns = {} -- { "some pattern with <<phrase>> in it, which will be replaced later with registeredComms.eventId.phrase" }
     }
@@ -27,6 +27,13 @@ function Commands.Init()
             print(" -- Example: /chelp activechannels")
             print("To learn more about the differences between SlashCmds vs Comms, use /chelp cvc")
         end
+        local function getCommsPhrases()
+            local comms = {}
+            for _,event in pairs(Commands._.registeredComms) do
+                table.insert(comms, event.phrase)
+            end
+            return comms
+        end
         local function Bind_Chelp(...)
             local args = {...} or {}
             if args == nil or #args < 1 or args[1]:lower() == "help" then
@@ -43,11 +50,21 @@ function Commands.Init()
                     print(" -- For example: /activechannels")
                     print(" -- To see all registered slash commands provided by this script, use /chelp slashcmds")
                 elseif arg == "comms" then
-                    print("Available Communication Commands: [" .. StringUtils.Join(TableUtils.GetKeys(Commands._.registeredComms), ", ") .. "]")
+                    local comms = getCommsPhrases()
+                    print("Available Communication Commands: [" .. StringUtils.Join(comms, ", ") .. "]")
+                    print("To learn more about a specific command, use /chelp <command>")
                 elseif arg == "slashcmds" then
                     print("Available Slash Commands: [" .. StringUtils.Join(Commands._.registeredSlashCommands, ", ") .. "]")
+                    print("To learn more about a specific command, use /chelp <command>")
                 elseif TableUtils.ArrayContains(Commands._.registeredSlashCommands, "/" .. arg) then
                     mq.cmd("/" .. arg .. " help")
+                elseif TableUtils.ArrayContains(getCommsPhrases(), arg) then
+                    for _,event in pairs(Commands._.registeredComms) do
+                        if event.phrase == arg then
+                            event.helpFunction()
+                            return
+                        end
+                    end
                 else
                     chelpPrint()
                 end
@@ -78,26 +95,36 @@ end
 local function UpdateCommEvent(eventId)
     local commObj = Commands._.registeredComms[eventId]
 
-    for _, pattern in ipairs(Commands._.registeredChannelPatterns) do
+    for _,registeredEventId in ipairs(commObj.registeredEvents) do
+        mq.unevent(registeredEventId)
+    end
+    commObj.registeredEvents = {}
+
+    for i, pattern in ipairs(Commands._.registeredChannelPatterns) do
         local thisPhrase = string.gsub(pattern, "<<phrase>>", commObj.phrase)
-        mq.event(eventId, thisPhrase, commObj.eventFunction)
+        local newEventId = eventId .. tostring(#commObj.registeredEvents + 1)
+        table.insert(commObj.registeredEvents, newEventId)
+        mq.event(newEventId, thisPhrase, commObj.eventFunction)
     end
 end
 
-function Commands.RegisterCommEvent(eventId, phrase, eventFunction)
-    -- init if eventId DNE
+function Commands.RegisterCommEvent(eventId, phrase, eventFunction, helpFunction)
     if not TableUtils.ArrayContains(TableUtils.GetKeys(Commands._.registeredComms), eventId) then
-        Commands._.registeredComms[eventId] = { eventFunction = eventFunction }
+        Commands._.registeredComms[eventId] = {
+            eventFunction = eventFunction,
+            phrase = phrase,
+            helpFunction = helpFunction,
+            registeredEvents = {}
+        }
+        UpdateCommEvent(eventId)
+    else
+        print("Cannot re-register same eventId: ["..eventId.."]")
     end
-
-    Commands._.registeredComms[eventId].phrase = phrase
-    UpdateCommEvent(eventId)
 end
 
----Removes and re-adds registered events to currently active channels
+---Syncs registered events to currently active channels
 local function UpdateCommChannels()
     for eventId,_ in pairs(Commands._.registeredComms) do
-        mq.unevent(eventId)
         UpdateCommEvent(eventId)
     end
 end
