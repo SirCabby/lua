@@ -24,14 +24,14 @@ function StateMachine:new()
             local hasAction = state:Check()
             if hasAction then
                 state:Go()
-                break
+                return
             end
         end
     end
 
     ---@param state State
     function stateMachine:RegisterAndInit(state)
-        state:Init()
+        state.Init()
         table.insert(stateMachine.registeredStates, state)
     end
 

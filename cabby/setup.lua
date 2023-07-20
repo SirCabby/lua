@@ -4,6 +4,9 @@ local Commands = require("cabby.commands")
 local Config = require("utils.Config.Config")
 local Debug = require("utils.Debug.Debug")
 local DebugConfig = require("cabby.configs.debugConfig")
+---@type State
+---@diagnostic disable-next-line: assign-type-mismatch
+local FollowState = require("cabby.states.followState")
 local GeneralConfig = require("cabby.configs.generalConfig")
 ---@type Owners
 local Owners = require("utils.Owners.Owners")
@@ -63,11 +66,17 @@ local function ConfigSetup(configFilePath)
     DebugConfig.Init(config)
 end
 
-function Setup:Init(configFilePath)
+---@param stateMachine StateMachine
+local function StateSetup(stateMachine)
+    stateMachine:RegisterAndInit(FollowState)
+end
+
+function Setup:Init(configFilePath, stateMachine)
     DebugLog("Starting Cabby Setup...")
 
     ConfigSetup(configFilePath)
     Commands.Init()
+    StateSetup(stateMachine)
 
     DebugLog("Finished Cabby Setup")
 end
