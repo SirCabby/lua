@@ -4,14 +4,16 @@ local Commands = require("cabby.commands")
 local Config = require("utils.Config.Config")
 local Debug = require("utils.Debug.Debug")
 local DebugConfig = require("cabby.configs.debugConfig")
----@type State
----@diagnostic disable-next-line: assign-type-mismatch
 local FollowState = require("cabby.states.followState")
 local GeneralConfig = require("cabby.configs.generalConfig")
 ---@type Owners
 local Owners = require("utils.Owners.Owners")
 
-local Setup = { key = "Setup" }
+local Setup = {
+    key = "Setup",
+    config = {},
+    owners = {}
+}
 
 local function DebugLog(str)
     Debug.Log(Setup.key, str)
@@ -60,15 +62,32 @@ end
 ---@param configFilePath string
 local function ConfigSetup(configFilePath)
     PluginSetup()
-    local config = Config:new(configFilePath)
-    local owners = Owners:new(configFilePath)
-    GeneralConfig.Init(config, owners)
-    DebugConfig.Init(config)
+    Setup.config = Config:new(configFilePath)
+    Setup.owners = Owners:new(configFilePath)
+    GeneralConfig.Init(Setup.config, Setup.owners)
+    DebugConfig.Init(Setup.config)
 end
 
 ---@param stateMachine StateMachine
 local function StateSetup(stateMachine)
-    stateMachine:RegisterAndInit(FollowState)
+    FollowState.Init(Setup.owners)
+    stateMachine:Register(FollowState)
+
+-- | 1 My commands / Task / DZ
+-- | 19 Passive Mode
+-- | 29 Cure
+-- | 39 Heal
+-- | 49 Pulling
+-- | -- IN COMBAT --
+-- | 59 Mez
+-- | 69 Tank / grab aggro
+-- | 79 Dps
+-- | -- OUT COMBAT
+-- | 89 Looting
+-- | 99 Anchor
+-- | 109 Following
+-- | 119 Buff
+-- | 129 Misc
 end
 
 function Setup:Init(configFilePath, stateMachine)

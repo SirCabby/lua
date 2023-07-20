@@ -5,8 +5,7 @@ local TableUtils = require("utils.TableUtils.TableUtils")
 local StateMachine = { author = "judged", key = "StateMachine" }
 
 ---@meta StateMachine
----@param state State
-function StateMachine:RegisterAndInit(state) end
+function StateMachine:Register(state) end
 ---@param state State
 function StateMachine:Unregister(state) end
 function StateMachine:Start() end
@@ -30,8 +29,7 @@ function StateMachine:new()
     end
 
     ---@param state State
-    function stateMachine:RegisterAndInit(state)
-        state.Init()
+    function stateMachine:Register(state)
         table.insert(stateMachine.registeredStates, state)
     end
 
