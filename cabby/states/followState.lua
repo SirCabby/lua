@@ -17,10 +17,10 @@ local FollowState = {
         owners = {},
         followMeActions = {},
         currentActionIndex = 0,
-        previousActionIndex = 0,
         currentActionTimer = {},
         lastLoc = { x = 0, y = 0, z = 0, zoneId = 0 },
-        followTarget = ""
+        followTarget = "",
+        checkingStuck = false
     }
 }
 
@@ -40,6 +40,11 @@ local function Reset()
     FollowState._.currentActionIndex = 0
     FollowState._.followTarget = ""
     FollowState._.lastLoc = { x = 0, y = 0, z = 0, zoneId = 0 }
+    FollowState._.checkingStuck = false
+end
+
+local function CloseToLastLoc()
+    return mq.TLO.Math.Distance(tostring(FollowState._.lastLoc.y) .. "," .. tostring(FollowState._.lastLoc.x) .. tostring(FollowState._.lastLoc.z))() < 30
 end
 
 function FollowState.Init(owners)
@@ -63,11 +68,10 @@ function FollowState.Init(owners)
         local function event_StopFollow(_, speaker)
             if FollowState._.owners:IsOwner(speaker) then
                 DebugLog("Stopping follow of speaker [" .. speaker .. "]")
-                if mq.TLO.AdvPath.Monitor():lower() == FollowState._.followTarget:lower() then
+                if mq.TLO.AdvPath.Monitor() ~= nil and mq.TLO.AdvPath.Monitor():lower() == FollowState._.followTarget:lower() then
                     mq.cmd("/afollow off")
-                    FollowState._.followTarget = ""
-                    FollowState._.currentActionIndex = 0
                 end
+                Reset()
             else
                 DebugLog("Ignoring stopfollow of speaker [" .. speaker .. "]")
             end
@@ -78,40 +82,80 @@ function FollowState.Init(owners)
         Commands.RegisterCommEvent(FollowState.eventIds.stopFollow, "stopfollow", event_StopFollow, stopfollowHelp)
 
         FollowState._.followMeActions[1] = function()
-            mq.cmd("/mqtarget " .. FollowState._.followTarget .. " radius 200")
-            FollowState._.previousActionIndex = 1
+            mq.cmd("/afollow spawn " .. tostring(mq.TLO.Spawn("pc " .. FollowState._.followTarget).ID))
             FollowState._.currentActionIndex = 2
         end
 
         FollowState._.followMeActions[2] = function()
-            mq.cmd("/afollow on")
-            FollowState._.previousActionIndex = 2
-            FollowState._.currentActionIndex = 3
+            -- Stop progression beyond this State without performing a function
         end
 
         FollowState._.isInit = true
     end
 end
 
----@param interrupted boolean
 ---@return boolean hasAction true if there's action to take, false to sleep
-function FollowState.Check(interrupted)
+function FollowState.Check()
     if FollowState._.currentActionIndex == 1 then
-        FollowState._.currentActionTimer = Timer:new(2)
-        return true
-    end
-    if FollowState._.currentActionIndex == 2 then
-        if interrupted then
-            FollowState._.currentActionTimer = Timer:new(2)
-        end
-
-        if FollowState._.currentActionTimer:timer_expired() then
-            mq.cmd("/bc Unable to find [" .. FollowState._.followTarget .. "] to follow")
+        if mq.TLO.Spawn("pc radius 200 " .. FollowState._.followTarget).Name() ~= nil then
+            return true
+        else
+            mq.cmd("/bc Follow target out of range, aborting...")
+            mq.cmd("/afollow off")
             Reset()
             return false
         end
+    elseif FollowState._.currentActionIndex == 2 then
+        -- If we're close, turn off autofollow and re-enable when we get distance again
+        if mq.TLO.Spawn("pc " .. FollowState._.followTarget).Distance3D() < 12 then
+            UpdateLastLoc()
+            mq.cmd("/afollow off")
+            FollowState._.checkingStuck = false
+            return true
+        end
 
-        return mq.TLO.Target.Name() == FollowState._.followTarget
+        -- Had previously locked onto another target to follow, turn off that follow and reset it
+        if mq.TLO.AdvPath.Monitor() ~= nil and mq.TLO.AdvPath.Monitor():lower() ~= FollowState._.followTarget:lower() then
+            mq.cmd("/afollow off")
+        end
+
+        -- Not following for some reason, resume
+        if not mq.TLO.AdvPath.Following() then
+            FollowState._.currentActionIndex = 1
+            return true
+        end
+
+        -- We are still following our target, are we stuck trying to follow?
+
+        -- We have escaped the bubble of lastloc, things are good
+        if not CloseToLastLoc() then
+            UpdateLastLoc()
+            FollowState._.checkingStuck = false
+            return false
+        end
+
+        -- We're not at our target yet, let's see if we're stuck in the same area for too long
+
+        -- Signal the first time through loop to setup the timer and reference loc
+        if not FollowState._.checkingStuck then
+            FollowState._.currentActionTimer = Timer:new(5)
+            UpdateLastLoc()
+            FollowState._.checkingStuck = true
+            return false
+        end
+
+        -- If we've timed out in this position, abort
+        if FollowState._.currentActionTimer:timer_expired() then
+            if CloseToLastLoc() then
+                mq.cmd("/bc I got stuck while following, aborting...")
+                mq.cmd("/afollow off")
+                Reset()
+            else
+                -- Not stuck, reset stuck check
+                FollowState._.checkingStuck = false
+            end
+        end
+        return false
     end
     return false
 end
