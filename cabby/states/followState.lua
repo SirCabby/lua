@@ -20,7 +20,8 @@ local FollowState = {
         currentActionTimer = {},
         lastLoc = { x = 0, y = 0, z = 0, zoneId = 0 },
         followTarget = "",
-        checkingStuck = false
+        checkingStuck = false,
+        checkingRetry = false
     }
 }
 
@@ -41,6 +42,7 @@ local function Reset()
     FollowState._.followTarget = ""
     FollowState._.lastLoc = { x = 0, y = 0, z = 0, zoneId = 0 }
     FollowState._.checkingStuck = false
+    FollowState._.checkingRetry = false
 end
 
 local function CloseToLastLoc()
@@ -81,6 +83,28 @@ function FollowState.Init(owners)
         end
         Commands.RegisterCommEvent(FollowState.eventIds.stopFollow, "stopfollow", event_StopFollow, stopfollowHelp)
 
+        local function event_MoveToMe(_, speaker)
+            if FollowState._.owners:IsOwner(speaker) then
+                DebugLog("Moving to speaker [" .. speaker .. "]")
+                if mq.TLO.AdvPath.Following() then
+                    mq.cmd("/afollow off")
+                end
+                local spawn = mq.TLO.Spawn("pc radius 200 " .. speaker)
+                if spawn ~= nil then
+                    mq.cmd("/moveto id " .. tostring(spawn.ID))
+                else
+                    mq.cmd("/bc Follow target [" .. FollowState._.followTarget .. "] out of range, aborting...")
+                end
+                Reset()
+            else
+                DebugLog("Ignoring move to speaker [" .. speaker .. "]")
+            end
+        end
+        local function moveToMeHelp()
+            print("(stopfollow) Tells listener(s) to stop autofollow on speaker")
+        end
+        Commands.RegisterCommEvent(FollowState.eventIds.moveToMe, "m2m", event_MoveToMe, moveToMeHelp)
+
         FollowState._.followMeActions[1] = function()
             mq.cmd("/afollow spawn " .. tostring(mq.TLO.Spawn("pc " .. FollowState._.followTarget).ID))
             FollowState._.currentActionIndex = 2
@@ -94,17 +118,24 @@ function FollowState.Init(owners)
     end
 end
 
----@return boolean hasAction true if there's action to take, false to sleep
+---@return boolean hasAction true if there's action to take, false to continue to next state
 function FollowState.Check()
     if FollowState._.currentActionIndex == 1 then
-        if mq.TLO.Spawn("pc radius 200 " .. FollowState._.followTarget).Name() ~= nil then
+        if mq.TLO.Spawn("pc radius 200 los " .. FollowState._.followTarget).Name() ~= nil then
+            FollowState._.checkingRetry = true
             return true
-        else
-            mq.cmd("/bc Follow target out of range, aborting...")
-            mq.cmd("/afollow off")
-            Reset()
-            return false
         end
+
+        if not FollowState._.checkingRetry then
+            if mq.TLO.Spawn("pc " .. FollowState._.followTarget).Name() ~= nil then
+                mq.cmd("/bc Follow target [" .. FollowState._.followTarget .. "] out of range, waiting...")
+            else
+                mq.cmd("/bc Follow target [" .. FollowState._.followTarget .. "] no longer appears to be in the zone, waiting...")
+            end
+        end
+        FollowState._.checkingRetry = true
+        mq.cmd("/afollow off")
+        return false
     elseif FollowState._.currentActionIndex == 2 then
         -- If we're close, turn off autofollow and re-enable when we get distance again
         if mq.TLO.Spawn("pc " .. FollowState._.followTarget).Distance3D() < 12 then
@@ -147,7 +178,7 @@ function FollowState.Check()
         -- If we've timed out in this position, abort
         if FollowState._.currentActionTimer:timer_expired() then
             if CloseToLastLoc() then
-                mq.cmd("/bc I got stuck while following, aborting...")
+                mq.cmd("/bc I got stuck while following [" .. FollowState._.followTarget .. "], aborting...")
                 mq.cmd("/afollow off")
                 Reset()
             else
