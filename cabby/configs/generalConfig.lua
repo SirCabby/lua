@@ -97,12 +97,12 @@ function GeneralConfig.Init(config, owners)
 
         local function event_InspectRequest(_, speaker, message)
             local function doHelp()
-                mq.cmd("/tell "..speaker.."(restart) Stops the currently running lua script and restarts it.")
+                mq.cmd("/tell "..speaker.."(inspect <slot>) Slot types: [" .. StringUtils.Join(GeneralConfig.equipmentSlots, ", ") .. "]")
             end
 
             if GeneralConfig._.owners:IsOwner(speaker) then
                 local args = StringUtils.Split(StringUtils.TrimFront(message), " ")
-                if #args > 0 then
+                if #args ~= 1 or args[1]:lower() == "help" then
                     doHelp()
                     return
                 end
@@ -123,7 +123,7 @@ function GeneralConfig.Init(config, owners)
                 DebugLog("Restarting on request of speaker [" .. speaker .. "]")
                 mq.cmd("/luar cabby")
             else
-                DebugLog("Ignoring followme of speaker [" .. speaker .. "]")
+                DebugLog("Ignoring restart request of speaker [" .. speaker .. "]")
             end
         end
         local function restartHelp()
