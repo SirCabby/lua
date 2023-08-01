@@ -60,29 +60,31 @@ test.Config.new = function()
     test.equal(FileExistsCalls, 2)
     test.equal(WriteFileCalls, 2)
     test.equal(ReadFileCalls, 2)
-    test.assert(TableUtils.Compare(ConfigStore.store[file1], fooObj))
-    test.assert(TableUtils.Compare(ConfigStore.store[file2], fooObj))
+    test.assert(TableUtils.Compare(ConfigStore.get()[file1], fooObj))
+    test.assert(TableUtils.Compare(ConfigStore.get()[file2], fooObj))
     -- Debug.SetToggle(TableUtils.key, false)
 end
 
-test.Config.GetConfig = function()
-    test.assert(config1:GetConfig("foo1") == "hi")
-    test.assert(TableUtils.Compare(fooObj.foo2, config1:GetConfig("foo2")))
-    test.assert(TableUtils.Compare(fooObj.foo3, config1:GetConfig("foo3")))
+test.Config.GetConfigRoot = function()
+    test.assert(config1:GetConfigRoot().foo1 == "hi")
+    test.assert(TableUtils.Compare(fooObj.foo2, config1:GetConfigRoot().foo2))
+    test.assert(TableUtils.Compare(fooObj.foo3, config1:GetConfigRoot().foo3))
 end
 
-test.Config.GetSavedNames = function()
-    local savedNames = config1:GetSavedNames()
+test.Config.GetSectionNames = function()
+    local savedNames = config1:GetSectionNames()
     test.assert(TableUtils.ArrayContains(savedNames, "foo1"))
     test.assert(TableUtils.ArrayContains(savedNames, "foo2"))
     test.assert(TableUtils.ArrayContains(savedNames, "foo3"))
 end
 
 test.Config.SaveConfig = function()
-    config1:SaveConfig("foo1", foo2Obj)
-    test.assert(TableUtils.Compare(ConfigStore.store[file1]["foo1"], foo2Obj))
-    test.assert(TableUtils.Compare(config1:GetConfig("foo1"), foo2Obj))
-    test.assert(config2:GetConfig("foo1") == "hi")
+    config1:GetConfigRoot().foo1 = foo2Obj
+    config1:SaveConfig()
+    test.equal(type(ConfigStore.get()[file1]["foo1"]), "table")
+    test.assert(TableUtils.Compare(ConfigStore.get()[file1]["foo1"], foo2Obj))
+    test.assert(TableUtils.Compare(config1:GetConfigRoot().foo1, foo2Obj))
+    test.assert(config2:GetConfigRoot().foo1 == "hi")
     test.equal(WriteFileCalls, 3)
 end
 

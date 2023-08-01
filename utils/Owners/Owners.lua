@@ -1,5 +1,3 @@
----@type Config
-local Config = require("utils.Config.Config")
 local Debug = require("utils.Debug.Debug")
 local StringUtils = require("utils.StringUtils.StringUtils")
 local TableUtils = require("utils.TableUtils.TableUtils")
@@ -19,29 +17,56 @@ function Owners:Remove(name) end
 ---@return boolean
 function Owners:IsOwner(name) end
 function Owners:Print() end
+---@return array
+function Owners:GetOwners() end
 
----@param configFilePath string
----@param config? Config
+---@param config Config
+---@param configLocation string dot-separated object path to owners config storage location -ex: MyClass.key .. "." .. Sub.key
 ---@return Owners
-function Owners:new(configFilePath, config)
+function Owners:new(config, configLocation)
     local owners = {}
-
-    ---@type Config
-    config = config or Config:new(configFilePath)
 
     ---@param str string
     local function DebugLog(str)
         Debug.Log(Owners.key, str)
     end
 
+    function owners:GetOwners()
+        local configStorageLocationSplit = StringUtils.Split(configLocation, ".")
+        local locationTraverse = config:GetConfigRoot()
+        for i = 1, #configStorageLocationSplit do
+            if locationTraverse[configStorageLocationSplit[i]] == nil then
+                DebugLog("Adding new Owners location that was not initialized to a table. Location: [" .. StringUtils.Join({ unpack(configStorageLocationSplit, 1, i) }, ".") .. "]")
+                locationTraverse[configStorageLocationSplit[i]] = {}
+            end
+
+            if type(locationTraverse) ~= "table" then
+                error("Owners config location contained a non-table entry.  Unable to save owners config. Location: [" .. StringUtils.Join({ unpack(configStorageLocationSplit, 1, i) }, ".") .. "]")
+            end
+
+            locationTraverse = locationTraverse[configStorageLocationSplit[i]]
+        end
+
+        local ownersKey = Owners.key:lower()
+        if locationTraverse[ownersKey] == nil then
+            locationTraverse[ownersKey] = {}
+        end
+
+        if not TableUtils.IsArray(locationTraverse[ownersKey]) then
+            error("Owners config location was not an array")
+        end
+
+        return locationTraverse[ownersKey]
+    end
+
+    local ownersArray = owners:GetOwners()
+
     function owners:Add(name)
         name = name:lower()
-        local ownersConfig = config:GetConfig(Owners.key)
-        if not TableUtils.IsArray(ownersConfig) then error("Owners config was not an array") end
-        if not TableUtils.ArrayContains(ownersConfig, name) then
-            ownersConfig[#ownersConfig + 1] = name
+        if not TableUtils.ArrayContains(ownersArray, name) then
+            ownersArray[#ownersArray + 1] = name
             print("Added [" .. name .. "] as Owner")
-            config:SaveConfig(Owners.key, ownersConfig)
+            config:SaveConfig()
             return
         end
         DebugLog(name .. " was already an owner")
@@ -49,26 +74,24 @@ function Owners:new(configFilePath, config)
 
     function owners:Remove(name)
         name = name:lower()
-        local ownersConfig = config:GetConfig(Owners.key)
-        if not TableUtils.IsArray(ownersConfig) then error("Owners config was not an array") end
-        if TableUtils.ArrayContains(ownersConfig, name) then
-            TableUtils.RemoveByValue(ownersConfig, name)
+        if TableUtils.ArrayContains(ownersArray, name) then
+            TableUtils.RemoveByValue(ownersArray, name)
             print("Removed [" .. name .. "] as Owner")
-            config:SaveConfig(Owners.key, ownersConfig)
+            config:SaveConfig()
             return
         end
         DebugLog(name .. " was not an owner")
     end
 
     function owners:IsOwner(name)
-        local ownersConfig = config:GetConfig(Owners.key)
-        return TableUtils.ArrayContains(ownersConfig, name:lower())
+        return TableUtils.ArrayContains(ownersArray, name:lower())
     end
 
     function owners:Print()
-        local ownersConfig = config:GetConfig(Owners.key)
-        print("My Owners: [" .. StringUtils.Join(ownersConfig, ", ") .. "]")
+        print("My Owners: [" .. StringUtils.Join(ownersArray, ", ") .. "]")
     end
+
+    config:SaveConfig()
 
     return owners
 end

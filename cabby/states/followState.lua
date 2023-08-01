@@ -1,4 +1,5 @@
 local mq = require("mq")
+local Command = require("cabby.command")
 local Commands = require("cabby.commands")
 local Debug = require("utils.Debug.Debug")
 local Timer = require("utils.Timer.Timer")
@@ -65,7 +66,7 @@ function FollowState.Init(owners)
         local function followMeHelp()
             print("(followme) Tells listener(s) to begin autofollow on speaker")
         end
-        Commands.RegisterCommEvent(FollowState.eventIds.followMe, "followme", event_FollowMe, followMeHelp)
+        Commands.RegisterCommEvent(Command.new(FollowState.eventIds.followMe, "followme", event_FollowMe, followMeHelp))
 
         local function event_StopFollow(_, speaker)
             if FollowState._.owners:IsOwner(speaker) then
@@ -81,7 +82,7 @@ function FollowState.Init(owners)
         local function stopfollowHelp()
             print("(stopfollow) Tells listener(s) to stop autofollow on speaker")
         end
-        Commands.RegisterCommEvent(FollowState.eventIds.stopFollow, "stopfollow", event_StopFollow, stopfollowHelp)
+        Commands.RegisterCommEvent(Command.new(FollowState.eventIds.stopFollow, "stopfollow", event_StopFollow, stopfollowHelp))
 
         local function event_MoveToMe(_, speaker)
             if FollowState._.owners:IsOwner(speaker) then
@@ -103,7 +104,7 @@ function FollowState.Init(owners)
         local function moveToMeHelp()
             print("(stopfollow) Tells listener(s) to stop autofollow on speaker")
         end
-        Commands.RegisterCommEvent(FollowState.eventIds.moveToMe, "m2m", event_MoveToMe, moveToMeHelp)
+        Commands.RegisterCommEvent(Command.new(FollowState.eventIds.moveToMe, "m2m", event_MoveToMe, moveToMeHelp))
 
         FollowState._.followMeActions[1] = function()
             mq.cmd("/afollow spawn " .. tostring(mq.TLO.Spawn("pc " .. FollowState._.followTarget).ID))

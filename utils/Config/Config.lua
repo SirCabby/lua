@@ -9,19 +9,16 @@ local TableUtils = require("utils.TableUtils.TableUtils")
 local Config = { author = "judged", key = "Config" }
 
 ---@meta Config
----Get config by name
----@param name string
+---Get config root storage table
 ---@return table
-function Config:GetConfig(name) end
----Save config by name
----@param name string Config name to save content under
----@param tbl table Saved content
-function Config:SaveConfig(name, tbl) end
+function Config:GetConfigRoot() end
+---Save config
+function Config:SaveConfig() end
 ---Prints the config
 ---@param name string
 function Config:Print(name) end
----@return array configNames config names currently in use
-function Config:GetSavedNames() end
+---@return array sectionNames config section names currently in use
+function Config:GetSectionNames() end
 
 ---@param filePath? string defaults to \config\CharName-Config.json
 ---@param fileSystem? FileSystem
@@ -32,22 +29,21 @@ function Config:new(filePath, fileSystem)
     fileSystem = fileSystem or FileSystem
     config.filePath = filePath or fileSystem.PathJoin(mq.configDir, mq.TLO.Me.Name() .. "-Config.json")
 
-    function config:GetConfig(name)
-        return ConfigStore.store[config.filePath][name] or {}
+    function config:GetConfigRoot()
+        return ConfigStore.get()[config.filePath] or {}
     end
 
-    function config:SaveConfig(name, tbl)
-        ConfigStore.store[config.filePath][name] = tbl
-        fileSystem.WriteFile(config.filePath, Json.Serialize(ConfigStore.store[config.filePath]))
-        Debug.Log(ConfigStore.key, "Saved config [" .. name .. "]")
+    function config:SaveConfig()
+        fileSystem.WriteFile(config.filePath, Json.Serialize(ConfigStore.get()[config.filePath]))
+        Debug.Log(ConfigStore.key, "Saved config [" .. config.filePath .. "]")
     end
 
-    function config:Print(name)
-        TableUtils.Print(ConfigStore.store[config.filePath][name])
+    function config:Print()
+        TableUtils.Print(ConfigStore.get()[config.filePath])
     end
 
-    function config:GetSavedNames()
-        return TableUtils.GetKeys(ConfigStore.store[config.filePath])
+    function config:GetSectionNames()
+        return TableUtils.GetKeys(ConfigStore.get()[config.filePath])
     end
 
     -- Create config file if DNE
@@ -58,8 +54,8 @@ function Config:new(filePath, fileSystem)
 
     -- Load config if not already loaded
     local configStr = fileSystem.ReadFile(config.filePath)
-    if ConfigStore.store[config.filePath] == nil then
-        ConfigStore.store[config.filePath] = Json.Deserialize(configStr)
+    if ConfigStore.get()[config.filePath] == nil then
+        ConfigStore.get()[config.filePath] = Json.Deserialize(configStr)
     end
 
     Debug.Log(ConfigStore.key, "Config loaded: " .. filePath)

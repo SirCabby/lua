@@ -1,4 +1,5 @@
 local mq = require("mq")
+local CommandConfig = require("cabby.configs.commandConfig")
 local Commands = require("cabby.commands")
 ---@type Config
 local Config = require("utils.Config.Config")
@@ -63,9 +64,10 @@ end
 local function ConfigSetup(configFilePath)
     PluginSetup()
     Setup.config = Config:new(configFilePath)
-    Setup.owners = Owners:new(configFilePath)
+    Setup.owners = Owners:new(Setup.config, CommandConfig.key)
     GeneralConfig.Init(Setup.config, Setup.owners)
     DebugConfig.Init(Setup.config)
+    CommandConfig.Init(Setup.config, Setup.owners)
 end
 
 ---@param stateMachine StateMachine

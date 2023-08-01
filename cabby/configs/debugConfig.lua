@@ -11,6 +11,26 @@ local DebugConfig = {
     }
 }
 
+---@param str string
+local function DebugLog(str)
+    Debug.Log(DebugConfig.key, str)
+end
+
+local function initAndValidate()
+    if DebugConfig._.config:GetConfigRoot()[DebugConfig.key] == nil then
+        DebugLog("DebugConfig Section was not set, updating...")
+        DebugConfig._.config:GetConfigRoot()[DebugConfig.key] = {}
+    end
+    if DebugConfig._.config:GetConfigRoot()[DebugConfig.key].all == nil then
+        DebugLog("Debug 'all' option was not set, setting to false")
+        DebugConfig._.config:GetConfigRoot()[DebugConfig.key].all = false
+    end
+end
+
+local function getConfigSection()
+    return DebugConfig._.config:GetConfigRoot()[DebugConfig.key]
+end
+
 ---Initialize the static object, only done once
 ---@param config Config
 function DebugConfig.Init(config)
@@ -18,11 +38,13 @@ function DebugConfig.Init(config)
         DebugConfig._.config = config
 
         -- Sync Debug with DebugConfig on this ctor
-        local debugConfig2 = DebugConfig._.config:GetConfig(DebugConfig.key)
+        initAndValidate()
+        local debugConfig2 = getConfigSection()
         for k, v in pairs(debugConfig2) do
             Debug.SetToggle(k, v)
         end
-        config:SaveConfig(DebugConfig.key, Debug._toggles)
+        DebugConfig._.config:GetConfigRoot()[DebugConfig.key] = Debug._toggles
+        config:SaveConfig()
 
         local function Bind_Debug(...)
             local args = {...} or {}
@@ -58,24 +80,19 @@ end
 
 ---------------- Config Management --------------------
 
----@param str string
-local function DebugLog(str)
-    Debug.Log(DebugConfig.key, str)
-end
-
 function DebugConfig.GetDebugToggle(key)
     return Debug.GetToggle(key)
 end
 
 function DebugConfig.SetDebugToggle(key, value)
     Debug.SetToggle(key, value)
-    DebugConfig._.config:SaveConfig(DebugConfig.key, Debug._toggles)
+    DebugConfig._.config:SaveConfig()
     DebugLog("Set debug toggle: [" .. key .. "] : [" .. tostring(value) .. "]")
 end
 
 function DebugConfig.FlipDebugToggle(key)
     Debug.Toggle(key)
-    DebugConfig._.config:SaveConfig(DebugConfig.key, Debug._toggles)
+    DebugConfig._.config:SaveConfig()
     DebugLog("Flipped debug toggle: [" .. key .. "] : [" .. tostring(Debug.GetToggle(key)) .. "]")
 end
 

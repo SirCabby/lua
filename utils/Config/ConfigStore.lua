@@ -11,4 +11,8 @@ Config.store: { <-- Global / static config manager table
 ---@class ConfigStore
 local ConfigStore = { author = "judged", key = "ConfigStore", store = {} }
 
+function ConfigStore.get()
+    return ConfigStore.store
+end
+
 return ConfigStore
