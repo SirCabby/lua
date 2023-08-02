@@ -131,7 +131,7 @@ end
 
 ---Syncs registered commands to currently active channels
 local function UpdateCommChannels()
-    for _,command in pairs(Commands._.registeredComms) do
+    for _, command in pairs(Commands._.registeredComms) do
         UpdateCommEvent(command)
     end
 

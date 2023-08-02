@@ -86,8 +86,10 @@ function CommandConfig.Init(config, owners)
                     -- toggle active channels for this command only
 
                     if args[1]:lower() == "reset" then
-                        configForCommands[CommandConfig.keys.commandOverrides][command][CommandConfig.keys.activeChannels] = nil
-                        CommandConfig._.config:SaveConfig()
+                        if configForCommands[CommandConfig.keys.commandOverrides][command] ~= nil then
+                            configForCommands[CommandConfig.keys.commandOverrides][command][CommandConfig.keys.activeChannels] = nil
+                            CommandConfig._.config:SaveConfig()
+                        end
                         Commands.SetPhrasePatternOverrides(command, nil)
                         print("Removed active channel override for command: [" .. command .. "]")
                         return
@@ -104,6 +106,20 @@ function CommandConfig.Init(config, owners)
                     CommandConfig.ToggleActiveChannel(args[1]:lower(), configForCommands[CommandConfig.keys.commandOverrides][command])
                     Commands.SetPhrasePatternOverrides(command, CommandConfig.GetPhrasePatterns(configForCommands[CommandConfig.keys.commandOverrides][command]))
                 end
+            elseif args ~= nil and #args == 2 and args[1]:lower() == "command" then
+                local command = args[2]:lower()
+                if not TableUtils.ArrayContains(Commands.GetCommsPhrases(), command) then
+                    print("(/activechannels <channel type> command <command>) [" .. args[2] .. "] is not a registered command.")
+                    print(" -- Currently registered commands: [" .. StringUtils.Join(Commands.GetCommsPhrases(), ", ") .. "]")
+                else
+                    print("(/activechannels command <command>) Active channels for command [" .. command .. "]:")
+
+                    if configForCommands[CommandConfig.keys.commandOverrides][command] == nil or configForCommands[CommandConfig.keys.commandOverrides][command] == nil or configForCommands[CommandConfig.keys.commandOverrides][command][CommandConfig.keys.activeChannels] == nil then
+                        print(" -- No activechannel overrides for command")
+                    else
+                        print(" -- Currently active channels: [" .. StringUtils.Join(configForCommands[CommandConfig.keys.commandOverrides][command][CommandConfig.keys.activeChannels], ", ") .. "]")
+                    end
+                end
             elseif args ~= nil and #args == 1 and args[1]:lower() ~= "help"then
                 CommandConfig.ToggleActiveChannel(args[1]:lower())
             else
@@ -114,6 +130,7 @@ function CommandConfig.Init(config, owners)
                 print("To override active channels for a specific communication command, use: /activechannels <channel type> command <command>")
                 print(" -- Currently registered commands: [" .. StringUtils.Join(Commands.GetCommsPhrases(), ", ") .. "]")
                 print(" -- Reset command overrides with: /activechannels reset command <command>")
+                print(" -- View command overrides with: /activechannels command <command>")
             end
         end
         Commands.RegisterSlashCommand("activechannels", Bind_ActiveChannels)
