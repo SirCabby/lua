@@ -8,6 +8,7 @@ local Commands = {
     key = "Commands",
     _ = {
         isInit = false,
+        phrasePatternOverrides = {}, -- { <command id> = { array of patterns } }
         registeredComms = {}, -- { <command id> = <command> }
         registeredSlashCommands = {}, -- { "/cmd1", "/cmd2" }
         registeredChannelPatterns = {}, -- { "some pattern with <<phrase>> in it, which will be replaced later with registeredComms.commandId.phrase" }
@@ -103,8 +104,8 @@ local function UpdateCommEvent(command)
     command.registeredEvents = {}
 
     local patternArray
-    if command.phrasePatternOverrides ~= nil and #command.phrasePatternOverrides > 0 then
-        patternArray = command.phrasePatternOverrides
+    if Commands._.phrasePatternOverrides[command.phrase] ~= nil then
+        patternArray = Commands._.phrasePatternOverrides[command.phrase]
     else
         patternArray = Commands._.registeredChannelPatterns
     end
@@ -161,6 +162,13 @@ function Commands.ReRegisterOnEventUpdates(id, phrase, eventFunc)
     else
         print("Cannot re-register same event Id: ["..id.."]")
     end
+end
+
+---@param phrase string
+---@param phrasePatternOverrides array?
+function Commands.SetPhrasePatternOverrides(phrase, phrasePatternOverrides)
+    Commands._.phrasePatternOverrides[phrase] = phrasePatternOverrides
+    UpdateCommChannels()
 end
 
 return Commands

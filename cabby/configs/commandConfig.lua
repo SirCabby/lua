@@ -1,4 +1,3 @@
-local mq = require("mq")
 local Commands = require("cabby.commands")
 local Debug = require("utils.Debug.Debug")
 local StringUtils = require("utils.StringUtils.StringUtils")
@@ -9,6 +8,7 @@ local CommandConfig = {
     key = "CommandConfig",
     keys = {
         activeChannels = "activeChannels",
+        commandOverrides = "commandOverrides",
         owners = "owners"
     },
     channelTypes = {
@@ -37,6 +37,14 @@ local function initAndValidate()
     if CommandConfig._.config:GetConfigRoot()[CommandConfig.key][CommandConfig.keys.activeChannels] == nil then
         DebugLog("Active Channels were not set, updating...")
         CommandConfig._.config:GetConfigRoot()[CommandConfig.key][CommandConfig.keys.activeChannels] = {}
+    end
+    if CommandConfig._.config:GetConfigRoot()[CommandConfig.key][CommandConfig.keys.commandOverrides] == nil then
+        DebugLog("CommandOverrides were not set, updating...")
+        CommandConfig._.config:GetConfigRoot()[CommandConfig.key][CommandConfig.keys.commandOverrides] = {}
+    end
+
+    for command, overrides in pairs(CommandConfig._.config:GetConfigRoot()[CommandConfig.key][CommandConfig.keys.commandOverrides]) do
+        Commands.SetPhrasePatternOverrides(command, CommandConfig.GetPhrasePatterns(overrides))
     end
 end
 
@@ -70,11 +78,31 @@ function CommandConfig.Init(config, owners)
         local function Bind_ActiveChannels(...)
             local args = {...} or {}
             if args ~= nil and #args == 3 and args[2]:lower() == "command" then
-                if not TableUtils.ArrayContains(Commands.GetCommsPhrases(), args[4]:lower()) then
-                    print("(/activechannels <channel type> command) [" .. args[4] .. "] is not a registered command.")
+                local command = args[3]:lower()
+                if not TableUtils.ArrayContains(Commands.GetCommsPhrases(), command) then
+                    print("(/activechannels <channel type> command <command>) [" .. args[3] .. "] is not a registered command.")
                     print(" -- Currently registered commands: [" .. StringUtils.Join(Commands.GetCommsPhrases(), ", ") .. "]")
                 else
                     -- toggle active channels for this command only
+
+                    if args[1]:lower() == "reset" then
+                        configForCommands[CommandConfig.keys.commandOverrides][command][CommandConfig.keys.activeChannels] = nil
+                        CommandConfig._.config:SaveConfig()
+                        Commands.SetPhrasePatternOverrides(command, nil)
+                        print("Removed active channel override for command: [" .. command .. "]")
+                        return
+                    end
+
+                    -- init override
+                    if configForCommands[CommandConfig.keys.commandOverrides][command] == nil then
+                        configForCommands[CommandConfig.keys.commandOverrides][command] = {}
+                    end
+                    if configForCommands[CommandConfig.keys.commandOverrides][command][CommandConfig.keys.activeChannels] == nil then
+                        configForCommands[CommandConfig.keys.commandOverrides][command][CommandConfig.keys.activeChannels] = {}
+                    end
+
+                    CommandConfig.ToggleActiveChannel(args[1]:lower(), configForCommands[CommandConfig.keys.commandOverrides][command])
+                    Commands.SetPhrasePatternOverrides(command, CommandConfig.GetPhrasePatterns(configForCommands[CommandConfig.keys.commandOverrides][command]))
                 end
             elseif args ~= nil and #args == 1 and args[1]:lower() ~= "help"then
                 CommandConfig.ToggleActiveChannel(args[1]:lower())
@@ -83,8 +111,9 @@ function CommandConfig.Init(config, owners)
                 print("To toggle an active channel, use: /activechannels <channel type>")
                 print(" -- Valid Active Channel Types: [" .. StringUtils.Join(TableUtils.GetValues(CommandConfig.channelTypes), ", ") .. "]")
                 print(" -- Currently active channels: [" .. StringUtils.Join(CommandConfig.GetActiveChannels(), ", ") .. "]")
-                print("To toggle an active channel for a specific communication command, use: /activechannels <channel type> command <command>")
+                print("To override active channels for a specific communication command, use: /activechannels <channel type> command <command>")
                 print(" -- Currently registered commands: [" .. StringUtils.Join(Commands.GetCommsPhrases(), ", ") .. "]")
+                print(" -- Reset command overrides with: /activechannels reset command <command>")
             end
         end
         Commands.RegisterSlashCommand("activechannels", Bind_ActiveChannels)
@@ -94,7 +123,6 @@ function CommandConfig.Init(config, owners)
             if args == nil or #args ~= 1 or args[1]:lower() == "help" then
                 print("(/owners) Manage owners to take commands from")
                 print("To add/remove owners, use: /owners name")
-                print("Current owners:")
                 owners:Print()
             elseif owners:IsOwner(args[1]) then
                 owners:Remove(args[1])
@@ -116,8 +144,9 @@ end
 
 ---Toggles an active command channel
 ---@param channel string Available types found in GeneralConfig.channelTypes
-function CommandConfig.ToggleActiveChannel(channel)
-    local generalConfig = getConfigSection()
+---@param configLocation table? table to work on active channels within
+function CommandConfig.ToggleActiveChannel(channel, configLocation)
+    local generalConfig = configLocation or getConfigSection()
     if not TableUtils.ArrayContains(TableUtils.GetValues(CommandConfig.channelTypes), channel) then
         print("Invalid Channel Type. Valid Channel Types: [" .. StringUtils.Join(TableUtils.GetValues(CommandConfig.channelTypes), ", ") .. "]")
         return
@@ -135,8 +164,9 @@ end
 
 ---Adds an active command channel
 ---@param channel string Available types found in GeneralConfig.channelTypes
-function CommandConfig.AddChannel(channel)
-    local generalConfig = getConfigSection()
+---@param configLocation table? table to work on active channels within
+function CommandConfig.AddChannel(channel, configLocation)
+    local generalConfig = configLocation or getConfigSection()
     if not TableUtils.IsArray(generalConfig[CommandConfig.keys.activeChannels]) then error("GeneralConfig.Channels config was not an array") end
     if not TableUtils.ArrayContains(TableUtils.GetValues(CommandConfig.channelTypes), channel) then
         print("Invalid Channel Type. Valid Channel Types: [" .. StringUtils.Join(TableUtils.GetValues(CommandConfig.channelTypes), ", ") .. "]")
@@ -153,8 +183,9 @@ end
 
 ---Removes an active command channel
 ---@param channel string Available types found in GeneralConfig.channelTypes
-function CommandConfig.RemoveChannel(channel)
-    local generalConfig = getConfigSection()
+---@param configLocation table? table to work on active channels within
+function CommandConfig.RemoveChannel(channel, configLocation)
+    local generalConfig = configLocation or getConfigSection()
     if not TableUtils.IsArray(generalConfig[CommandConfig.keys.activeChannels]) then error("Command.Channels config was not an array") end
     if not TableUtils.ArrayContains(TableUtils.GetValues(CommandConfig.channelTypes), channel) then
         print("Invalid Channel Type. Valid Channel Types: [" .. StringUtils.Join(TableUtils.GetValues(CommandConfig.channelTypes), ", ") .. "]")
@@ -169,9 +200,9 @@ function CommandConfig.RemoveChannel(channel)
     DebugLog(channel .. " was not an active channel")
 end
 
----Syncs registered events to all active channels
-function CommandConfig.UpdateEventChannels()
-    local generalConfig = getConfigSection()
+---@param configLocation table? table to work on active channels within
+function CommandConfig.GetPhrasePatterns(configLocation)
+    local generalConfig = configLocation or getConfigSection()
     local channels = generalConfig[CommandConfig.keys.activeChannels] or {}
 
     local phrasePatterns = {}
@@ -190,7 +221,12 @@ function CommandConfig.UpdateEventChannels()
         table.insert(phrasePatterns, "#1# tells the raid, '<<phrase>>'")
     end
 
-    Commands.SetChannelPatterns(phrasePatterns)
+    return phrasePatterns
+end
+
+---Syncs registered events to all active channels
+function CommandConfig.UpdateEventChannels()
+    Commands.SetChannelPatterns(CommandConfig.GetPhrasePatterns())
 end
 
 function CommandConfig.Print()
