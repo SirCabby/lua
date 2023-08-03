@@ -72,8 +72,8 @@ function DebugConfig.Init(config)
                 print("Toggled debug tracing for [" .. args[1] .. "]: " .. tostring(DebugConfig.GetDebugToggle(args[1])))
             end
         end
-        
         Commands.RegisterSlashCommand("debug", Bind_Debug)
+        
         DebugConfig._.isInit = true
     end
 end
