@@ -280,7 +280,6 @@ function CommandConfig.GetPhrasePatterns(configLocation)
     local phrasePatterns = {}
     if TableUtils.ArrayContains(channels, CommandConfig.channelTypes.bc) then
         table.insert(phrasePatterns, "<#1#> <<phrase>>")
-        table.insert(phrasePatterns, "<#1#> #2# <<phrase>>")
         table.insert(phrasePatterns, "[#1#(msg)] <<phrase>>")
     end
     if TableUtils.ArrayContains(channels, CommandConfig.channelTypes.tell) then
