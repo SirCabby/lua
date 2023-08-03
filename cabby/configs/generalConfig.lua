@@ -2,6 +2,7 @@ local mq = require("mq")
 local Command = require("cabby.command")
 local Commands = require("cabby.commands")
 local Debug = require("utils.Debug.Debug")
+local Event = require("cabby.event")
 local StringUtils = require("utils.StringUtils.StringUtils")
 local TableUtils = require("utils.TableUtils.TableUtils")
 
@@ -13,10 +14,10 @@ local GeneralConfig = {
         relayTellsTo = "relayTellsTo"
     },
     eventIds = {
-        groupInvited = "Invited to Group",
-        tellToMe = "Tell to Me",
-        inspectRequest = "Request to inspect",
-        restart = "Restart Cabby Script"
+        groupInvited = "groupInvited",
+        tellToMe = "tellToMe",
+        inspectRequest = "inspectRequest",
+        restart = "restart"
     },
     equipmentSlots = {
         "charm",
@@ -81,8 +82,11 @@ function GeneralConfig.Init(config)
 
         -- Events
 
+        local function groupInvitedHelp()
+            print("(event: "..GeneralConfig.eventIds.groupInvited..") Accepts or declines invitations to groups, depending on rights of asker")
+        end
         local function event_GroupInvited(_, speaker)
-            if GeneralConfig._.owners:IsOwner(speaker) then
+            if Commands.GetEventOwners(GeneralConfig.eventIds.groupInvited):IsOwner(speaker) then
                 DebugLog("Joining group of speaker [" .. speaker .. "]")
                 mq.cmd("/invite")
             else
@@ -90,30 +94,28 @@ function GeneralConfig.Init(config)
                 mq.cmd("/disband")
             end
         end
-        mq.event(GeneralConfig.eventIds.groupInvited, "#1# invites you to join a group.", event_GroupInvited)
+        Commands.RegisterEvent(Event.new(GeneralConfig.eventIds.groupInvited, "#1# invites you to join a group.", event_GroupInvited, groupInvitedHelp))
 
+        local function inspectHelp()
+            print("(inspect <slot>) Slot types: [" .. StringUtils.Join(GeneralConfig.equipmentSlots, ", ") .. "]")
+        end
         local function event_InspectRequest(_, speaker, message)
-            local function doHelp()
+            local function broadcastHelp()
                 mq.cmd("/tell "..speaker.."(inspect <slot>) Slot types: [" .. StringUtils.Join(GeneralConfig.equipmentSlots, ", ") .. "]")
             end
 
-            if GeneralConfig._.owners:IsOwner(speaker) then
-                local args = StringUtils.Split(StringUtils.TrimFront(message), " ")
-                if #args ~= 1 or args[1]:lower() == "help" then
-                    doHelp()
+            if Commands.GetCommandOwners("inspect #2#"):IsOwner(speaker) then
+                local args = StringUtils.Split(message, " ")
+
+                if #args == 1 and TableUtils.ArrayContains(GeneralConfig.equipmentSlots, args[1]:lower()) then
+                    mq.cmd("/tell "..speaker.." "..args[1]:lower()..": "..mq.TLO.Me.Inventory(args[1]).ItemLink("CLICKABLE")())
                     return
                 end
 
-                local slot = args[1]:lower()
-                DebugLog("Request for inspection: [" .. speaker .. "], slot: [" .. slot .. "]")
-                if TableUtils.ArrayContains(GeneralConfig.equipmentSlots, slot) then
-                    mq.cmd("/tell "..speaker.." "..slot..": "..mq.TLO.Me.Inventory(slot).ItemLink("CLICKABLE")())
-                else
-                    doHelp()
-                end
+                broadcastHelp()
             end
         end
-        mq.event(GeneralConfig.eventIds.inspectRequest, "#1# tells you, 'inspect#2#'", event_InspectRequest)
+        Commands.RegisterCommEvent(Command.new(GeneralConfig.eventIds.inspectRequest, "inspect #2#", event_InspectRequest, inspectHelp))
 
         local function event_Restart(_, speaker)
             if Commands.GetCommandOwners("restart"):IsOwner(speaker) then
