@@ -65,14 +65,15 @@ local function ConfigSetup(configFilePath)
     PluginSetup()
     Setup.config = Config:new(configFilePath)
     Setup.owners = Owners:new(Setup.config, Setup.config:GetConfigRoot()[CommandConfig.key])
-    GeneralConfig.Init(Setup.config, Setup.owners)
+    Commands.Init(Setup.config, Setup.owners)
+    GeneralConfig.Init(Setup.config)
     DebugConfig.Init(Setup.config)
-    CommandConfig.Init(Setup.config, Setup.owners)
+    CommandConfig.Init(Setup.config)
 end
 
 ---@param stateMachine StateMachine
 local function StateSetup(stateMachine)
-    FollowState.Init(Setup.owners)
+    FollowState.Init()
     stateMachine:Register(FollowState)
 
 -- | 1 My commands / Task / DZ
@@ -96,7 +97,6 @@ function Setup:Init(configFilePath, stateMachine)
     DebugLog("Starting Cabby Setup...")
 
     ConfigSetup(configFilePath)
-    Commands.Init()
     StateSetup(stateMachine)
 
     DebugLog("Finished Cabby Setup")

@@ -15,7 +15,6 @@ local FollowState = {
     _ = {
         isInit = false,
         paused = false,
-        owners = {},
         followMeActions = {},
         currentActionIndex = 0,
         currentActionTimer = {},
@@ -50,12 +49,11 @@ local function CloseToLastLoc()
     return mq.TLO.Math.Distance(tostring(FollowState._.lastLoc.y) .. "," .. tostring(FollowState._.lastLoc.x) .. tostring(FollowState._.lastLoc.z))() < 30
 end
 
-function FollowState.Init(owners)
+function FollowState.Init()
     if not FollowState._.isInit then
-        FollowState._.owners = owners
 
         local function event_FollowMe(_, speaker)
-            if FollowState._.owners:IsOwner(speaker) then
+            if Commands.GetCommandOwners("followme"):IsOwner(speaker) then
                 DebugLog("Activating followme of speaker [" .. speaker .. "]")
                 FollowState._.followTarget = speaker
                 FollowState._.currentActionIndex = 1
@@ -69,7 +67,7 @@ function FollowState.Init(owners)
         Commands.RegisterCommEvent(Command.new(FollowState.eventIds.followMe, "followme", event_FollowMe, followMeHelp))
 
         local function event_StopFollow(_, speaker)
-            if FollowState._.owners:IsOwner(speaker) then
+            if Commands.GetCommandOwners("stopfollow"):IsOwner(speaker) then
                 DebugLog("Stopping follow of speaker [" .. speaker .. "]")
                 if mq.TLO.AdvPath.Monitor() ~= nil and mq.TLO.AdvPath.Monitor():lower() == FollowState._.followTarget:lower() then
                     mq.cmd("/afollow off")
@@ -85,7 +83,7 @@ function FollowState.Init(owners)
         Commands.RegisterCommEvent(Command.new(FollowState.eventIds.stopFollow, "stopfollow", event_StopFollow, stopfollowHelp))
 
         local function event_MoveToMe(_, speaker)
-            if FollowState._.owners:IsOwner(speaker) then
+            if Commands.GetCommandOwners("m2m"):IsOwner(speaker) then
                 DebugLog("Moving to speaker [" .. speaker .. "]")
                 if mq.TLO.AdvPath.Following() then
                     mq.cmd("/afollow off")

@@ -45,8 +45,7 @@ local GeneralConfig = {
     },
     _ = {
         isInit = false,
-        config = {},
-        owners = {}
+        config = {}
     }
 }
 
@@ -72,11 +71,9 @@ end
 
 ---Initialize the static object, only done once
 ---@param config Config
----@param owners Owners
-function GeneralConfig.Init(config, owners)
+function GeneralConfig.Init(config)
     if not GeneralConfig._.isInit then
         GeneralConfig._.config = config
-        GeneralConfig._.owners = owners
 
         -- Init any keys that were not setup
         initAndValidate()
@@ -119,7 +116,7 @@ function GeneralConfig.Init(config, owners)
         mq.event(GeneralConfig.eventIds.inspectRequest, "#1# tells you, 'inspect#2#'", event_InspectRequest)
 
         local function event_Restart(_, speaker)
-            if GeneralConfig._.owners:IsOwner(speaker) then
+            if Commands.GetCommandOwners("restart"):IsOwner(speaker) then
                 DebugLog("Restarting on request of speaker [" .. speaker .. "]")
                 mq.cmd("/luar cabby")
             else

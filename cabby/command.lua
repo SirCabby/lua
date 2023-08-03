@@ -3,8 +3,6 @@
 ---@field phrase string
 ---@field eventFunction function
 ---@field helpFunction function
----@field phrasePatternOverrides array -- active channels with <<phrase>> in them
---- owners / broadcast
 ---@field registeredEvents array
 local Command = {}
 

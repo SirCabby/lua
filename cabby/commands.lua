@@ -1,5 +1,7 @@
 local mq = require("mq")
 local Debug = require("utils.Debug.Debug")
+---@type Owners
+local Owners = require("utils.Owners.Owners")
 local StringUtils = require("utils.StringUtils.StringUtils")
 local TableUtils = require("utils.TableUtils.TableUtils")
 
@@ -8,12 +10,24 @@ local Commands = {
     key = "Commands",
     _ = {
         isInit = false,
-        phrasePatternOverrides = {}, -- { <command id> = { array of patterns } }
-        registeredComms = {}, -- { <command id> = <command> }
-        registeredSlashCommands = {}, -- { "/cmd1", "/cmd2" }
-        registeredChannelPatterns = {}, -- { "some pattern with <<phrase>> in it, which will be replaced later with registeredComms.commandId.phrase" }
-        registeredEvents = {}, -- todo use for relaytellsto after refactor?
-        reRegisterOnEventUpdates = {} -- { id = { phrase = "", eventFunc = function } }
+        config = {},
+        owners = {},
+        registrations = {
+            commands = {
+                registeredCommands = {}, -- { <command id> = <command> }
+                defaultChannelPatterns = {}, -- { "some pattern with <<phrase>> in it, which will be replaced later with registeredComms.commandId.phrase" }
+                phrasePatternOverrides = {}, -- { <command id> = { array of patterns } }
+                ownersOverrides = {} -- { <command id> = { array of owners }}
+            },
+            slashcommands = {
+                registeredSlashCommands = {}, -- { "/cmd1", "/cmd2" }
+            },
+            events = {
+                registeredEvents = {}, -- { "event1", "event2" }
+                ownersOverrides = {}, -- { <command id> = { array of owners }}
+                reRegisterOnEventUpdates = {} -- { id = { phrase = "", eventFunc = function } }
+            }
+        }
     }
 }
 
@@ -21,8 +35,12 @@ local function DebugLog(str)
     Debug.Log(Commands.key, str)
 end
 
-function Commands.Init()
+---@param config Config
+function Commands.Init(config, owners)
     if not Commands._.isInit then
+        Commands._.config = config
+        Commands._.owners = owners
+
         local function chelpPrint()
             print("(/chelp) Cabby Help menu")
             print(" -- Pick a help topic. Options: [Cvc, SlashCmds, Comms]")
@@ -50,12 +68,12 @@ function Commands.Init()
                     print("Available Communication Commands: [" .. StringUtils.Join(comms, ", ") .. "]")
                     print("To learn more about a specific command, use /chelp <command>")
                 elseif arg == "slashcmds" then
-                    print("Available Slash Commands: [" .. StringUtils.Join(Commands._.registeredSlashCommands, ", ") .. "]")
+                    print("Available Slash Commands: [" .. StringUtils.Join(Commands._.registrations.slashcommands.registeredSlashCommands, ", ") .. "]")
                     print("To learn more about a specific command, use /chelp <command>")
-                elseif TableUtils.ArrayContains(Commands._.registeredSlashCommands, "/" .. arg) then
+                elseif TableUtils.ArrayContains(Commands._.registrations.slashcommands.registeredSlashCommands, "/" .. arg) then
                     mq.cmd("/" .. arg .. " help")
                 elseif TableUtils.ArrayContains(Commands.GetCommsPhrases(), arg) then
-                    for _,command in pairs(Commands._.registeredComms) do
+                    for _, command in pairs(Commands._.registrations.commands.registeredCommands) do
                         if command.phrase == arg then
                             command.helpFunction()
                             return
@@ -78,19 +96,18 @@ function Commands.RegisterSlashCommand(command, callback)
         command = "/" .. command
     end
 
-    if TableUtils.ArrayContains(Commands._.registeredSlashCommands, command) then
+    if TableUtils.ArrayContains(Commands._.registrations.slashcommands.registeredSlashCommands, command) then
         DebugLog("Slash command was already registered: [" .. command .. "]")
         return
     end
 
     mq.bind(command, callback)
-    table.insert(Commands._.registeredSlashCommands, command)
-    table.sort(Commands._.registeredSlashCommands)
+    table.insert(Commands._.registrations.slashcommands.registeredSlashCommands, command)
 end
 
 function Commands.GetCommsPhrases()
     local comms = {}
-    for _,command in pairs(Commands._.registeredComms) do
+    for _, command in pairs(Commands._.registrations.commands.registeredCommands) do
         table.insert(comms, command.phrase)
     end
     return comms
@@ -104,10 +121,10 @@ local function UpdateCommEvent(command)
     command.registeredEvents = {}
 
     local patternArray
-    if Commands._.phrasePatternOverrides[command.phrase] ~= nil then
-        patternArray = Commands._.phrasePatternOverrides[command.phrase]
+    if Commands._.registrations.commands.phrasePatternOverrides[command.phrase] ~= nil then
+        patternArray = Commands._.registrations.commands.phrasePatternOverrides[command.phrase]
     else
-        patternArray = Commands._.registeredChannelPatterns
+        patternArray = Commands._.registrations.commands.defaultChannelPatterns
     end
 
     for _, pattern in ipairs(patternArray) do
@@ -120,8 +137,8 @@ end
 
 ---@param command Command
 function Commands.RegisterCommEvent(command)
-    if not TableUtils.ArrayContains(TableUtils.GetKeys(Commands._.registeredComms), command.id) then
-        Commands._.registeredComms[command.id] = command
+    if not TableUtils.ArrayContains(TableUtils.GetKeys(Commands._.registrations.commands.registeredCommands), command.id) then
+        Commands._.registrations.commands.registeredCommands[command.id] = command
         command.registeredEvents = {}
         UpdateCommEvent(command)
     else
@@ -131,12 +148,12 @@ end
 
 ---Syncs registered commands to currently active channels
 local function UpdateCommChannels()
-    for _, command in pairs(Commands._.registeredComms) do
+    for _, command in pairs(Commands._.registrations.commands.registeredCommands) do
         UpdateCommEvent(command)
     end
 
     -- These events are intentionally added last to act as catchalls for similar event patterns
-    for id, event in pairs(Commands._.reRegisterOnEventUpdates) do
+    for id, event in pairs(Commands._.registrations.events.reRegisterOnEventUpdates) do
         mq.unevent(id)
         mq.event(id, event.phrase, event.eventFunc)
     end
@@ -145,8 +162,31 @@ end
 ---Replaces current patterns with those provided
 ---@param channelPatterns array
 function Commands.SetChannelPatterns(channelPatterns)
-    Commands._.registeredChannelPatterns = channelPatterns
+    Commands._.registrations.commands.defaultChannelPatterns = channelPatterns
     UpdateCommChannels()
+end
+
+---@param phrase string
+---@param phrasePatternOverrides array?
+function Commands.SetPhrasePatternOverrides(phrase, phrasePatternOverrides)
+    Commands._.registrations.commands.phrasePatternOverrides[phrase] = phrasePatternOverrides
+    UpdateCommChannels()
+end
+
+---@param phrase string
+---@param ownersOverrides array?
+function Commands.SetCommandOwnersOverrides(phrase, ownersOverrides)
+    Commands._.registrations.commands.ownersOverrides[phrase] = ownersOverrides
+end
+
+---@param phrase string
+---@return Owners owners
+function Commands.GetCommandOwners(phrase)
+    local ownersOverrides = Commands._.registrations.commands.ownersOverrides[phrase]
+    if ownersOverrides ~= nil then
+        return Owners:new(Commands._.config, Commands._.registrations.commands.ownersOverrides[phrase])
+    end
+    return Commands._.owners
 end
 
 ---Adds event to re-register on event updates to preserve ordering of fallthrough events
@@ -154,21 +194,14 @@ end
 ---@param phrase string
 ---@param eventFunc function
 function Commands.ReRegisterOnEventUpdates(id, phrase, eventFunc)
-    if not TableUtils.ArrayContains(TableUtils.GetKeys(Commands._.reRegisterOnEventUpdates), id) then
-        Commands._.reRegisterOnEventUpdates[id] = {
+    if not TableUtils.ArrayContains(TableUtils.GetKeys(Commands._.registrations.events.reRegisterOnEventUpdates), id) then
+        Commands._.registrations.events.reRegisterOnEventUpdates[id] = {
             phrase = phrase,
             eventFunc = eventFunc
         }
     else
         print("Cannot re-register same event Id: ["..id.."]")
     end
-end
-
----@param phrase string
----@param phrasePatternOverrides array?
-function Commands.SetPhrasePatternOverrides(phrase, phrasePatternOverrides)
-    Commands._.phrasePatternOverrides[phrase] = phrasePatternOverrides
-    UpdateCommChannels()
 end
 
 return Commands

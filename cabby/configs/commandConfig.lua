@@ -19,8 +19,7 @@ local CommandConfig = {
     },
     _ = {
         isInit = false,
-        config = {},
-        owners = {}
+        config = {}
     }
 }
 
@@ -30,20 +29,21 @@ local function DebugLog(str)
 end
 
 local function initAndValidate()
-    if CommandConfig._.config:GetConfigRoot()[CommandConfig.key] == nil then
+    local configData = CommandConfig._.config:GetConfigRoot()
+    if configData[CommandConfig.key] == nil then
         DebugLog("CommandConfig Section was not set, updating...")
-        CommandConfig._.config:GetConfigRoot()[CommandConfig.key] = {}
+        configData[CommandConfig.key] = {}
     end
-    if CommandConfig._.config:GetConfigRoot()[CommandConfig.key][CommandConfig.keys.activeChannels] == nil then
+    if configData[CommandConfig.key][CommandConfig.keys.activeChannels] == nil then
         DebugLog("Active Channels were not set, updating...")
-        CommandConfig._.config:GetConfigRoot()[CommandConfig.key][CommandConfig.keys.activeChannels] = {}
+        configData[CommandConfig.key][CommandConfig.keys.activeChannels] = {}
     end
-    if CommandConfig._.config:GetConfigRoot()[CommandConfig.key][CommandConfig.keys.commandOverrides] == nil then
+    if configData[CommandConfig.key][CommandConfig.keys.commandOverrides] == nil then
         DebugLog("CommandOverrides were not set, updating...")
-        CommandConfig._.config:GetConfigRoot()[CommandConfig.key][CommandConfig.keys.commandOverrides] = {}
+        configData[CommandConfig.key][CommandConfig.keys.commandOverrides] = {}
     end
 
-    for command, overrides in pairs(CommandConfig._.config:GetConfigRoot()[CommandConfig.key][CommandConfig.keys.commandOverrides]) do
+    for command, overrides in pairs(configData[CommandConfig.key][CommandConfig.keys.commandOverrides]) do
         Commands.SetPhrasePatternOverrides(command, CommandConfig.GetPhrasePatterns(overrides))
     end
 end
@@ -54,11 +54,9 @@ end
 
 ---Initialize the static object, only done once
 ---@param config Config
----@param owners Owners
-function CommandConfig.Init(config, owners)
+function CommandConfig.Init(config)
     if not CommandConfig._.isInit then
         CommandConfig._.config = config
-        CommandConfig._.owners = owners
 
         -- Init any keys that were not setup
         initAndValidate()
@@ -77,8 +75,8 @@ function CommandConfig.Init(config, owners)
 
         local function Bind_ActiveChannels(...)
             local args = {...} or {}
-            if args ~= nil and #args == 3 and args[2]:lower() == "command" then
-                local command = args[3]:lower()
+            if args ~= nil and #args == 2 then
+                local command = args[2]:lower()
                 if not TableUtils.ArrayContains(Commands.GetCommsPhrases(), command) then
                     print("(/activechannels <channel type> command <command>) [" .. args[3] .. "] is not a registered command.")
                     print(" -- Currently registered commands: [" .. StringUtils.Join(Commands.GetCommsPhrases(), ", ") .. "]")
@@ -109,10 +107,10 @@ function CommandConfig.Init(config, owners)
             elseif args ~= nil and #args == 2 and args[1]:lower() == "command" then
                 local command = args[2]:lower()
                 if not TableUtils.ArrayContains(Commands.GetCommsPhrases(), command) then
-                    print("(/activechannels <channel type> command <command>) [" .. args[2] .. "] is not a registered command.")
+                    print("(/activechannels <channel type> <command>) [" .. args[2] .. "] is not a registered command.")
                     print(" -- Currently registered commands: [" .. StringUtils.Join(Commands.GetCommsPhrases(), ", ") .. "]")
                 else
-                    print("(/activechannels command <command>) Active channels for command [" .. command .. "]:")
+                    print("(/activechannels <command>) Active channels for command [" .. command .. "]:")
 
                     if configForCommands[CommandConfig.keys.commandOverrides][command] == nil or configForCommands[CommandConfig.keys.commandOverrides][command] == nil or configForCommands[CommandConfig.keys.commandOverrides][command][CommandConfig.keys.activeChannels] == nil then
                         print(" -- No activechannel overrides for command")
@@ -120,16 +118,16 @@ function CommandConfig.Init(config, owners)
                         print(" -- Currently active channels: [" .. StringUtils.Join(configForCommands[CommandConfig.keys.commandOverrides][command][CommandConfig.keys.activeChannels], ", ") .. "]")
                     end
                 end
-            elseif args ~= nil and #args == 1 and args[1]:lower() ~= "help"then
+            elseif args ~= nil and #args == 1 and args[1]:lower() ~= "help" then
                 CommandConfig.ToggleActiveChannel(args[1]:lower())
             else
                 print("(/activechannels) Channels used for listening to commands")
                 print("To toggle an active channel, use: /activechannels <channel type>")
                 print(" -- Valid Active Channel Types: [" .. StringUtils.Join(TableUtils.GetValues(CommandConfig.channelTypes), ", ") .. "]")
                 print(" -- Currently active channels: [" .. StringUtils.Join(CommandConfig.GetActiveChannels(), ", ") .. "]")
-                print("To override active channels for a specific communication command, use: /activechannels <channel type> command <command>")
+                print("To override active channels for a specific communication command, use: /activechannels <channel type> <command>")
                 print(" -- Currently registered commands: [" .. StringUtils.Join(Commands.GetCommsPhrases(), ", ") .. "]")
-                print(" -- Reset command overrides with: /activechannels reset command <command>")
+                print(" -- Reset command overrides with: /activechannels reset <command>")
                 print(" -- View command overrides with: /activechannels command <command>")
             end
         end
@@ -137,14 +135,66 @@ function CommandConfig.Init(config, owners)
 
         local function Bind_Owners(...)
             local args = {...} or {}
-            if args == nil or #args ~= 1 or args[1]:lower() == "help" then
+            if args ~= nil and #args == 2 then
+                local command = args[2]:lower()
+                if not TableUtils.ArrayContains(Commands.GetCommsPhrases(), command) then
+                    print("(/owners <owner> command <command>) [" .. args[2] .. "] is not a registered command.")
+                    print(" -- Currently registered commands: [" .. StringUtils.Join(Commands.GetCommsPhrases(), ", ") .. "]")
+                else
+                    -- toggle owners for this command only
+
+                    if args[1]:lower() == "reset" then
+                        if configForCommands[CommandConfig.keys.commandOverrides][command] ~= nil then
+                            configForCommands[CommandConfig.keys.commandOverrides][command][CommandConfig.keys.owners] = nil
+                            CommandConfig._.config:SaveConfig()
+                        end
+                        Commands.SetCommandOwnersOverrides(command, nil)
+                        print("Removed owner override for command: [" .. command .. "]")
+                        return
+                    end
+
+                    -- init override
+                    if configForCommands[CommandConfig.keys.commandOverrides][command] == nil then
+                        configForCommands[CommandConfig.keys.commandOverrides][command] = {}
+                    end
+
+                    Commands.SetCommandOwnersOverrides(command, configForCommands[CommandConfig.keys.commandOverrides][command])
+                    local owners = Commands.GetCommandOwners(command)
+                    if owners:IsOwner(args[1]) then
+                        owners:Remove(args[1])
+                    else
+                        owners:Add(args[1])
+                    end
+                end
+            elseif args ~= nil and #args == 2 and args[1]:lower() == "command" then
+                local command = args[2]:lower()
+                if not TableUtils.ArrayContains(Commands.GetCommsPhrases(), command) then
+                    print("(/owners <owner> <command>) [" .. args[2] .. "] is not a registered command.")
+                    print(" -- Currently registered commands: [" .. StringUtils.Join(Commands.GetCommsPhrases(), ", ") .. "]")
+                else
+                    print("(/owners command <command>) Owners for command [" .. command .. "]:")
+
+                    if configForCommands[CommandConfig.keys.commandOverrides][command] == nil or configForCommands[CommandConfig.keys.commandOverrides][command] == nil or configForCommands[CommandConfig.keys.commandOverrides][command][CommandConfig.keys.owners] == nil then
+                        print(" -- No owners overrides for command")
+                    else
+                        print(" -- Current owners: [" .. StringUtils.Join(configForCommands[CommandConfig.keys.commandOverrides][command][CommandConfig.keys.owners], ", ") .. "]")
+                    end
+                end
+            elseif args ~= nil and #args == 1 and args[1] ~= "help" then
+                local owners = Commands.GetCommandOwners("dne-global-owners")
+                if owners:IsOwner(args[1]) then
+                    owners:Remove(args[1])
+                else
+                    owners:Add(args[1])
+                end
+            else
                 print("(/owners) Manage owners to take commands from")
                 print("To add/remove owners, use: /owners name")
-                owners:Print()
-            elseif owners:IsOwner(args[1]) then
-                owners:Remove(args[1])
-            else
-                owners:Add(args[1])
+                Commands.GetCommandOwners("dne-global-owners"):Print()
+                print("To override owners for a specific communication command, use: /owners <owner> <command>")
+                print(" -- Currently registered commands: [" .. StringUtils.Join(Commands.GetCommsPhrases(), ", ") .. "]")
+                print(" -- Reset command overrides with: /owners reset <command>")
+                print(" -- View command overrides with: /owners command <command>")
             end
         end
         Commands.RegisterSlashCommand("owners", Bind_Owners)
