@@ -17,8 +17,6 @@ function Config:SaveConfig() end
 ---Prints the config
 ---@param name string
 function Config:Print(name) end
----@return array sectionNames config section names currently in use
-function Config:GetSectionNames() end
 
 ---@param filePath? string defaults to \config\CharName-Config.json
 ---@param fileSystem? FileSystem
@@ -40,10 +38,6 @@ function Config:new(filePath, fileSystem)
 
     function config:Print()
         TableUtils.Print(ConfigStore.get()[config.filePath])
-    end
-
-    function config:GetSectionNames()
-        return TableUtils.GetKeys(ConfigStore.get()[config.filePath])
     end
 
     -- Create config file if DNE

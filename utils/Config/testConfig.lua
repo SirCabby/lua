@@ -71,13 +71,6 @@ test.Config.GetConfigRoot = function()
     test.assert(TableUtils.Compare(fooObj.foo3, config1:GetConfigRoot().foo3))
 end
 
-test.Config.GetSectionNames = function()
-    local savedNames = config1:GetSectionNames()
-    test.assert(TableUtils.ArrayContains(savedNames, "foo1"))
-    test.assert(TableUtils.ArrayContains(savedNames, "foo2"))
-    test.assert(TableUtils.ArrayContains(savedNames, "foo3"))
-end
-
 test.Config.SaveConfig = function()
     config1:GetConfigRoot().foo1 = foo2Obj
     config1:SaveConfig()
