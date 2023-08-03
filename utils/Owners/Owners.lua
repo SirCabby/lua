@@ -20,10 +20,10 @@ function Owners:Print() end
 ---@return array
 function Owners:GetOwners() end
 
----@param config Config
----@param configLocation string dot-separated object path to owners config storage location -ex: MyClass.key .. "." .. Sub.key
+---@param config Config config owning the configData table
+---@param configData table table to append owners data to
 ---@return Owners
-function Owners:new(config, configLocation)
+function Owners:new(config, configData)
     local owners = {}
 
     ---@param str string
@@ -32,31 +32,16 @@ function Owners:new(config, configLocation)
     end
 
     function owners:GetOwners()
-        local configStorageLocationSplit = StringUtils.Split(configLocation, ".")
-        local locationTraverse = config:GetConfigRoot()
-        for i = 1, #configStorageLocationSplit do
-            if locationTraverse[configStorageLocationSplit[i]] == nil then
-                DebugLog("Adding new Owners location that was not initialized to a table. Location: [" .. StringUtils.Join({ unpack(configStorageLocationSplit, 1, i) }, ".") .. "]")
-                locationTraverse[configStorageLocationSplit[i]] = {}
-            end
-
-            if type(locationTraverse) ~= "table" then
-                error("Owners config location contained a non-table entry.  Unable to save owners config. Location: [" .. StringUtils.Join({ unpack(configStorageLocationSplit, 1, i) }, ".") .. "]")
-            end
-
-            locationTraverse = locationTraverse[configStorageLocationSplit[i]]
-        end
-
         local ownersKey = Owners.key:lower()
-        if locationTraverse[ownersKey] == nil then
-            locationTraverse[ownersKey] = {}
+        if configData[ownersKey] == nil then
+            configData[ownersKey] = {}
         end
 
-        if not TableUtils.IsArray(locationTraverse[ownersKey]) then
+        if not TableUtils.IsArray(configData[ownersKey]) then
             error("Owners config location was not an array")
         end
 
-        return locationTraverse[ownersKey]
+        return configData[ownersKey]
     end
 
     local ownersArray = owners:GetOwners()
