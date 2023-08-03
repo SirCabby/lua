@@ -75,127 +75,132 @@ function CommandConfig.Init(config)
 
         local function Bind_ActiveChannels(...)
             local args = {...} or {}
-            if args ~= nil and #args == 2 then
-                local command = args[2]:lower()
-                if not TableUtils.ArrayContains(Commands.GetCommsPhrases(), command) then
-                    print("(/activechannels <channel type> command <command>) [" .. args[3] .. "] is not a registered command.")
-                    print(" -- Currently registered commands: [" .. StringUtils.Join(Commands.GetCommsPhrases(), ", ") .. "]")
-                else
-                    -- toggle active channels for this command only
-
-                    if args[1]:lower() == "reset" then
-                        if configForCommands[CommandConfig.keys.commandOverrides][command] ~= nil then
-                            configForCommands[CommandConfig.keys.commandOverrides][command][CommandConfig.keys.activeChannels] = nil
-                            CommandConfig._.config:SaveConfig()
-                        end
-                        Commands.SetPhrasePatternOverrides(command, nil)
-                        print("Removed active channel override for command: [" .. command .. "]")
-                        return
-                    end
-
-                    -- init override
-                    if configForCommands[CommandConfig.keys.commandOverrides][command] == nil then
-                        configForCommands[CommandConfig.keys.commandOverrides][command] = {}
-                    end
-                    if configForCommands[CommandConfig.keys.commandOverrides][command][CommandConfig.keys.activeChannels] == nil then
-                        configForCommands[CommandConfig.keys.commandOverrides][command][CommandConfig.keys.activeChannels] = {}
-                    end
-
-                    CommandConfig.ToggleActiveChannel(args[1]:lower(), configForCommands[CommandConfig.keys.commandOverrides][command])
-                    Commands.SetPhrasePatternOverrides(command, CommandConfig.GetPhrasePatterns(configForCommands[CommandConfig.keys.commandOverrides][command]))
-                end
-            elseif args ~= nil and #args == 2 and args[1]:lower() == "command" then
-                local command = args[2]:lower()
-                if not TableUtils.ArrayContains(Commands.GetCommsPhrases(), command) then
-                    print("(/activechannels <channel type> <command>) [" .. args[2] .. "] is not a registered command.")
-                    print(" -- Currently registered commands: [" .. StringUtils.Join(Commands.GetCommsPhrases(), ", ") .. "]")
-                else
-                    print("(/activechannels <command>) Active channels for command [" .. command .. "]:")
-
+            -- /activechannels
+            if args == nil or #args < 1 then
+                print("(/activechannels) Currently active channels: [" .. StringUtils.Join(CommandConfig.GetActiveChannels(), ", ") .. "]")
+                return
+            elseif #args == 1 then
+                -- /activechannels <channel type>
+                if TableUtils.ArrayContains(TableUtils.GetValues(CommandConfig.channelTypes), args[1]:lower()) then
+                    print("(/activechannels " .. args[1] .. "):")
+                    CommandConfig.ToggleActiveChannel(args[1]:lower())
+                    return
+                -- /activechannels <command>
+                elseif TableUtils.ArrayContains(Commands.GetCommsPhrases(), args[1]:lower()) then
+                    local command = args[1]:lower()
                     if configForCommands[CommandConfig.keys.commandOverrides][command] == nil or configForCommands[CommandConfig.keys.commandOverrides][command] == nil or configForCommands[CommandConfig.keys.commandOverrides][command][CommandConfig.keys.activeChannels] == nil then
-                        print(" -- No activechannel overrides for command")
+                        print("(/activechannels ".. command .. ") No activechannel overrides for command [" .. command .. "]")
                     else
-                        print(" -- Currently active channels: [" .. StringUtils.Join(configForCommands[CommandConfig.keys.commandOverrides][command][CommandConfig.keys.activeChannels], ", ") .. "]")
+                        print("(/activechannels " .. command .. ") Currently active channels: [" .. StringUtils.Join(configForCommands[CommandConfig.keys.commandOverrides][command][CommandConfig.keys.activeChannels], ", ") .. "]")
                     end
+                    return
                 end
-            elseif args ~= nil and #args == 1 and args[1]:lower() ~= "help" then
-                CommandConfig.ToggleActiveChannel(args[1]:lower())
-            else
-                print("(/activechannels) Channels used for listening to commands")
-                print("To toggle an active channel, use: /activechannels <channel type>")
-                print(" -- Valid Active Channel Types: [" .. StringUtils.Join(TableUtils.GetValues(CommandConfig.channelTypes), ", ") .. "]")
-                print(" -- Currently active channels: [" .. StringUtils.Join(CommandConfig.GetActiveChannels(), ", ") .. "]")
-                print("To override active channels for a specific communication command, use: /activechannels <channel type> <command>")
-                print(" -- Currently registered commands: [" .. StringUtils.Join(Commands.GetCommsPhrases(), ", ") .. "]")
-                print(" -- Reset command overrides with: /activechannels reset <command>")
-                print(" -- View command overrides with: /activechannels command <command>")
+            -- /activechannels <command> <channel type | reset>
+            elseif #args == 2 then
+                local command = args[1]:lower()
+                local channelType = args[2]:lower()
+
+                if channelType == "reset" then
+                    if configForCommands[CommandConfig.keys.commandOverrides][command] ~= nil then
+                        configForCommands[CommandConfig.keys.commandOverrides][command][CommandConfig.keys.activeChannels] = nil
+                        CommandConfig._.config:SaveConfig()
+                    end
+                    Commands.SetPhrasePatternOverrides(command, nil)
+                    print("(activechannels "..command.." "..channelType..") Removed active channel override for command: [" .. command .. "]")
+                    return
+                end
+
+                -- init override
+                if configForCommands[CommandConfig.keys.commandOverrides][command] == nil then
+                    configForCommands[CommandConfig.keys.commandOverrides][command] = {}
+                end
+                if configForCommands[CommandConfig.keys.commandOverrides][command][CommandConfig.keys.activeChannels] == nil then
+                    configForCommands[CommandConfig.keys.commandOverrides][command][CommandConfig.keys.activeChannels] = {}
+                end
+
+                print("(/activechannels " .. args[1] .. " " .. args[2] .. "):")
+                CommandConfig.ToggleActiveChannel(channelType, configForCommands[CommandConfig.keys.commandOverrides][command])
+                Commands.SetPhrasePatternOverrides(command, CommandConfig.GetPhrasePatterns(configForCommands[CommandConfig.keys.commandOverrides][command]))
+                return
             end
+
+            print("(/activechannels) Channels used for listening to commands")
+            print("To toggle an active channel, use: /activechannels <channel type>")
+            print(" -- Valid Active Channel Types: [" .. StringUtils.Join(TableUtils.GetValues(CommandConfig.channelTypes), ", ") .. "]")
+            print(" -- Currently active channels: [" .. StringUtils.Join(CommandConfig.GetActiveChannels(), ", ") .. "]")
+            print("To override active channels for a specific communication command, use: /activechannels <command> <channel type>")
+            print(" -- Currently registered commands: [" .. StringUtils.Join(Commands.GetCommsPhrases(), ", ") .. "]")
+            print(" -- View command overrides with: /activechannels <command>")
+            print(" -- Reset command overrides with: /activechannels <command> reset")
         end
         Commands.RegisterSlashCommand("activechannels", Bind_ActiveChannels)
 
         local function Bind_Owners(...)
             local args = {...} or {}
-            if args ~= nil and #args == 2 then
-                local command = args[2]:lower()
-                if not TableUtils.ArrayContains(Commands.GetCommsPhrases(), command) then
-                    print("(/owners <owner> command <command>) [" .. args[2] .. "] is not a registered command.")
-                    print(" -- Currently registered commands: [" .. StringUtils.Join(Commands.GetCommsPhrases(), ", ") .. "]")
+
+            -- /owners
+            if args == nil or #args < 1 then
+                print("(/owners):")
+                Commands.GetCommandOwners("dne-global-owners"):Print()
+                return
+            elseif #args == 1 and args[1]:lower() ~= "help" then
+                -- /owners <command>
+                if TableUtils.ArrayContains(Commands.GetCommsPhrases(), args[1]:lower()) then
+                    local command = args[1]:lower()
+                    if configForCommands[CommandConfig.keys.commandOverrides][command] == nil or configForCommands[CommandConfig.keys.commandOverrides][command] == nil or configForCommands[CommandConfig.keys.commandOverrides][command][CommandConfig.keys.owners] == nil then
+                        print("(/owners "..command..") No owners overrides for command")
+                    else
+                        print("(/owners "..command..") Current owners: [" .. StringUtils.Join(configForCommands[CommandConfig.keys.commandOverrides][command][CommandConfig.keys.owners], ", ") .. "]")
+                    end
+                    return
+                -- /owners <name>
                 else
-                    -- toggle owners for this command only
-
-                    if args[1]:lower() == "reset" then
-                        if configForCommands[CommandConfig.keys.commandOverrides][command] ~= nil then
-                            configForCommands[CommandConfig.keys.commandOverrides][command][CommandConfig.keys.owners] = nil
-                            CommandConfig._.config:SaveConfig()
-                        end
-                        Commands.SetCommandOwnersOverrides(command, nil)
-                        print("Removed owner override for command: [" .. command .. "]")
-                        return
-                    end
-
-                    -- init override
-                    if configForCommands[CommandConfig.keys.commandOverrides][command] == nil then
-                        configForCommands[CommandConfig.keys.commandOverrides][command] = {}
-                    end
-
-                    Commands.SetCommandOwnersOverrides(command, configForCommands[CommandConfig.keys.commandOverrides][command])
-                    local owners = Commands.GetCommandOwners(command)
+                    local owners = Commands.GetCommandOwners("dne-global-owners")
+                    print("(/owners " .. args[1] .. "):")
                     if owners:IsOwner(args[1]) then
                         owners:Remove(args[1])
                     else
                         owners:Add(args[1])
                     end
+                    return
                 end
-            elseif args ~= nil and #args == 2 and args[1]:lower() == "command" then
-                local command = args[2]:lower()
-                if not TableUtils.ArrayContains(Commands.GetCommsPhrases(), command) then
-                    print("(/owners <owner> <command>) [" .. args[2] .. "] is not a registered command.")
-                    print(" -- Currently registered commands: [" .. StringUtils.Join(Commands.GetCommsPhrases(), ", ") .. "]")
-                else
-                    print("(/owners command <command>) Owners for command [" .. command .. "]:")
+            elseif #args == 2 and TableUtils.ArrayContains(Commands.GetCommsPhrases(), args[1]:lower()) then
+                local command = args[1]:lower()
+                local name = args[2]:lower()
 
-                    if configForCommands[CommandConfig.keys.commandOverrides][command] == nil or configForCommands[CommandConfig.keys.commandOverrides][command] == nil or configForCommands[CommandConfig.keys.commandOverrides][command][CommandConfig.keys.owners] == nil then
-                        print(" -- No owners overrides for command")
-                    else
-                        print(" -- Current owners: [" .. StringUtils.Join(configForCommands[CommandConfig.keys.commandOverrides][command][CommandConfig.keys.owners], ", ") .. "]")
+                if name == "reset" then
+                    if configForCommands[CommandConfig.keys.commandOverrides][command] ~= nil then
+                        configForCommands[CommandConfig.keys.commandOverrides][command][CommandConfig.keys.owners] = nil
+                        CommandConfig._.config:SaveConfig()
                     end
+                    Commands.SetCommandOwnersOverrides(command, nil)
+                    print("(/owners "..command.." "..name..") Removed owner override for command: [" .. command .. "]")
+                    return
                 end
-            elseif args ~= nil and #args == 1 and args[1] ~= "help" then
-                local owners = Commands.GetCommandOwners("dne-global-owners")
-                if owners:IsOwner(args[1]) then
-                    owners:Remove(args[1])
+
+                -- init override
+                if configForCommands[CommandConfig.keys.commandOverrides][command] == nil then
+                    configForCommands[CommandConfig.keys.commandOverrides][command] = {}
+                end
+
+                Commands.SetCommandOwnersOverrides(command, configForCommands[CommandConfig.keys.commandOverrides][command])
+                local owners = Commands.GetCommandOwners(command)
+                print("(/owners "..command.." "..name.."):")
+                if owners:IsOwner(name) then
+                    owners:Remove(name)
                 else
-                    owners:Add(args[1])
+                    owners:Add(name)
                 end
-            else
-                print("(/owners) Manage owners to take commands from")
-                print("To add/remove owners, use: /owners name")
-                Commands.GetCommandOwners("dne-global-owners"):Print()
-                print("To override owners for a specific communication command, use: /owners <owner> <command>")
-                print(" -- Currently registered commands: [" .. StringUtils.Join(Commands.GetCommsPhrases(), ", ") .. "]")
-                print(" -- Reset command overrides with: /owners reset <command>")
-                print(" -- View command overrides with: /owners command <command>")
+                return
             end
+
+            print("(/owners) Manage owners to take commands from")
+            print("To add/remove owners, use: /owners <name>")
+            print("To override owners for a specific communication command, use: /owners <command> <owner>")
+            print(" -- Currently registered commands: [" .. StringUtils.Join(Commands.GetCommsPhrases(), ", ") .. "]")
+            print(" -- View command overrides with: /owners <command>")
+            print(" -- Reset command overrides with: /owners <command> reset")
+            Commands.GetCommandOwners("dne-global-owners"):Print()
         end
         Commands.RegisterSlashCommand("owners", Bind_Owners)
 
@@ -215,15 +220,15 @@ end
 function CommandConfig.ToggleActiveChannel(channel, configLocation)
     local generalConfig = configLocation or getConfigSection()
     if not TableUtils.ArrayContains(TableUtils.GetValues(CommandConfig.channelTypes), channel) then
-        print("Invalid Channel Type. Valid Channel Types: [" .. StringUtils.Join(TableUtils.GetValues(CommandConfig.channelTypes), ", ") .. "]")
+        print(" -- Invalid Channel Type [" .. channel .. "]. Valid Channel Types: [" .. StringUtils.Join(TableUtils.GetValues(CommandConfig.channelTypes), ", ") .. "]")
         return
     end
     if TableUtils.ArrayContains(generalConfig[CommandConfig.keys.activeChannels], channel) then
         TableUtils.RemoveByValue(generalConfig[CommandConfig.keys.activeChannels], channel)
-        print("Removed [" .. channel .. "] as active channel")
+        print(" -- Removed [" .. channel .. "] as active channel")
     else
         generalConfig[CommandConfig.keys.activeChannels][#generalConfig[CommandConfig.keys.activeChannels] + 1] = channel
-        print("Added [" .. channel .. "] to active channels")
+        print(" -- Added [" .. channel .. "] to active channels")
     end
     CommandConfig._.config:SaveConfig()
     CommandConfig.UpdateEventChannels()
