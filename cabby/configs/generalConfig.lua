@@ -163,13 +163,16 @@ function GeneralConfig.Init(config)
         end
         Commands.RegisterSlashCommand("restart", Bind_Restart)
 
+        local function tellToMeHelp()
+            print("(event "..GeneralConfig.eventIds.tellToMe..") Forwards any received tells that were not part of an issued command to the broadcast channel")
+        end
         local function event_TellToMe(_, speaker, message)
             local tellTo = GeneralConfig.GetRelayTellsTo()
             if tellTo ~= "" and tellTo ~= nil and tellTo ~= speaker and mq.TLO.SpawnCount("npc " .. speaker)() < 1 then
                 mq.cmd("/tell " .. tellTo .. " " .. speaker .. " told me: " .. message)
             end
         end
-        Commands.ReRegisterOnEventUpdates(GeneralConfig.eventIds.tellToMe, "#1# tells you, '#2#'", event_TellToMe)
+        Commands.RegisterEvent(Event.new(GeneralConfig.eventIds.tellToMe, "#1# tells you, '#2#'", event_TellToMe, tellToMeHelp, true))
 
         GeneralConfig._.isInit = true
     end

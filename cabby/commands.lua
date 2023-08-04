@@ -20,12 +20,11 @@ local Commands = {
                 ownersOverrides = {} -- { <command id> = { array of owners }}
             },
             slashcommands = {
-                registeredSlashCommands = {}, -- { "/cmd1", "/cmd2" }
+                registeredSlashCommands = {} -- { "/cmd1", "/cmd2" }
             },
             events = {
-                registeredEvents = {}, -- { "event1", "event2" }
-                ownersOverrides = {}, -- { <command id> = { array of owners }}
-                reRegisterOnEventUpdates = {} -- { id = { phrase = "", eventFunc = function } }
+                registeredEvents = {}, -- { <event id> = <event> }
+                ownersOverrides = {} -- { <event id> = { array of owners }}
             }
         }
     }
@@ -76,6 +75,13 @@ function Commands.Init(config, owners)
                     for _, command in pairs(Commands._.registrations.commands.registeredCommands) do
                         if command.phrase == arg then
                             command.helpFunction()
+                            return
+                        end
+                    end
+                elseif TableUtils.ArrayContains(Commands.GetEventIds(), arg) then
+                    for _, event in pairs(Commands._.registrations.events.registeredEvents) do
+                        if event.id == arg then
+                            event.helpFunction()
                             return
                         end
                     end
@@ -153,9 +159,13 @@ local function UpdateCommChannels()
     end
 
     -- These events are intentionally added last to act as catchalls for similar event patterns
-    for id, event in pairs(Commands._.registrations.events.reRegisterOnEventUpdates) do
-        mq.unevent(id)
-        mq.event(id, event.phrase, event.eventFunc)
+    for id, event in pairs(Commands._.registrations.events.registeredEvents) do
+        ---@type Event
+        event = event
+        if event.reregister then
+            mq.unevent(id)
+            mq.event(id, event.phrase, event.eventFunction)
+        end
     end
 end
 
@@ -184,24 +194,37 @@ end
 function Commands.GetCommandOwners(phrase)
     local ownersOverrides = Commands._.registrations.commands.ownersOverrides[phrase]
     if ownersOverrides ~= nil then
-        return Owners:new(Commands._.config, Commands._.registrations.commands.ownersOverrides[phrase])
+        return Owners:new(Commands._.config, ownersOverrides)
     end
     return Commands._.owners
 end
 
----Adds event to re-register on event updates to preserve ordering of fallthrough events
----@param id string
----@param phrase string
----@param eventFunc function
-function Commands.ReRegisterOnEventUpdates(id, phrase, eventFunc)
-    if not TableUtils.ArrayContains(TableUtils.GetKeys(Commands._.registrations.events.reRegisterOnEventUpdates), id) then
-        Commands._.registrations.events.reRegisterOnEventUpdates[id] = {
-            phrase = phrase,
-            eventFunc = eventFunc
-        }
+---@param event Event
+function Commands.RegisterEvent(event)
+    if not TableUtils.ArrayContains(TableUtils.GetKeys(Commands._.registrations.events.registeredEvents), event.id) then
+        Commands._.registrations.events.registeredEvents[event.id] = event
+        mq.event(event.id, event.phrase, event.eventFunction)
     else
-        print("Cannot re-register same event Id: ["..id.."]")
+        print("Cannot re-register same event Id: ["..event.id.."]")
     end
+end
+
+function Commands.GetEventIds()
+    local events = {}
+    for _, event in pairs(Commands._.registrations.events.registeredEvents) do
+        table.insert(events, event.id)
+    end
+    return events
+end
+
+---@param eventId string
+---@return Owners owners
+function Commands.GetEventOwners(eventId)
+    local ownersOverrides = Commands._.registrations.events.ownersOverrides[eventId]
+    if ownersOverrides ~= nil then
+        return Owners:new(Commands._.config, ownersOverrides)
+    end
+    return Commands._.owners
 end
 
 return Commands
