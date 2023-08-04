@@ -42,10 +42,10 @@ function Commands.Init(config, owners)
 
         local function chelpPrint()
             print("(/chelp) Cabby Help menu")
-            print(" -- Pick a help topic. Options: [Cvc, SlashCmds, Comms]")
-            print("Additional options include any registered Comm or Slash Command listed in SlashCmds or Comms")
+            print(" -- Pick a help topic. Options: [CES, Comms, Events, SlashCmds]")
+            print("Additional options include any registered Comm, Event, or Slash Command listed in Comms, Events, or SlashCmds")
             print(" -- Example: /chelp activechannels")
-            print("To learn more about the differences between SlashCmds vs Comms, use /chelp cvc")
+            print("To learn more about the differences between Communications, Events, and Slash Commands, use /chelp ces")
         end
         local function Bind_Chelp(...)
             local args = {...} or {}
@@ -53,8 +53,8 @@ function Commands.Init(config, owners)
                 chelpPrint()
             else
                 arg = args[1]:lower()
-                if arg == "cvc" then
-                    print("(/chelp cvc) Explanation of Comms vs Slash Commands:")
+                if arg == "ces" then
+                    print("(/chelp ces) Explanation of Communications, Events, and Slash Commands:")
                     print("Comms (Communications) are leveraged by speaking in active channels for other listeners to pick up")
                     print(" -- /<channel> <command>, For example: /bc followme")
                     print(" -- To manage active channels, use /activechannels")
@@ -66,6 +66,10 @@ function Commands.Init(config, owners)
                     local comms = Commands.GetCommsPhrases()
                     print("Available Communication Commands: [" .. StringUtils.Join(comms, ", ") .. "]")
                     print("To learn more about a specific command, use /chelp <command>")
+                elseif arg == "events" then
+                    local events = Commands.GetEventIds()
+                    print("Available Events: [" .. StringUtils.Join(events, ", ") .. "]")
+                    print("To learn more about a specific event, use /chelp <event>")
                 elseif arg == "slashcmds" then
                     print("Available Slash Commands: [" .. StringUtils.Join(Commands._.registrations.slashcommands.registeredSlashCommands, ", ") .. "]")
                     print("To learn more about a specific command, use /chelp <command>")
@@ -80,7 +84,7 @@ function Commands.Init(config, owners)
                     end
                 elseif TableUtils.ArrayContains(Commands.GetEventIds(), arg) then
                     for _, event in pairs(Commands._.registrations.events.registeredEvents) do
-                        if event.id == arg then
+                        if event.id:lower() == arg:lower() then
                             event.helpFunction()
                             return
                         end
