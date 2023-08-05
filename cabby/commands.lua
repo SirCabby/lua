@@ -1,7 +1,7 @@
 local mq = require("mq")
 local Debug = require("utils.Debug.Debug")
 ---@type Owners
-local Owners = require("cabby.Owners")
+local Owners = require("cabby.owners")
 local StringUtils = require("utils.StringUtils.StringUtils")
 local TableUtils = require("utils.TableUtils.TableUtils")
 
