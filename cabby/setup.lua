@@ -8,7 +8,7 @@ local DebugConfig = require("cabby.configs.debugConfig")
 local FollowState = require("cabby.states.followState")
 local GeneralConfig = require("cabby.configs.generalConfig")
 ---@type Owners
-local Owners = require("utils.Owners.Owners")
+local Owners = require("cabby.Owners")
 
 local Setup = {
     key = "Setup",
