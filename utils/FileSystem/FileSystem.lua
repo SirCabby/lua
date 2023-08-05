@@ -1,6 +1,5 @@
 local PackageMan = require("mq/PackageMan")
 local Debug = require("utils.Debug.Debug")
-local lfs = PackageMan.Require("luafilesystem", "lfs")
 local StringUtils = require("utils.StringUtils.StringUtils")
 
 ---@class FileSystem
@@ -10,6 +9,13 @@ local function DebugLog(str)
     Debug.Log(FileSystem.key, str)
 end
 
+local function getLfs()
+    if FileSystem.lfs == nil then
+        FileSystem.lfs = PackageMan.Require("luafilesystem", "lfs")
+    end
+    return FileSystem.lfs
+end
+
 --- Find a file based on the root directory
 ---@param root string: absolute file path to root folder to search from
 ---@param fileName string: name of the file to find, including extension
@@ -17,6 +23,7 @@ end
 ---@return string: file path of found file, empty string if not
 function FileSystem.FindFile(root, fileName, isRecursive)
     DebugLog("Finding file [" .. fileName .. "] recursively? " .. tostring(isRecursive) .. ", in root: " .. root)
+    local lfs = getLfs()
 	for entity in lfs.dir(root) do
 		if entity ~= "." and entity ~= ".." and entity ~= ".git" and entity ~= ".vscode" then
             local fullPath = FileSystem.PathJoin(root, entity)
@@ -44,6 +51,7 @@ end
 ---@return array: array of found files
 function FileSystem.FindAllFiles(root, searchText, isRecursive)
     local result = {}
+    local lfs = getLfs()
     DebugLog("Finding files matching [" .. searchText .. "] recursively? " .. tostring(isRecursive) .. ", in root: " .. root)
 	for entity in lfs.dir(root) do
 		if entity ~= "." and entity ~= ".." and entity ~= ".git" and entity ~= ".vscode" then
@@ -70,7 +78,7 @@ end
 ---@param filePath string absolute path
 ---@return boolean
 function FileSystem.FileExists(filePath)
-    local mode = lfs.attributes(filePath, "mode")
+    local mode = getLfs().attributes(filePath, "mode")
     DebugLog("Does file exist? " .. tostring(mode == "file") .. ": " .. filePath)
     return mode == "file"
 end
