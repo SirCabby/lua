@@ -169,7 +169,7 @@ function FollowState.Check()
 
         -- Signal the first time through loop to setup the timer and reference loc
         if not FollowState._.checkingStuck then
-            FollowState._.currentActionTimer = Timer:new(5)
+            FollowState._.currentActionTimer = Timer:new(5000)
             UpdateLastLoc()
             FollowState._.checkingStuck = true
             return false
