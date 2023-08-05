@@ -8,7 +8,7 @@ local function DebugLog(str)
 end
 
 ---@param str string
----@param delimiter string|nil
+---@param delimiter string|nil defaults to space
 ---@return table - Array of split string
 function StringUtils.Split(str, delimiter)
     delimiter = delimiter or " "
