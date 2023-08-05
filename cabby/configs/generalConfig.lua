@@ -58,13 +58,19 @@ local function DebugLog(str)
 end
 
 local function initAndValidate()
+    local taint = false
     if GeneralConfig._.config:GetConfigRoot()[GeneralConfig.key] == nil then
         DebugLog("General Section was not set, updating...")
         GeneralConfig._.config:GetConfigRoot()[GeneralConfig.key] = {}
+        taint = true
     end
     if GeneralConfig._.config:GetConfigRoot()[GeneralConfig.key][GeneralConfig.keys.version] == nil then
         DebugLog("General Version was not set, updating...")
         GeneralConfig._.config:GetConfigRoot()[GeneralConfig.key][GeneralConfig.keys.version] = "1"
+        taint = true
+    end
+    if taint then
+        GeneralConfig._.config:SaveConfig()
     end
 end
 
@@ -80,7 +86,6 @@ function GeneralConfig.Init(config)
 
         -- Init any keys that were not setup
         initAndValidate()
-        GeneralConfig._.config:SaveConfig()
 
         -- Events
 

@@ -27,25 +27,34 @@ end
 
 local function initAndValidate()
     local configData = CommandConfig._.config:GetConfigRoot()
+    local taint = false
     if configData[CommandConfig.key] == nil then
         DebugLog("CommandConfig Section was not set, updating...")
         configData[CommandConfig.key] = {}
+        taint = true
     end
     if configData[CommandConfig.key][CommandConfig.keys.activeChannels] == nil then
         DebugLog("Active Channels were not set, updating...")
         configData[CommandConfig.key][CommandConfig.keys.activeChannels] = {}
+        taint = true
     end
     if configData[CommandConfig.key][CommandConfig.keys.owners] == nil then
         DebugLog("Owners were not set, updating...")
         configData[CommandConfig.key][CommandConfig.keys.owners] = {}
+        taint = true
     end
     if configData[CommandConfig.key][CommandConfig.keys.commandOverrides] == nil then
         DebugLog("CommandOverrides were not set, updating...")
         configData[CommandConfig.key][CommandConfig.keys.commandOverrides] = {}
+        taint = true
     end
     if configData[CommandConfig.key][CommandConfig.keys.eventOverrides] == nil then
         DebugLog("EventOverrides were not set, updating...")
         configData[CommandConfig.key][CommandConfig.keys.eventOverrides] = {}
+        taint = true
+    end
+    if taint then
+        CommandConfig._.config:SaveConfig()
     end
 
     for command, overrides in pairs(configData[CommandConfig.key][CommandConfig.keys.commandOverrides]) do
@@ -78,7 +87,6 @@ function CommandConfig.Init(config)
         -- Init any keys that were not setup
         initAndValidate()
         local configForCommands = getConfigSection()
-        CommandConfig._.config:SaveConfig()
 
         -- Validation reminders
 

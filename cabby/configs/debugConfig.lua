@@ -45,7 +45,6 @@ function DebugConfig.Init(config)
             Debug.SetToggle(k, v)
         end
         DebugConfig._.config:GetConfigRoot()[DebugConfig.key] = Debug._toggles
-        config:SaveConfig()
 
         local function Bind_Debug(...)
             local args = {...} or {}
