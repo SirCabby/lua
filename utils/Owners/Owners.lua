@@ -38,6 +38,7 @@ function Owners:new(config, configData)
         end
 
         if not TableUtils.IsArray(configData[ownersKey]) then
+            TableUtils.Print(configData)
             error("Owners config location was not an array")
         end
 
@@ -75,8 +76,6 @@ function Owners:new(config, configData)
     function owners:Print()
         print("My Owners: [" .. StringUtils.Join(ownersArray, ", ") .. "]")
     end
-
-    config:SaveConfig()
 
     return owners
 end
