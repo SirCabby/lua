@@ -41,10 +41,11 @@ luac.out
 
 # default folders
 examples
-integration-tests
+IntegrationTests/*
 mq
 .vscode/*
 
 # experimentation file to omit
 test.lua
 Debug.log
+
