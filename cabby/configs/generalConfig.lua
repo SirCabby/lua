@@ -1,4 +1,5 @@
 local mq = require("mq")
+local Broadcast = require("cabby.broadcast")
 local Command = require("cabby.command")
 local Commands = require("cabby.commands")
 local Debug = require("utils.Debug.Debug")
@@ -100,19 +101,15 @@ function GeneralConfig.Init(config)
             print("(inspect <slot>) Slot types: [" .. StringUtils.Join(GeneralConfig.equipmentSlots, ", ") .. "]")
         end
         local function event_InspectRequest(_, speaker, message)
-            local function broadcastHelp()
-                mq.cmd("/tell "..speaker.."(inspect <slot>) Slot types: [" .. StringUtils.Join(GeneralConfig.equipmentSlots, ", ") .. "]")
-            end
-
-            if Commands.GetCommandOwners("inspect #2#"):IsOwner(speaker) then
+            if Commands.GetCommandOwners("inspect"):IsOwner(speaker) then
                 local args = StringUtils.Split(message, " ")
 
                 if #args == 1 and TableUtils.ArrayContains(GeneralConfig.equipmentSlots, args[1]:lower()) then
-                    mq.cmd("/tell "..speaker.." "..args[1]:lower()..": "..mq.TLO.Me.Inventory(args[1]).ItemLink("CLICKABLE")())
+                    Broadcast.Respond(_, speaker, args[1]:lower()..": "..mq.TLO.Me.Inventory(args[1]).ItemLink("CLICKABLE")())
                     return
                 end
 
-                broadcastHelp()
+                Broadcast.Respond(_, speaker, "(inspect <slot>) Slot types: [" .. StringUtils.Join(GeneralConfig.equipmentSlots, ", ") .. "]")
             end
         end
         Commands.RegisterCommEvent(Command.new(GeneralConfig.eventIds.inspectRequest, "inspect #2#", event_InspectRequest, inspectHelp))
@@ -170,6 +167,7 @@ function GeneralConfig.Init(config)
             local tellTo = GeneralConfig.GetRelayTellsTo()
             if tellTo ~= "" and tellTo ~= nil and tellTo ~= speaker and mq.TLO.SpawnCount("npc " .. speaker)() < 1 then
                 mq.cmd("/tell " .. tellTo .. " " .. speaker .. " told me: " .. message)
+                Broadcast.Message(Broadcast.channelTypes.bc, speaker .. " told me: " .. message)
             end
         end
         Commands.RegisterEvent(Event.new(GeneralConfig.eventIds.tellToMe, "#1# tells you, '#2#'", event_TellToMe, tellToMeHelp, true))

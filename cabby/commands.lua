@@ -77,7 +77,7 @@ function Commands.Init(config, owners)
                     mq.cmd("/" .. arg .. " help")
                 elseif TableUtils.ArrayContains(Commands.GetCommsPhrases(), arg) then
                     for _, command in pairs(Commands._.registrations.commands.registeredCommands) do
-                        if command.phrase == arg then
+                        if StringUtils.Split(command.phrase)[1] == arg then
                             command.helpFunction()
                             return
                         end
@@ -118,7 +118,7 @@ end
 function Commands.GetCommsPhrases()
     local comms = {}
     for _, command in pairs(Commands._.registrations.commands.registeredCommands) do
-        table.insert(comms, command.phrase)
+        table.insert(comms, StringUtils.Split(command.phrase)[1])
     end
     return comms
 end
@@ -131,8 +131,8 @@ local function UpdateCommEvent(command)
     command.registeredEvents = {}
 
     local patternArray
-    if Commands._.registrations.commands.phrasePatternOverrides[command.phrase] ~= nil then
-        patternArray = Commands._.registrations.commands.phrasePatternOverrides[command.phrase]
+    if Commands._.registrations.commands.phrasePatternOverrides[StringUtils.Split(command.phrase)[1]] ~= nil then
+        patternArray = Commands._.registrations.commands.phrasePatternOverrides[StringUtils.Split(command.phrase)[1]]
     else
         patternArray = Commands._.registrations.commands.defaultChannelPatterns
     end
@@ -183,6 +183,7 @@ end
 ---@param phrase string
 ---@param phrasePatternOverrides array?
 function Commands.SetPhrasePatternOverrides(phrase, phrasePatternOverrides)
+    phrase = StringUtils.Split(phrase)[1]
     Commands._.registrations.commands.phrasePatternOverrides[phrase] = phrasePatternOverrides
     UpdateCommChannels()
 end
@@ -190,12 +191,14 @@ end
 ---@param phrase string
 ---@param ownersOverrides array?
 function Commands.SetCommandOwnersOverrides(phrase, ownersOverrides)
+    phrase = StringUtils.Split(phrase)[1]
     Commands._.registrations.commands.ownersOverrides[phrase] = ownersOverrides
 end
 
 ---@param phrase string
 ---@return Owners owners
 function Commands.GetCommandOwners(phrase)
+    phrase = StringUtils.Split(phrase)[1]
     local ownersOverrides = Commands._.registrations.commands.ownersOverrides[phrase]
     if ownersOverrides ~= nil then
         return Owners:new(Commands._.config, ownersOverrides)
@@ -207,16 +210,16 @@ end
 function Commands.RegisterEvent(event)
     if not TableUtils.ArrayContains(TableUtils.GetKeys(Commands._.registrations.events.registeredEvents), event.id) then
         Commands._.registrations.events.registeredEvents[event.id] = event
-        mq.event(event.id, event.phrase, event.eventFunction)
+        mq.event(event.id:lower(), event.phrase, event.eventFunction)
     else
-        print("Cannot re-register same event Id: ["..event.id.."]")
+        print("Cannot re-register same event Id: ["..event.id:lower().."]")
     end
 end
 
 function Commands.GetEventIds()
     local events = {}
     for _, event in pairs(Commands._.registrations.events.registeredEvents) do
-        table.insert(events, event.id)
+        table.insert(events, event.id:lower())
     end
     return events
 end
@@ -224,11 +227,19 @@ end
 ---@param eventId string
 ---@return Owners owners
 function Commands.GetEventOwners(eventId)
+    eventId = eventId:lower()
     local ownersOverrides = Commands._.registrations.events.ownersOverrides[eventId]
     if ownersOverrides ~= nil then
         return Owners:new(Commands._.config, ownersOverrides)
     end
     return Commands._.owners
+end
+
+---@param eventId string
+---@param ownersOverrides array?
+function Commands.SetEventOwnersOverrides(eventId, ownersOverrides)
+    eventId = eventId:lower()
+    Commands._.registrations.events.ownersOverrides[eventId] = ownersOverrides
 end
 
 return Commands
