@@ -1,6 +1,7 @@
-local Commands = require("cabby.commands")
 local Debug = require("utils.Debug.Debug")
 local TableUtils = require("utils.TableUtils.TableUtils")
+
+local Commands = require("cabby.commands.commands")
 
 ---@class DebugConfig
 local DebugConfig = {

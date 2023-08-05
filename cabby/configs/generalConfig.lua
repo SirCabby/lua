@@ -1,11 +1,12 @@
 local mq = require("mq")
-local Broadcast = require("cabby.broadcast")
-local Command = require("cabby.command")
-local Commands = require("cabby.commands")
 local Debug = require("utils.Debug.Debug")
-local Event = require("cabby.event")
 local StringUtils = require("utils.StringUtils.StringUtils")
 local TableUtils = require("utils.TableUtils.TableUtils")
+
+local Broadcast = require("cabby.commands.broadcast")
+local Command = require("cabby.commands.command")
+local Commands = require("cabby.commands.commands")
+local Event = require("cabby.commands.event")
 
 ---@class GeneralConfig
 local GeneralConfig = {

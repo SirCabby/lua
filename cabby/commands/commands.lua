@@ -1,9 +1,10 @@
 local mq = require("mq")
 local Debug = require("utils.Debug.Debug")
----@type Owners
-local Owners = require("Owners")
 local StringUtils = require("utils.StringUtils.StringUtils")
 local TableUtils = require("utils.TableUtils.TableUtils")
+
+---@type Owners
+local Owners = require("cabby.commands.owners")
 
 ---@class Commands
 local Commands = {

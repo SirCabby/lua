@@ -1,8 +1,9 @@
 local mq = require("mq")
-local Command = require("cabby.command")
-local Commands = require("cabby.commands")
 local Debug = require("utils.Debug.Debug")
 local Timer = require("utils.Timer.Timer")
+
+local Command = require("cabby.commands.command")
+local Commands = require("cabby.commands.commands")
 
 ---@class FollowState
 local FollowState = {

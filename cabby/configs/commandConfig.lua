@@ -1,8 +1,9 @@
-local Broadcast = require("cabby.broadcast")
-local Commands = require("cabby.commands")
 local Debug = require("utils.Debug.Debug")
 local StringUtils = require("utils.StringUtils.StringUtils")
 local TableUtils = require("utils.TableUtils.TableUtils")
+
+local Broadcast = require("cabby.commands.broadcast")
+local Commands = require("cabby.commands.commands")
 
 ---@class CommandConfig
 local CommandConfig = {

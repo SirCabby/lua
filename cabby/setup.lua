@@ -1,14 +1,15 @@
 local mq = require("mq")
-local CommandConfig = require("cabby.configs.commandConfig")
-local Commands = require("cabby.commands")
 ---@type Config
 local Config = require("utils.Config.Config")
 local Debug = require("utils.Debug.Debug")
+
+local CommandConfig = require("cabby.configs.commandConfig")
 local DebugConfig = require("cabby.configs.debugConfig")
-local FollowState = require("cabby.states.followState")
 local GeneralConfig = require("cabby.configs.generalConfig")
+local Commands = require("cabby.commands.commands")
 ---@type Owners
-local Owners = require("Owners")
+local Owners = require("cabby.commands.owners")
+local FollowState = require("cabby.states.followState")
 
 local Setup = {
     key = "Setup",
