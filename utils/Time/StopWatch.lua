@@ -11,13 +11,16 @@ local function DebugLog(str)
     Debug.Log(StopWatch.key, str)
 end
 
----@param startNow boolean
+---@param startNow boolean? defaults to false
 ---@return StopWatch stopwatch 
 function StopWatch:new(startNow)
     local sw = {}
     setmetatable(sw, self)
     self.__index = self
 
+    if startNow == nil then
+        startNow = false
+    end
     self:reset()
     if startNow then
         self:resume()
