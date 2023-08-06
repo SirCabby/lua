@@ -2,7 +2,6 @@ local mq = require("mq")
 local test = require("IntegrationTests.mqTest")
 
 local Debug = require("utils.Debug.Debug")
----@type Stack
 local Stack = require("utils.Stack.Stack")
 local TableUtils = require("utils.TableUtils.TableUtils")
 
@@ -24,10 +23,10 @@ local pushStuff2 = { "2p" }
 
 -- TESTS
 test.Stack.new = function()
-    s1 = Stack:new()
-    s2 = Stack:new()
-    s1Stack = s1._stack
-    s2Stack = s2._stack
+    s1 = Stack.new()
+    s2 = Stack.new()
+    s1Stack = s1._.stack
+    s2Stack = s2._.stack
 end
 
 test.Stack.Push_oneStack = function()

@@ -1,46 +1,49 @@
+---@diagnostic disable: undefined-field
 local Debug = require("utils.Debug.Debug")
 
 ---@class Stack
 local Stack = { author = "judged", key = "Stack" }
 
----@meta Stack
----@param obj any nil will be converted to string "nil"
----@return Stack - self
-function Stack:Push(obj) end
----@param index? number 
----@return any
-function Stack:Pop(index) end
----@return any 
-function Stack:Peek() end
-
-function Stack:new()
-    local stack = { _stack = {} }
-
-    local function DebugLog(str)
-        Debug.Log(Stack.key, str)
+Stack.__index = Stack
+setmetatable(Stack, {
+    __call = function (cls, ...)
+        return cls.new(...)
     end
+})
 
-    function stack:Push(obj)
-        if obj == nil then obj = "nil" end
-        DebugLog("Pushed to top of stack: " .. tostring(obj))
-        table.insert(stack._stack, obj)
-        return stack
-    end
+function Stack.new()
+    local self = setmetatable({}, Stack)
 
-    function stack:Pop(index)
-        index = index or #stack._stack
-        local popped = table.remove(stack._stack, index)
-        DebugLog("Popped from stack at index [" .. tostring(index) .. "]: " .. tostring(popped))
-        return popped
-    end
+    self._ = {}
+    self._.stack = {}
 
-    function stack:Peek()
-        local peeked = stack._stack[#stack._stack]
-        DebugLog("Peeked from top of stack: " .. tostring(peeked))
-        return peeked
-    end
+    return self
+end
 
-    return stack
+local function DebugLog(str)
+    Debug.Log(Stack.key, str)
+end
+
+---@param obj any
+---@return Stack self fluent for fast pushing
+function Stack:Push(obj)
+    if obj == nil then obj = "nil" end
+    DebugLog("Pushed to top of stack: " .. tostring(obj))
+    table.insert(self._.stack, obj)
+    return self
+end
+
+function Stack:Pop(index)
+    index = index or #self._.stack
+    local popped = table.remove(self._.stack, index)
+    DebugLog("Popped from stack at index [" .. tostring(index) .. "]: " .. tostring(popped))
+    return popped
+end
+
+function Stack:Peek()
+    local peeked = self._.stack[#self._.stack]
+    DebugLog("Peeked from top of stack: " .. tostring(peeked))
+    return peeked
 end
 
 return Stack
