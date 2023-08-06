@@ -1,15 +1,13 @@
 local mq = require("mq")
 local test = require("IntegrationTests.mqTest")
 
-local Time = require("utils.Time.Time")
 local Timer = require("utils.Time.Timer")
 local StopWatch = require("utils.Time.StopWatch")
 
 mq.cmd("/mqclear")
 
 test.Timer = function()
-    local timer = Timer:new(400)
-
+    local timer = Timer.new(400)
     test.is_false(timer:timer_expired())
     mq.delay(50)
     test.is_false(timer:timer_expired())

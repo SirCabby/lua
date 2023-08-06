@@ -10,6 +10,13 @@ local Timer = {
     key = "Timer"
 }
 
+Timer.__index = Timer
+setmetatable(Timer, {
+    __call = function (cls, ...)
+        return cls.new(...)
+    end,
+})
+
 local function DebugLog(str)
     Debug.Log(Timer.key, str)
 end
@@ -17,15 +24,15 @@ end
 ---Initialize a new timer instance
 ---@param millisUntilExpiration number The number of milliseconds after the start time which the timer will be expired
 ---@return Timer timer
-function Timer:new(millisUntilExpiration)
-    local t = {}
-    setmetatable(t, self)
-    self.__index = self
+function Timer.new(millisUntilExpiration)
+    local self = setmetatable({}, Timer)
+
     self.start_time = 0
     self.millisUntilExpiration = millisUntilExpiration
     DebugLog("Timer created with expiration: " .. tostring(millisUntilExpiration))
     self:reset()
-    return t
+
+    return self
 end
 
 ---Reset the start time value to the current time
