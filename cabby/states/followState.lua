@@ -53,7 +53,6 @@ end
 
 function FollowState.Init()
     if not FollowState._.isInit then
-
         local function event_FollowMe(_, speaker)
             if Commands.GetCommandOwners("followme"):IsOwner(speaker) then
                 DebugLog("Activating followme of speaker [" .. speaker .. "]")
@@ -117,6 +116,11 @@ function FollowState.Init()
 
         FollowState._.isInit = true
     end
+
+    ---@type State
+---@diagnostic disable-next-line: assign-type-mismatch
+    local followState = FollowState
+    return followState
 end
 
 ---@return boolean hasAction true if there's action to take, false to continue to next state
