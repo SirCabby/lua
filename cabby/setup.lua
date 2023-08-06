@@ -1,5 +1,5 @@
 local mq = require("mq")
----@type Config
+
 local Config = require("utils.Config.Config")
 local Debug = require("utils.Debug.Debug")
 
@@ -7,7 +7,6 @@ local CommandConfig = require("cabby.configs.commandConfig")
 local DebugConfig = require("cabby.configs.debugConfig")
 local GeneralConfig = require("cabby.configs.generalConfig")
 local Commands = require("cabby.commands.commands")
----@type Owners
 local Owners = require("cabby.commands.owners")
 local FollowState = require("cabby.states.followState")
 
@@ -65,7 +64,7 @@ end
 local function ConfigSetup(configFilePath)
     PluginSetup()
     Setup.config = Config.new(configFilePath)
-    Setup.owners = Owners:new(Setup.config, Setup.config:GetConfigRoot()[CommandConfig.key])
+    Setup.owners = Owners.new(Setup.config, Setup.config:GetConfigRoot()[CommandConfig.key])
     Commands.Init(Setup.config, Setup.owners)
     GeneralConfig.Init(Setup.config)
     DebugConfig.Init(Setup.config)

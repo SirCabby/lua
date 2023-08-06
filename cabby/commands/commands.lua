@@ -202,7 +202,7 @@ function Commands.GetCommandOwners(phrase)
     phrase = StringUtils.Split(phrase)[1]
     local ownersOverrides = Commands._.registrations.commands.ownersOverrides[phrase]
     if ownersOverrides ~= nil then
-        return Owners:new(Commands._.config, ownersOverrides)
+        return Owners.new(Commands._.config, ownersOverrides)
     end
     return Commands._.owners
 end
@@ -231,7 +231,7 @@ function Commands.GetEventOwners(eventId)
     eventId = eventId:lower()
     local ownersOverrides = Commands._.registrations.events.ownersOverrides[eventId]
     if ownersOverrides ~= nil then
-        return Owners:new(Commands._.config, ownersOverrides)
+        return Owners.new(Commands._.config, ownersOverrides)
     end
     return Commands._.owners
 end

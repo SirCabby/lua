@@ -6,6 +6,13 @@
 ---@field registeredEvents array
 local Command = {}
 
+Command.__index = Command
+setmetatable(Command, {
+    __call = function (cls, ...)
+        return cls.new(...)
+    end
+})
+
 ---@param id string
 ---@param phrase string
 ---@param eventFunction function
@@ -13,15 +20,15 @@ local Command = {}
 ---@param phrasePatternOverrides array?
 ---@return Command
 function Command.new(id, phrase, eventFunction, helpFunction, phrasePatternOverrides)
-    local result = {}
+    local self = setmetatable({}, Command)
 
-    result.id = id
-    result.phrase = phrase
-    result.eventFunction = eventFunction
-    result.helpFunction = helpFunction
-    result.phrasePatternOverrides = phrasePatternOverrides
+    self.id = id
+    self.phrase = phrase
+    self.eventFunction = eventFunction
+    self.helpFunction = helpFunction
+    self.phrasePatternOverrides = phrasePatternOverrides
 
-    return result
+    return self
 end
 
 return Command

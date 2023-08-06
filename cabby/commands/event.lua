@@ -6,6 +6,13 @@
 ---@field reregister boolean reregister this event on event updates for last order preservation
 local Event = {}
 
+Event.__index = Event
+setmetatable(Event, {
+    __call = function (cls, ...)
+        return cls.new(...)
+    end
+})
+
 ---@param id string
 ---@param phrase string
 ---@param eventFunction function
@@ -13,15 +20,15 @@ local Event = {}
 ---@param reregister boolean? reregister this event on event updates for last order preservation
 ---@return Event
 function Event.new(id, phrase, eventFunction, helpFunction, reregister)
-    local result = {}
+    local self = setmetatable({}, Event)
 
-    result.id = id
-    result.phrase = phrase
-    result.eventFunction = eventFunction
-    result.helpFunction = helpFunction
-    result.reregister = reregister or false
+    self.id = id
+    self.phrase = phrase
+    self.eventFunction = eventFunction
+    self.helpFunction = helpFunction
+    self.reregister = reregister or false
 
-    return result
+    return self
 end
 
 return Event

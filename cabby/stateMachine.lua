@@ -1,56 +1,58 @@
+---@diagnostic disable: undefined-field
 local mq = require("mq")
 local TableUtils = require("utils.TableUtils.TableUtils")
 
 ---@class StateMachine
 local StateMachine = { author = "judged", key = "StateMachine" }
 
----@meta StateMachine
-function StateMachine:Register(state) end
+StateMachine.__index = StateMachine
+setmetatable(StateMachine, {
+    __call = function (cls, ...)
+        return cls.new(...)
+    end
+})
+
+function StateMachine.new()
+    local self = setmetatable({}, StateMachine)
+
+    self.registeredStates = {}
+    self.started = false
+
+    return self
+end
+
+local function runChecks(self)
+    for _, state in ipairs(self.registeredStates) do
+        ---@type State
+        state = state
+        local hasAction = state:Check()
+        if hasAction then
+            state:Go()
+            return
+        end
+    end
+end
+
 ---@param state State
-function StateMachine:Unregister(state) end
-function StateMachine:Start() end
-function StateMachine:Stop() end
+function StateMachine:Register(state)
+    table.insert(self.registeredStates, state)
+end
 
-function StateMachine:new()
-    local stateMachine = {}
-    stateMachine.registeredStates = {}
-    stateMachine.started = false
+function StateMachine:Unregister(state)
+    TableUtils.RemoveByValue(self.registeredStates, state)
+end
 
-    local function runChecks()
-        for _,state in ipairs(stateMachine.registeredStates) do
-            ---@type State
-            state = state
-            local hasAction = state:Check()
-            if hasAction then
-                state:Go()
-                return
-            end
-        end
+function StateMachine:Start()
+    self.started = true
+    while (self.started) do
+        mq.doevents()
+        runChecks(self)
+        mq.delay(1)
     end
+end
 
-    ---@param state State
-    function stateMachine:Register(state)
-        table.insert(stateMachine.registeredStates, state)
-    end
-
-    function stateMachine:Unregister(state)
-        TableUtils.RemoveByValue(stateMachine.registeredStates, state)
-    end
-
-    function stateMachine:Start()
-        stateMachine.started = true
-        while (stateMachine.started) do
-            mq.doevents()
-            runChecks()
-            mq.delay(1)
-        end
-    end
-
-    function stateMachine:Stop()
-        stateMachine.started = false
-    end
-
-    return stateMachine
+function StateMachine:Stop()
+    self.started = false
 end
 
 return StateMachine
