@@ -1,6 +1,6 @@
 local mq = require("mq")
 local Debug = require("utils.Debug.Debug")
-local Timer = require("utils.Timer.Timer")
+local Timer = require("utils.Time.Timer")
 
 local Command = require("cabby.commands.command")
 local Commands = require("cabby.commands.commands")
