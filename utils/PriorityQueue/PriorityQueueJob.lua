@@ -1,72 +1,74 @@
-local Timer = require("utils.Timer.Timer")
+---@diagnostic disable: undefined-field
+local Timer = require("utils.Time.Timer")
 
 ---@class PriorityQueueJob
 local PriorityQueueJob = { author = "judged" }
 
----@meta PriorityQueueJob
-function PriorityQueueJob:GetIdentity() end
-function PriorityQueueJob:GetPriority() end
-function PriorityQueueJob:IsUnique() end
----Is this job visible
----@return boolean - true if visible
-function PriorityQueueJob:IsVisible() end
----Reset visibility timer of this job
-function PriorityQueueJob:ResetTimer() end
----@return boolean isComplete
-function PriorityQueueJob:IsComplete() end
-function PriorityQueueJob:Execute() end
+PriorityQueueJob.__index = PriorityQueueJob
+setmetatable(PriorityQueueJob, {
+    __call = function (cls, ...)
+        return cls.new(...)
+    end
+})
 
 ---Creates a new job for queueing
 ---@param identity string Text displayable unique ID
 ---@param priority number Priority of request to put into the queue, lower number is higher priority
 ---@param content function The function to be queued for execution, have function return true if it should reset timer and stay queued
----@param time? number Seconds the job goes invisible for once created / read
+---@param timeMs? number Milliseconds the job goes invisible for once created / read
 ---@param isUnique? boolean Intended to be a unique job in a queue
 ---@return PriorityQueueJob newJob The created job
-function PriorityQueueJob:new(identity, priority, content, time, isUnique)
-    local newJob = {}
+function PriorityQueueJob.new(identity, priority, content, timeMs, isUnique)
+    local self = setmetatable({}, PriorityQueueJob)
 
-    newJob._identity = identity
-    newJob._priority = priority
-    newJob._timer = Timer:new(time or 0)
-    newJob._isUnique = isUnique or false
-    newJob._isComplete = false
+    self._ = {}
+    self._.identity = identity
+    self._.priority = priority
+    self._.content = content
+    self._.timer = Timer.new(timeMs or 0)
+    self._.isUnique = isUnique or false
+    self._.isComplete = false
 
-    function newJob:GetIdentity()
-        return newJob._identity
-    end
+    return self
+end
 
-    function newJob:GetPriority()
-        return newJob._priority
-    end
+---@return string identity
+function PriorityQueueJob:GetIdentity()
+    return self._.identity
+end
 
-    function newJob:IsUnique()
-        return newJob._isUnique
-    end
+---@return number priority
+function PriorityQueueJob:GetPriority()
+    return self._.priority
+end
 
-    function newJob:IsVisible()
-        return newJob._timer:timer_expired()
-    end
+---@return boolean isUnique
+function PriorityQueueJob:IsUnique()
+    return self._.isUnique
+end
 
-    function newJob:ResetTimer()
-        newJob._timer:reset()
-    end
+---@return boolean isVisible
+function PriorityQueueJob:IsVisible()
+    return self._.timer:timer_expired()
+end
 
-    function newJob:IsComplete()
-        return newJob._isComplete
-    end
+function PriorityQueueJob:ResetTimer()
+    self._.timer:reset()
+end
 
-    function newJob:Execute()
-        if not newJob._isComplete then
-            if content() == true then
-                newJob:ResetTimer()
-            else
-                newJob._isComplete = true
-            end
+---@return boolean isComplete
+function PriorityQueueJob:IsComplete()
+    return self._.isComplete
+end
+
+function PriorityQueueJob:Execute()
+    if not self._.isComplete then
+        if self._.content() == true then
+            self:ResetTimer()
+        else
+            self._.isComplete = true
         end
     end
-
-    return newJob
 end
 
 return PriorityQueueJob

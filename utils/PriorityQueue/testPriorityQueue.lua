@@ -3,12 +3,8 @@ local mq = require("mq")
 local test = require("IntegrationTests.mqTest")
 
 local Debug = require("utils.Debug.Debug")
----@type PriorityQueue
 local PriorityQueue = require("utils.PriorityQueue.PriorityQueue")
----@type PriorityQueueJob
 local PriorityQueueJob = require("utils.PriorityQueue.PriorityQueueJob")
-
-
 
 mq.cmd("/mqclear")
 local args = { ... }
@@ -16,7 +12,7 @@ test.arguments(args)
 
 -- TESTS
 test.PriorityQueueJob.new_withTimerAndUnique = function()
-    local job = PriorityQueueJob:new("iddqd", 3, function() end, 5, true)
+    local job = PriorityQueueJob.new("iddqd", 3, function() end, 5, true)
 
     test.equal(job:GetIdentity(), "iddqd")
     test.equal(job:GetPriority(), 3)
@@ -26,7 +22,7 @@ test.PriorityQueueJob.new_withTimerAndUnique = function()
 end
 
 test.PriorityQueueJob.new_withoutTimerNotUnique = function()
-    local job = PriorityQueueJob:new("iddqd", 3, function() end)
+    local job = PriorityQueueJob.new("iddqd", 3, function() end)
 
     test.equal(job:GetIdentity(), "iddqd")
     test.equal(job:GetPriority(), 3)
@@ -36,7 +32,7 @@ test.PriorityQueueJob.new_withoutTimerNotUnique = function()
 end
 
 test.PriorityQueueJob.Execute_noTimer = function()
-    local job = PriorityQueueJob:new("iddqd", 3, function() end)
+    local job = PriorityQueueJob.new("iddqd", 3, function() end)
 
     test.equal(job:GetIdentity(), "iddqd")
     test.equal(job:GetPriority(), 3)
@@ -50,7 +46,7 @@ test.PriorityQueueJob.Execute_noTimer = function()
 end
 
 test.PriorityQueueJob.Execute_resetTimer = function()
-    local job = PriorityQueueJob:new("iddqd", 3, function() return true end, 5)
+    local job = PriorityQueueJob.new("iddqd", 3, function() return true end, 5000)
 
     test.equal(job:GetIdentity(), "iddqd")
     test.equal(job:GetPriority(), 3)
@@ -65,43 +61,43 @@ test.PriorityQueueJob.Execute_resetTimer = function()
 end
 
 test.PriorityQueue.InsertJob_isUnique = function()
-    local pq1 = PriorityQueue:new(10)
-    local pq2 = PriorityQueue:new(10)
-    local job1 = PriorityQueueJob:new("iddqd1", 3, function() end, 5, true)
-    local job2 = PriorityQueueJob:new("iddqd2", 3, function() end, 5, true)
+    local pq1 = PriorityQueue.new(10)
+    local pq2 = PriorityQueue.new(10)
+    local job1 = PriorityQueueJob.new("iddqd1", 3, function() end, 5000, true)
+    local job2 = PriorityQueueJob.new("iddqd2", 3, function() end, 5000, true)
 
     pq1:InsertJob(job1)
     pq1:InsertJob(job1)
-    test.equal(#pq1._jobs, 1)
+    test.equal(#pq1._.jobs, 1)
 
     pq1:InsertJob(job2)
-    test.equal(#pq1._jobs, 2)
-    test.equal(#pq2._jobs, 0)
+    test.equal(#pq1._.jobs, 2)
+    test.equal(#pq2._.jobs, 0)
 
     pq2:InsertJob(job1)
-    test.equal(#pq1._jobs, 2)
-    test.equal(#pq2._jobs, 1)
+    test.equal(#pq1._.jobs, 2)
+    test.equal(#pq2._.jobs, 1)
 end
 
 test.PriorityQueue.InsertJob_notUnique = function()
-    local pq1 = PriorityQueue:new(10)
-    local job1 = PriorityQueueJob:new("iddqd1", 3, function() end)
-    local job2 = PriorityQueueJob:new("iddqd2", 3, function() end)
+    local pq1 = PriorityQueue.new(10)
+    local job1 = PriorityQueueJob.new("iddqd1", 3, function() end)
+    local job2 = PriorityQueueJob.new("iddqd2", 3, function() end)
 
     pq1:InsertJob(job1)
     pq1:InsertJob(job1)
-    test.equal(#pq1._jobs, 2)
+    test.equal(#pq1._.jobs, 2)
 
     pq1:InsertJob(job2)
-    test.equal(#pq1._jobs, 3)
+    test.equal(#pq1._.jobs, 3)
 end
 
 test.PriorityQueue.GetNextJob_ordering = function()
-    local pq1 = PriorityQueue:new(10)
-    local job1 = PriorityQueueJob:new("iddqd1", 3, function() end)
-    local job2 = PriorityQueueJob:new("iddqd2", 2, function() end)
-    local job3 = PriorityQueueJob:new("iddqd3", 3, function() end)
-    local job4 = PriorityQueueJob:new("iddqd4", 3, function() end)
+    local pq1 = PriorityQueue.new(10)
+    local job1 = PriorityQueueJob.new("iddqd1", 3, function() end)
+    local job2 = PriorityQueueJob.new("iddqd2", 2, function() end)
+    local job3 = PriorityQueueJob.new("iddqd3", 3, function() end)
+    local job4 = PriorityQueueJob.new("iddqd4", 3, function() end)
 
     pq1:InsertJob(job1)
     pq1:InsertJob(job2)
