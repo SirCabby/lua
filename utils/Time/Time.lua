@@ -13,8 +13,15 @@ local function getSocket()
     return Time.socket
 end
 
+---@return number milliseconds current time in unix milliseconds
 function Time.current_time()
-    return getSocket().gettime()
+    return Time.round(getSocket().gettime() * 1000)
+end
+
+---@param milliseconds number
+---@return number rounded to nearest millisecond
+function Time.round(milliseconds)
+    return math.floor((math.floor(tonumber(milliseconds)*2) + 1)/2)
 end
 
 return Time

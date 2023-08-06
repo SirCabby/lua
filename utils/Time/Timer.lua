@@ -51,14 +51,14 @@ end
 
 ---@return boolean isExpired Returns true if the timer has expired, otherwise false
 function Timer:timer_expired()
-    local result = Time.current_time() >= self.start_time + (self.millisUntilExpiration / 1000)
+    local result = Time.current_time() >= self.start_time + self.millisUntilExpiration
     DebugLog("Timer is expired? " .. tostring(result))
     return result
 end
 
 ---@return number millisecondsRemaining Returns the number of milliseconds remaining until the timer expires
 function Timer:time_remaining()
-    local result = math.max(self.start_time + (self.millisUntilExpiration / 1000) - Time.current_time(), 0)
+    local result = Time.round(math.max(self.start_time + self.millisUntilExpiration - Time.current_time(), 0))
     DebugLog("Time remaining: " .. tostring(result))
     return result
 end

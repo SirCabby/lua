@@ -39,6 +39,7 @@ function StopWatch:reset()
     self.start_time = 0
     self.stored_time = 0
     self.paused = true
+    self.splitName = ""
 end
 
 function StopWatch:resume()
@@ -57,13 +58,36 @@ function StopWatch:pause()
     end
 end
 
+---@return number milliseconds
 function StopWatch:get_time()
     if self.paused then
-        return self.stored_time
+        return Time.round(self.stored_time)
     end
 
     local pause_time = Time.current_time()
-    return self.stored_time + pause_time - self.start_time
+    return Time.round(self.stored_time + pause_time - self.start_time)
+end
+
+---@param splitName string? if supplied, the -next- time calling this method will output the duration of that split with this text
+---@return number milliseconds
+function StopWatch:split(splitName)
+    local result = 0
+
+    if self.paused == false then
+        local split_at_time = Time.current_time()
+        local split_time = split_at_time - self.start_time
+        self.stored_time = self.stored_time + split_time
+        self.start_time = split_at_time
+
+        result = Time.round(split_time)
+    end
+
+    if self.splitName ~= nil and self.splitName ~= "" then
+        print("Finished [" .. self.splitName .. "] took: " .. tostring(result) .. "ms")
+    end
+    self.splitName = splitName
+
+    return 0
 end
 
 return StopWatch
