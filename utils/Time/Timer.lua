@@ -14,7 +14,7 @@ Timer.__index = Timer
 setmetatable(Timer, {
     __call = function (cls, ...)
         return cls.new(...)
-    end,
+    end
 })
 
 local function DebugLog(str)

@@ -7,16 +7,21 @@ local StopWatch = {
     key = "StopWatch"
 }
 
+StopWatch.__index = StopWatch
+setmetatable(StopWatch, {
+    __call = function (cls, ...)
+        return cls.new(...)
+    end
+})
+
 local function DebugLog(str)
     Debug.Log(StopWatch.key, str)
 end
 
 ---@param startNow boolean? defaults to false
 ---@return StopWatch stopwatch 
-function StopWatch:new(startNow)
-    local sw = {}
-    setmetatable(sw, self)
-    self.__index = self
+function StopWatch.new(startNow)
+    local self = setmetatable({}, StopWatch)
 
     if startNow == nil then
         startNow = false
@@ -26,7 +31,7 @@ function StopWatch:new(startNow)
         self:resume()
     end
 
-    return sw
+    return self
 end
 
 function StopWatch:reset()

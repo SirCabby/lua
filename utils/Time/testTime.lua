@@ -16,19 +16,19 @@ test.Timer = function()
 end
 
 test.StopWatch.new = function()
-    local stopWatch = StopWatch:new()
+    local stopWatch = StopWatch.new()
     mq.delay(10)
     test.equal(stopWatch:get_time(), 0)
 end
 
 test.StopWatch.new_started = function()
-    local stopWatch = StopWatch:new(true)
+    local stopWatch = StopWatch.new(true)
     mq.delay(10)
     test.not_equal(stopWatch:get_time(), 0)
 end
 
 test.StopWatch.pause = function()
-    local stopWatch = StopWatch:new(true)
+    local stopWatch = StopWatch.new(true)
     mq.delay(10)
     test.not_equal(stopWatch:get_time(), 0)
 
@@ -40,7 +40,7 @@ test.StopWatch.pause = function()
 end
 
 test.StopWatch.resume = function()
-    local stopWatch = StopWatch:new()
+    local stopWatch = StopWatch.new()
     stopWatch:resume()
     local time1 = stopWatch:get_time()
     mq.delay(10)
@@ -49,7 +49,7 @@ test.StopWatch.resume = function()
 end
 
 test.StopWatch.reset = function()
-    local stopWatch = StopWatch:new(true)
+    local stopWatch = StopWatch.new(true)
     local time1 = stopWatch:get_time()
     mq.delay(10)
     local time2 = stopWatch:get_time()
