@@ -64,7 +64,7 @@ end
 ---@param configFilePath string
 local function ConfigSetup(configFilePath)
     PluginSetup()
-    Setup.config = Config:new(configFilePath)
+    Setup.config = Config.new(configFilePath)
     Setup.owners = Owners:new(Setup.config, Setup.config:GetConfigRoot()[CommandConfig.key])
     Commands.Init(Setup.config, Setup.owners)
     GeneralConfig.Init(Setup.config)

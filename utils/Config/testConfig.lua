@@ -53,8 +53,8 @@ end
 
 -- TESTS
 test.Config.new = function()
-    config1 = Config:new(file1, fileSystemMock)
-    config2 = Config:new(file2, fileSystemMock)
+    config1 = Config.new(file1, fileSystemMock)
+    config2 = Config.new(file2, fileSystemMock)
 
     -- Debug.SetToggle(TableUtils.key, true)
     test.equal(FileExistsCalls, 2)

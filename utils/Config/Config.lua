@@ -1,4 +1,4 @@
----@diagnostic disable: need-check-nil, undefined-field
+---@diagnostic disable: undefined-field
 local mq = require("mq")
 
 local Debug = require("utils.Debug.Debug")
@@ -8,6 +8,13 @@ local TableUtils = require("utils.TableUtils.TableUtils")
 
 ---@class Config
 local Config = { author = "judged", key = "Config", store = {} }
+
+Config.__index = Config
+setmetatable(Config, {
+    __call = function (cls, ...)
+        return cls.new(...)
+    end
+})
 
 --[[
 Config.store: { <-- Global / static config manager table
@@ -22,29 +29,28 @@ Config.store: { <-- Global / static config manager table
 ---@param filePath? string defaults to \config\CharName-Config.json
 ---@param fileSystem? FileSystem
 ---@return Config
-function Config:new(filePath, fileSystem)
-    local config = {}
-    setmetatable(config, self)
-    self.__index = self
+function Config.new(filePath, fileSystem)
+    local self = setmetatable({}, Config)
 
-    config._ = {}
-    config._.fileSystem = fileSystem or FileSystem
-    config._.filePath = filePath or fileSystem.PathJoin(mq.configDir, mq.TLO.Me.Name() .. "-Config.json")
+    self._ = {}
+    self._.fileSystem = fileSystem or FileSystem
+---@diagnostic disable-next-line: need-check-nil
+    self._.filePath = filePath or fileSystem.PathJoin(mq.configDir, mq.TLO.Me.Name() .. "-Config.json")
 
     -- Create config file if DNE
-    if not config._.fileSystem.FileExists(config._.filePath) then
-        print("Creating config file: " .. config._.filePath)
-        config._.fileSystem.WriteFile(config._.filePath, { "{}" })
+    if not self._.fileSystem.FileExists(self._.filePath) then
+        print("Creating config file: " .. self._.filePath)
+        self._.fileSystem.WriteFile(self._.filePath, { "{}" })
     end
 
     -- Load config if not already loaded
-    local configStr = config._.fileSystem.ReadFile(config._.filePath)
-    if Config.store[config._.filePath] == nil then
-        Config.store[config._.filePath] = Json.Deserialize(configStr)
+    local configStr = self._.fileSystem.ReadFile(self._.filePath)
+    if Config.store[self._.filePath] == nil then
+        Config.store[self._.filePath] = Json.Deserialize(configStr)
     end
 
-    Debug.Log(Config.key, "Config loaded: " .. config._.filePath)
-    return config
+    Debug.Log(Config.key, "Config loaded: " .. self._.filePath)
+    return self
 end
 
 function Config:GetConfigRoot()
