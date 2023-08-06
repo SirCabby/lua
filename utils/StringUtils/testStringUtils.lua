@@ -1,8 +1,9 @@
 local mq = require("mq")
+local test = require("IntegrationTests.mqTest")
+
 local Debug = require("utils.Debug.Debug")
 local StringUtils = require("utils.StringUtils.StringUtils")
 local TableUtils = require("utils.TableUtils.TableUtils")
-local test = require("integration-tests.mqTest")
 
 mq.cmd("/mqclear")
 local args = { ... }

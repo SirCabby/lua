@@ -1,11 +1,13 @@
 ---@diagnostic disable: undefined-field, need-check-nil
 local mq = require("mq")
+local test = require("IntegrationTests.mqTest")
+
 local Debug = require("utils.Debug.Debug")
 ---@type PriorityQueue
 local PriorityQueue = require("utils.PriorityQueue.PriorityQueue")
 ---@type PriorityQueueJob
 local PriorityQueueJob = require("utils.PriorityQueue.PriorityQueueJob")
-local test = require("integration-tests.mqTest")
+
 
 
 mq.cmd("/mqclear")
