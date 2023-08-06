@@ -1,9 +1,10 @@
 local mq = require("mq")
+local test = require("IntegrationTests.mqTest")
+
 local Debug = require("utils.Debug.Debug")
 local Json = require("utils.Json.Json")
 local StringUtils = require("utils.StringUtils.StringUtils")
 local TableUtils = require("utils.TableUtils.TableUtils")
-local test = require("IntegrationTests.mqTest")
 
 mq.cmd("/mqclear")
 local args = { ... }
