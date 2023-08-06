@@ -1,59 +1,63 @@
+---@diagnostic disable: need-check-nil, undefined-field
 local mq = require("mq")
-local ConfigStore = require("utils.Config.ConfigStore")
+
 local Debug = require("utils.Debug.Debug")
 local FileSystem = require("utils.FileSystem.FileSystem")
 local Json = require("utils.Json.Json")
 local TableUtils = require("utils.TableUtils.TableUtils")
 
 ---@class Config
-local Config = { author = "judged", key = "Config" }
+local Config = { author = "judged", key = "Config", store = {} }
 
----@meta Config
----Get config root storage table
----@return table
-function Config:GetConfigRoot() end
----Save config
-function Config:SaveConfig() end
----Prints the config
----@param name string
-function Config:Print(name) end
+--[[
+Config.store: { <-- Global / static config manager table
+    "filepath1": { <-- Config:new() will be scoped to this
+        "name1": { <-- each GetConfig returns this, but static reference so more copies share state and don't thrash
+            ...
+        }
+    }
+}
+--]]
 
 ---@param filePath? string defaults to \config\CharName-Config.json
 ---@param fileSystem? FileSystem
 ---@return Config
 function Config:new(filePath, fileSystem)
     local config = {}
+    setmetatable(config, self)
+    self.__index = self
 
-    fileSystem = fileSystem or FileSystem
-    config.filePath = filePath or fileSystem.PathJoin(mq.configDir, mq.TLO.Me.Name() .. "-Config.json")
-
-    function config:GetConfigRoot()
-        return ConfigStore.get()[config.filePath] or {}
-    end
-
-    function config:SaveConfig()
-        fileSystem.WriteFile(config.filePath, Json.Serialize(ConfigStore.get()[config.filePath]))
-        Debug.Log(ConfigStore.key, "Saved config [" .. config.filePath .. "]")
-    end
-
-    function config:Print()
-        TableUtils.Print(ConfigStore.get()[config.filePath])
-    end
+    config._ = {}
+    config._.fileSystem = fileSystem or FileSystem
+    config._.filePath = filePath or fileSystem.PathJoin(mq.configDir, mq.TLO.Me.Name() .. "-Config.json")
 
     -- Create config file if DNE
-    if not fileSystem.FileExists(config.filePath) then
-        print("Creating config file: " .. config.filePath)
-        fileSystem.WriteFile(config.filePath, { "{}" })
+    if not config._.fileSystem.FileExists(config._.filePath) then
+        print("Creating config file: " .. config._.filePath)
+        config._.fileSystem.WriteFile(config._.filePath, { "{}" })
     end
 
     -- Load config if not already loaded
-    local configStr = fileSystem.ReadFile(config.filePath)
-    if ConfigStore.get()[config.filePath] == nil then
-        ConfigStore.get()[config.filePath] = Json.Deserialize(configStr)
+    local configStr = config._.fileSystem.ReadFile(config._.filePath)
+    if Config.store[config._.filePath] == nil then
+        Config.store[config._.filePath] = Json.Deserialize(configStr)
     end
 
-    Debug.Log(ConfigStore.key, "Config loaded: " .. filePath)
+    Debug.Log(Config.key, "Config loaded: " .. config._.filePath)
     return config
+end
+
+function Config:GetConfigRoot()
+    return Config.store[self._.filePath] or {}
+end
+
+function Config:SaveConfig()
+    self._.fileSystem.WriteFile(self._.filePath, Json.Serialize(Config.store[self._.filePath]))
+    Debug.Log(Config.key, "Saved config [" .. self._.filePath .. "]")
+end
+
+function Config:Print()
+    TableUtils.Print(Config.store[self._.filePath])
 end
 
 return Config

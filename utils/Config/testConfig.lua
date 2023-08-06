@@ -1,9 +1,7 @@
 local mq = require("mq")
 local test = require("IntegrationTests.mqTest")
 
----@type Config
 local Config = require("utils.Config.Config")
-local ConfigStore = require("utils.Config.ConfigStore")
 local Debug = require("utils.Debug.Debug")
 local Json = require("utils.Json.Json")
 local TableUtils = require("utils.TableUtils.TableUtils")
@@ -62,22 +60,22 @@ test.Config.new = function()
     test.equal(FileExistsCalls, 2)
     test.equal(WriteFileCalls, 2)
     test.equal(ReadFileCalls, 2)
-    test.assert(TableUtils.Compare(ConfigStore.get()[file1], fooObj))
-    test.assert(TableUtils.Compare(ConfigStore.get()[file2], fooObj))
+    test.assert(TableUtils.Compare(Config.store[file1], fooObj))
+    test.assert(TableUtils.Compare(Config.store[file2], fooObj))
     -- Debug.SetToggle(TableUtils.key, false)
 end
 
 test.Config.GetConfigRoot = function()
-    test.assert(config1:GetConfigRoot().foo1 == "hi")
-    test.assert(TableUtils.Compare(fooObj.foo2, config1:GetConfigRoot().foo2))
-    test.assert(TableUtils.Compare(fooObj.foo3, config1:GetConfigRoot().foo3))
+    test.assert(TableUtils.Compare(fooObj, config1:GetConfigRoot()))
 end
 
 test.Config.SaveConfig = function()
-    config1:GetConfigRoot().foo1 = foo2Obj
+    local configroot = config1:GetConfigRoot()
+    configroot.foo1 = foo2Obj
+    fooStr = Json.Serialize(configroot)
     config1:SaveConfig()
-    test.equal(type(ConfigStore.get()[file1]["foo1"]), "table")
-    test.assert(TableUtils.Compare(ConfigStore.get()[file1]["foo1"], foo2Obj))
+    test.equal(type(Config.store[file1].foo1), "table")
+    test.assert(TableUtils.Compare(Config.store[file1].foo1, foo2Obj))
     test.assert(TableUtils.Compare(config1:GetConfigRoot().foo1, foo2Obj))
     test.assert(config2:GetConfigRoot().foo1 == "hi")
     test.equal(WriteFileCalls, 3)
