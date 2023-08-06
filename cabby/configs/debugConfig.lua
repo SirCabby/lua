@@ -44,7 +44,7 @@ function DebugConfig.Init(config)
         for k, v in pairs(debugConfig2) do
             Debug.SetToggle(k, v)
         end
-        DebugConfig._.config:GetConfigRoot()[DebugConfig.key] = Debug._toggles
+        DebugConfig._.config:GetConfigRoot()[DebugConfig.key] = Debug._.toggles
 
         local function Bind_Debug(...)
             local args = {...} or {}
@@ -97,7 +97,7 @@ function DebugConfig.FlipDebugToggle(key)
 end
 
 function DebugConfig.Print()
-    TableUtils.Print(Debug._toggles)
+    TableUtils.Print(Debug._.toggles)
 end
 
 return DebugConfig
