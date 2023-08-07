@@ -59,3 +59,6 @@ test.StopWatch.reset = function()
     mq.delay(10)
     test.equal(stopWatch:get_time(), 0)
 end
+
+-- RUN TESTS
+test.summary()
