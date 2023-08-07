@@ -23,6 +23,8 @@ end
 function StopWatch.new(startNow)
     local self = setmetatable({}, StopWatch)
 
+    self.print = false
+
     if startNow == nil then
         startNow = false
     end
@@ -32,6 +34,11 @@ function StopWatch.new(startNow)
     end
 
     return self
+end
+
+---@param isEnabled boolean
+function StopWatch:should_print(isEnabled)
+    self.print = isEnabled
 end
 
 function StopWatch:reset()
@@ -82,7 +89,7 @@ function StopWatch:split(splitName)
         result = Time.round(split_time)
     end
 
-    if self.splitName ~= nil and self.splitName ~= "" then
+    if self.print and self.splitName ~= nil and self.splitName ~= "" then
         print("Finished [" .. self.splitName .. "] took: " .. tostring(result) .. "ms")
     end
     self.splitName = splitName
