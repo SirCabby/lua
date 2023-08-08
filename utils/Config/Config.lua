@@ -52,7 +52,7 @@ function Config.new(filePath, fileSystem)
 end
 
 function Config:GetConfigRoot()
-    return Config.store[self._.filePath] or {}
+    return Config.store[self._.filePath]
 end
 
 function Config:SaveConfig()
