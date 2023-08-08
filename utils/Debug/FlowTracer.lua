@@ -30,6 +30,15 @@ local function getKey(self)
     return peeked.key + 1
 end
 
+local function getIndent(count)
+    local result = " "
+    count = count or 1
+    for i = 1, count do
+        result = result .. "    "
+    end
+    return result
+end
+
 function FlowTracer:open(message)
     local newStart = {
         message = message,
@@ -41,7 +50,7 @@ function FlowTracer:open(message)
     if parent ~= nil then
         message = message .. " at parent split: " .. parent.stopwatch:get_time()
     end
-    print("[" .. tostring(newStart.key) .. ": Starting] " .. message)
+    print("[" .. tostring(newStart.key) .. ": Starting] " .. getIndent(newStart.key) .. message)
 
     self._.callstack:Push(newStart)
     return newStart.key
@@ -50,7 +59,7 @@ end
 function FlowTracer:split(message)
     local parent = self._.callstack:Peek()
     if parent ~= nil then
-        print("[" .. tostring(parent.key) .. ": Split   ] " .. message .. " at: " .. parent.stopwatch:get_time())
+        print("[" .. tostring(parent.key) .. ": Split   ] " .. getIndent(parent.key) .. message .. " at: " .. parent.stopwatch:get_time())
     else
         print("[root] " .. message)
     end
@@ -68,14 +77,14 @@ function FlowTracer:close(key)
 
         while peeked ~= nil and key ~= peeked.key and peeked.key > 0 do
             self._.callstack:Pop()
-            print("[" .. tostring(key) .. ": Closed Orphaned Flow] Key: " .. tostring(peeked.key) .. ". Child time: " .. tostring(peeked.stopwatch:get_time()))
+            print("[" .. tostring(key) .. ": Closed Orphaned Flow] " .. getIndent(peeked.key) ..  "Key: " .. tostring(peeked.key) .. ". Child time: " .. tostring(peeked.stopwatch:get_time()))
             peeked = self._.callstack:Peek()
         end
 
         self:close(key)
     elseif key == peeked.key then
         local popped = self._.callstack:Pop()
-        print("[" .. tostring(key) .. ": Finished] " .. popped.message .. " at: " .. popped.stopwatch:get_time())
+        print("[" .. tostring(key) .. ": Finished] " .. getIndent(popped.key) .. popped.message .. " at: " .. popped.stopwatch:get_time())
     else
         print("Failed to close key: "..tostring(key))
     end
