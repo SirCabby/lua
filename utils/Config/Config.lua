@@ -34,7 +34,7 @@ function Config.new(filePath, fileSystem)
     self._ = {}
     self._.fileSystem = fileSystem or FileSystem
 ---@diagnostic disable-next-line: need-check-nil
-    self._.filePath = filePath or fileSystem.PathJoin(mq.configDir, mq.TLO.Me.Name() .. "-Config.json")
+    self._.filePath = filePath or fileSystem.PathJoin(mq.configDir, mq.TLO.Me.Name() .. "-Config.lua")
 
     if Config.store[self._.filePath] == nil then
         local configData, err = loadfile(self._.filePath)

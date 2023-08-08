@@ -43,7 +43,7 @@ local ftkey = Global.tracing.open("Cabby Script")
 mq.cmd("/mqclear")
 print("Loading Cabby script...")
 
-local configFilePath = FileSystem.PathJoin(mq.configDir, "cabby", mq.TLO.Me.Name() .. "-Config.json")
+local configFilePath = FileSystem.PathJoin(mq.configDir, "cabby", mq.TLO.Me.Name() .. "-Config.lua")
 local stateMachine = StateMachine:new()
 Setup:Init(configFilePath, stateMachine)
 
