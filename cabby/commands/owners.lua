@@ -40,6 +40,7 @@ end
 
 function Owners:Open(isOpen)
     self._.data.open = isOpen
+    self._.config:SaveConfig()
 end
 
 function Owners:IsOpen()
