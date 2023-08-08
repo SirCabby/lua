@@ -6,14 +6,11 @@ local Debug = require("utils.Debug.Debug")
 local CommandConfig = require("cabby.configs.commandConfig")
 local DebugConfig = require("cabby.configs.debugConfig")
 local GeneralConfig = require("cabby.configs.generalConfig")
-local Commands = require("cabby.commands.commands")
-local Owners = require("cabby.commands.owners")
 local FollowState = require("cabby.states.followState")
 
 local Setup = {
     key = "Setup",
-    config = {},
-    owners = {}
+    config = {}
 }
 
 local function DebugLog(str)
@@ -79,19 +76,11 @@ local function ConfigSetup(configFilePath)
     if Setup.config:GetConfigRoot()[CommandConfig.key] == nil then
         Setup.config:GetConfigRoot()[CommandConfig.key] = {}
     end
-    if Setup.config:GetConfigRoot()[CommandConfig.key][Owners.key] == nil then
-        Setup.config:GetConfigRoot()[CommandConfig.key][Owners.key] = {}
-    end
     Global.tracing.close(ftkey2)
 
-    local ftkey3 = Global.tracing.open("Owners Setup")
-    Setup.owners = Owners.new(Setup.config, Setup.config:GetConfigRoot()[CommandConfig.key][Owners.key])
-    Global.tracing.close(ftkey3)
-    
-    Commands.Init(Setup.config, Setup.owners)
-    GeneralConfig.Init(Setup.config)
-    DebugConfig.Init(Setup.config)
     CommandConfig.Init(Setup.config)
+    DebugConfig.Init(Setup.config)
+    GeneralConfig.Init(Setup.config)
 
     Global.tracing.close(ftkey)
 end
