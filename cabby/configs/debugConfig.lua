@@ -36,6 +36,7 @@ end
 ---@param config Config
 function DebugConfig.Init(config)
     if not DebugConfig._.isInit then
+        local ftkey = Global.tracing.open("DebugConfig Setup")
         DebugConfig._.config = config
 
         -- Sync Debug with DebugConfig on this ctor
@@ -75,6 +76,7 @@ function DebugConfig.Init(config)
         Commands.RegisterSlashCommand("debug", Bind_Debug)
         
         DebugConfig._.isInit = true
+        Global.tracing.close(ftkey)
     end
 end
 

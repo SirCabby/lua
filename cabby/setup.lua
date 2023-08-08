@@ -21,6 +21,7 @@ local function DebugLog(str)
 end
 
 local function CheckPlugin(name)
+    local ftkey = Global.tracing.open("Checking Plugin ("..name..")")
     if tostring(mq.TLO.Plugin(name)) == "NULL" then
         print("Plugin [" .. name .. "] was not loaded. Loading...")
         mq.cmd("/plugin " .. name)
@@ -30,9 +31,11 @@ local function CheckPlugin(name)
             mq.exit()
         end
     end
+    Global.tracing.close(ftkey)
 end
 
 local function SetupEqbc()
+    local ftkey = Global.tracing.open("Setting up EQBC")
     if tostring(mq.TLO.EQBC.Connected) == "FALSE" then
         DebugLog("MQ2EQBC was not connected, connecting...")
         mq.cmd("/bccmd connect")
@@ -47,9 +50,12 @@ local function SetupEqbc()
             mq.cmd("/bccmd set localecho off")
         end
     end
+    Global.tracing.close(ftkey)
 end
 
 local function PluginSetup()
+    local ftkey = Global.tracing.open("Plugin Setup")
+
     CheckPlugin("MQ2EQBC")
     SetupEqbc()
     CheckPlugin("MQ2MoveUtils")
@@ -58,24 +64,40 @@ local function PluginSetup()
     CheckPlugin("MQ2Twist")
     CheckPlugin("MQ2Melee")
     CheckPlugin("MQ2Cast")
+
+    Global.tracing.close(ftkey)
 end
 
 ---@param configFilePath string
 local function ConfigSetup(configFilePath)
+    local ftkey = Global.tracing.open("Config Setup")
+
     PluginSetup()
     Setup.config = Config.new(configFilePath)
+    if Setup.config:GetConfigRoot()[CommandConfig.key] == nil then
+        Setup.config:GetConfigRoot()[CommandConfig.key] = {}
+    end
+
+    local ftkey2 = Global.tracing.open("Owners Setup")
     Setup.owners = Owners.new(Setup.config, Setup.config:GetConfigRoot()[CommandConfig.key])
+    Global.tracing.close(ftkey2)
+    
     Commands.Init(Setup.config, Setup.owners)
     GeneralConfig.Init(Setup.config)
     DebugConfig.Init(Setup.config)
     CommandConfig.Init(Setup.config)
+
+    Global.tracing.close(ftkey)
 end
 
 ---@param stateMachine StateMachine
 local function StateSetup(stateMachine)
-    FollowState.Init()
-    stateMachine:Register(FollowState)
+    local ftkey = Global.tracing.open("State Setup")
 
+    stateMachine:Register(FollowState.Init())
+
+    Global.tracing.close(ftkey)
+    
 -- | 1 My commands / Task / DZ
 -- | 19 Passive Mode
 -- | 29 Cure
@@ -93,6 +115,8 @@ local function StateSetup(stateMachine)
 -- | 129 Misc
 end
 
+---@param configFilePath string
+---@param stateMachine StateMachine
 function Setup:Init(configFilePath, stateMachine)
     DebugLog("Starting Cabby Setup...")
 

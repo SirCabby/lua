@@ -82,6 +82,7 @@ end
 ---@param config Config
 function CommandConfig.Init(config)
     if not CommandConfig._.isInit then
+        local ftkey = Global.tracing.open("CommandConfig Setup")
         CommandConfig._.config = config
 
         -- Init any keys that were not setup
@@ -275,6 +276,7 @@ function CommandConfig.Init(config)
 
         CommandConfig.UpdateEventChannels()
         CommandConfig._.isInit = true
+        Global.tracing.close(ftkey)
     end
 end
 

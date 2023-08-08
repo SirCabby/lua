@@ -83,6 +83,7 @@ end
 ---@param config Config
 function GeneralConfig.Init(config)
     if not GeneralConfig._.isInit then
+        local ftkey = Global.tracing.open("GeneralConfig Setup")
         GeneralConfig._.config = config
 
         -- Init any keys that were not setup
@@ -180,6 +181,7 @@ function GeneralConfig.Init(config)
         Commands.RegisterEvent(Event.new(GeneralConfig.eventIds.tellToMe, "#1# tells you, '#2#'", event_TellToMe, tellToMeHelp, true))
 
         GeneralConfig._.isInit = true
+        Global.tracing.close(ftkey)
     end
 end
 

@@ -38,6 +38,7 @@ end
 ---@param config Config
 function Commands.Init(config, owners)
     if not Commands._.isInit then
+        local ftkey = Global.tracing.open("Commands Init")
         Commands._.config = config
         Commands._.owners = owners
 
@@ -96,6 +97,7 @@ function Commands.Init(config, owners)
             end
         end
         Commands.RegisterSlashCommand("chelp", Bind_Chelp)
+        Global.tracing.close(ftkey)
     end
 end
 
