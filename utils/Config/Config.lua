@@ -3,7 +3,6 @@ local mq = require("mq")
 
 local Debug = require("utils.Debug.Debug")
 local FileSystem = require("utils.FileSystem.FileSystem")
-local Json = require("utils.Json.Json")
 local TableUtils = require("utils.TableUtils.TableUtils")
 
 ---@class Config
@@ -37,16 +36,15 @@ function Config.new(filePath, fileSystem)
 ---@diagnostic disable-next-line: need-check-nil
     self._.filePath = filePath or fileSystem.PathJoin(mq.configDir, mq.TLO.Me.Name() .. "-Config.json")
 
-    -- Create config file if DNE
-    if not self._.fileSystem.FileExists(self._.filePath) then
-        print("Creating config file: " .. self._.filePath)
-        self._.fileSystem.WriteFile(self._.filePath, { "{}" })
-    end
-
-    -- Load config if not already loaded
-    local configStr = self._.fileSystem.ReadFile(self._.filePath)
     if Config.store[self._.filePath] == nil then
-        Config.store[self._.filePath] = Json.Deserialize(configStr)
+        local configData, err = loadfile(self._.filePath)
+        if err then
+            -- file dne
+            print("Creating config file: " .. self._.filePath)
+            Config.store[self._.filePath] = {}
+        elseif configData then
+            Config.store[self._.filePath] = configData()
+        end
     end
 
     Debug.Log(Config.key, "Config loaded: " .. self._.filePath)
@@ -58,7 +56,7 @@ function Config:GetConfigRoot()
 end
 
 function Config:SaveConfig()
-    self._.fileSystem.WriteFile(self._.filePath, Json.Serialize(Config.store[self._.filePath]))
+    mq.pickle(self._.filePath, Config.store[self._.filePath])
     Debug.Log(Config.key, "Saved config [" .. self._.filePath .. "]")
 end
 
