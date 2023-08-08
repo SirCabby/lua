@@ -21,18 +21,14 @@ function Owners.new(config, configData)
 
     self._ = {}
     self._.config = config
+    self._.data = configData
 
-    local ownersKey = Owners.key:lower()
-    if configData[ownersKey] == nil then
-        configData[ownersKey] = {}
+    if self._.data.open == nil then
+        self._.data.open = false
     end
-
-    if not TableUtils.IsArray(configData[ownersKey]) then
-        TableUtils.Print(configData)
-        error("Owners config location was not an array")
+    if self._.data.list == nil then
+        self._.data.list = {}
     end
-
-    self._.data = configData[ownersKey]
 
     return self
 end
@@ -42,14 +38,18 @@ local function DebugLog(str)
     Debug.Log(Owners.key, str)
 end
 
-function Owners:GetOwners()
-    return self._.data
+function Owners:Open(isOpen)
+    self._.data.open = isOpen
+end
+
+function Owners:IsOpen()
+    return self._.data.open
 end
 
 function Owners:Add(name)
     name = name:lower()
-    if not TableUtils.ArrayContains(self._.data, name) then
-        self._.data[#self._.data + 1] = name
+    if not TableUtils.ArrayContains(self._.data.list, name) then
+        self._.data.list[#self._.data.list + 1] = name
         print("Added [" .. name .. "] as Owner")
         self._.config:SaveConfig()
         return
@@ -59,8 +59,8 @@ end
 
 function Owners:Remove(name)
     name = name:lower()
-    if TableUtils.ArrayContains(self._.data, name) then
-        TableUtils.RemoveByValue(self._.data, name)
+    if TableUtils.ArrayContains(self._.data.list, name) then
+        TableUtils.RemoveByValue(self._.data.list, name)
         print("Removed [" .. name .. "] as Owner")
         self._.config:SaveConfig()
         return
@@ -69,11 +69,15 @@ function Owners:Remove(name)
 end
 
 function Owners:IsOwner(name)
-    return TableUtils.ArrayContains(self._.data, name:lower())
+    return TableUtils.ArrayContains(self._.data.list, name:lower())
+end
+
+function Owners:HasPermission(name)
+    return self._.data.open or Owners:IsOwner(name)
 end
 
 function Owners:Print()
-    print("My Owners: [" .. StringUtils.Join(self._.data, ", ") .. "]")
+    print("My Owners: [" .. StringUtils.Join(self._.data.list, ", ") .. "]")
 end
 
 return Owners

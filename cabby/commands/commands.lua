@@ -18,14 +18,14 @@ local Commands = {
                 registeredCommands = {}, -- { <command id> = <command> }
                 defaultChannelPatterns = {}, -- { "some pattern with <<phrase>> in it, which will be replaced later with registeredComms.commandId.phrase" }
                 phrasePatternOverrides = {}, -- { <command id> = { array of patterns } }
-                ownersOverrides = {} -- { <command id> = { array of owners }}
+                ownersOverrides = {} -- { <command id> = { owners } }
             },
             slashcommands = {
                 registeredSlashCommands = {} -- { "/cmd1", "/cmd2" }
             },
             events = {
                 registeredEvents = {}, -- { <event id> = <event> }
-                ownersOverrides = {} -- { <event id> = { array of owners }}
+                ownersOverrides = {} -- { <event id> = { owners } }
             }
         }
     }
@@ -204,7 +204,7 @@ function Commands.GetCommandOwners(phrase)
     phrase = StringUtils.Split(phrase)[1]
     local ownersOverrides = Commands._.registrations.commands.ownersOverrides[phrase]
     if ownersOverrides ~= nil then
-        return Owners.new(Commands._.config, ownersOverrides)
+        return ownersOverrides
     end
     return Commands._.owners
 end
@@ -233,7 +233,7 @@ function Commands.GetEventOwners(eventId)
     eventId = eventId:lower()
     local ownersOverrides = Commands._.registrations.events.ownersOverrides[eventId]
     if ownersOverrides ~= nil then
-        return Owners.new(Commands._.config, ownersOverrides)
+        return ownersOverrides
     end
     return Commands._.owners
 end

@@ -95,7 +95,7 @@ function GeneralConfig.Init(config)
             print("(event: "..GeneralConfig.eventIds.groupInvited..") Accepts or declines invitations to groups, depending on rights of asker")
         end
         local function event_GroupInvited(_, speaker)
-            if Commands.GetEventOwners(GeneralConfig.eventIds.groupInvited):IsOwner(speaker) then
+            if Commands.GetEventOwners(GeneralConfig.eventIds.groupInvited):HasPermission(speaker) then
                 DebugLog("Joining group of speaker [" .. speaker .. "]")
                 mq.cmd("/invite")
             else
@@ -109,7 +109,7 @@ function GeneralConfig.Init(config)
             print("(inspect <slot>) Slot types: [" .. StringUtils.Join(GeneralConfig.equipmentSlots, ", ") .. "]")
         end
         local function event_InspectRequest(_, speaker, message)
-            if Commands.GetCommandOwners("inspect"):IsOwner(speaker) then
+            if Commands.GetCommandOwners("inspect"):HasPermission(speaker) then
                 local args = StringUtils.Split(message, " ")
 
                 if #args == 1 and TableUtils.ArrayContains(GeneralConfig.equipmentSlots, args[1]:lower()) then
@@ -123,7 +123,7 @@ function GeneralConfig.Init(config)
         Commands.RegisterCommEvent(Command.new(GeneralConfig.eventIds.inspectRequest, "inspect #2#", event_InspectRequest, inspectHelp))
 
         local function event_Restart(_, speaker)
-            if Commands.GetCommandOwners("restart"):IsOwner(speaker) then
+            if Commands.GetCommandOwners("restart"):HasPermission(speaker) then
                 DebugLog("Restarting on request of speaker [" .. speaker .. "]")
                 mq.cmd("/luar cabby")
             else

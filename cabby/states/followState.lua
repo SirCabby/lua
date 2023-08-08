@@ -54,7 +54,7 @@ end
 function FollowState.Init()
     if not FollowState._.isInit then
         local function event_FollowMe(_, speaker)
-            if Commands.GetCommandOwners("followme"):IsOwner(speaker) then
+            if Commands.GetCommandOwners("followme"):HasPermission(speaker) then
                 DebugLog("Activating followme of speaker [" .. speaker .. "]")
                 FollowState._.followTarget = speaker
                 FollowState._.currentActionIndex = 1
@@ -68,7 +68,7 @@ function FollowState.Init()
         Commands.RegisterCommEvent(Command.new(FollowState.eventIds.followMe, "followme", event_FollowMe, followMeHelp))
 
         local function event_StopFollow(_, speaker)
-            if Commands.GetCommandOwners("stopfollow"):IsOwner(speaker) then
+            if Commands.GetCommandOwners("stopfollow"):HasPermission(speaker) then
                 DebugLog("Stopping follow of speaker [" .. speaker .. "]")
                 if mq.TLO.AdvPath.Monitor() ~= nil and mq.TLO.AdvPath.Monitor():lower() == FollowState._.followTarget:lower() then
                     mq.cmd("/afollow off")
@@ -84,7 +84,7 @@ function FollowState.Init()
         Commands.RegisterCommEvent(Command.new(FollowState.eventIds.stopFollow, "stopfollow", event_StopFollow, stopfollowHelp))
 
         local function event_MoveToMe(_, speaker)
-            if Commands.GetCommandOwners("m2m"):IsOwner(speaker) then
+            if Commands.GetCommandOwners("m2m"):HasPermission(speaker) then
                 DebugLog("Moving to speaker [" .. speaker .. "]")
                 if mq.TLO.AdvPath.Following() then
                     mq.cmd("/afollow off")

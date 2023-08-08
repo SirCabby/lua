@@ -73,14 +73,20 @@ local function ConfigSetup(configFilePath)
     local ftkey = Global.tracing.open("Config Setup")
 
     PluginSetup()
+
+    local ftkey2 = Global.tracing.open("Config new")
     Setup.config = Config.new(configFilePath)
     if Setup.config:GetConfigRoot()[CommandConfig.key] == nil then
         Setup.config:GetConfigRoot()[CommandConfig.key] = {}
     end
-
-    local ftkey2 = Global.tracing.open("Owners Setup")
-    Setup.owners = Owners.new(Setup.config, Setup.config:GetConfigRoot()[CommandConfig.key])
+    if Setup.config:GetConfigRoot()[CommandConfig.key][Owners.key] == nil then
+        Setup.config:GetConfigRoot()[CommandConfig.key][Owners.key] = {}
+    end
     Global.tracing.close(ftkey2)
+
+    local ftkey3 = Global.tracing.open("Owners Setup")
+    Setup.owners = Owners.new(Setup.config, Setup.config:GetConfigRoot()[CommandConfig.key][Owners.key])
+    Global.tracing.close(ftkey3)
     
     Commands.Init(Setup.config, Setup.owners)
     GeneralConfig.Init(Setup.config)

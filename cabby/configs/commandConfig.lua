@@ -62,14 +62,14 @@ local function initAndValidate()
             Commands.SetPhrasePatternOverrides(command, Broadcast.GetPhrasePatterns(overrides[CommandConfig.keys.activeChannels]))
         end
 
-        if overrides[CommandConfig.keys.owners] ~= nil then
-            Commands.SetCommandOwnersOverrides(command, overrides)
+        if overrides.owners ~= nil then
+            Commands.SetCommandOwnersOverrides(command, overrides.owners)
         end
     end
 
     for event, overrides in pairs(configData[CommandConfig.key][CommandConfig.keys.eventOverrides]) do
         if overrides[CommandConfig.keys.owners] ~= nil then
-            Commands.SetEventOwnersOverrides(event, overrides)
+            Commands.SetEventOwnersOverrides(event, overrides.owners)
         end
     end
 end
