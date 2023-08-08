@@ -1,10 +1,8 @@
 local mq = require("mq")
+
 local Debug = require("utils.Debug.Debug")
 local StringUtils = require("utils.StringUtils.StringUtils")
 local TableUtils = require("utils.TableUtils.TableUtils")
-
----@type Owners
-local Owners = require("cabby.commands.owners")
 
 ---@class Commands
 local Commands = {
@@ -12,7 +10,6 @@ local Commands = {
     _ = {
         isInit = false,
         config = {},
-        owners = {},
         registrations = {
             commands = {
                 registeredCommands = {}, -- { <command id> = <command> }
@@ -35,7 +32,6 @@ local function DebugLog(str)
     Debug.Log(Commands.key, str)
 end
 
----@param config Config
 function Commands.Init(config, owners)
     if not Commands._.isInit then
         local ftkey = Global.tracing.open("Commands Init")
@@ -192,7 +188,7 @@ function Commands.SetPhrasePatternOverrides(phrase, phrasePatternOverrides)
 end
 
 ---@param phrase string
----@param ownersOverrides array?
+---@param ownersOverrides Owners?
 function Commands.SetCommandOwnersOverrides(phrase, ownersOverrides)
     phrase = StringUtils.Split(phrase)[1]
     Commands._.registrations.commands.ownersOverrides[phrase] = ownersOverrides
@@ -239,7 +235,7 @@ function Commands.GetEventOwners(eventId)
 end
 
 ---@param eventId string
----@param ownersOverrides array?
+---@param ownersOverrides Owners?
 function Commands.SetEventOwnersOverrides(eventId, ownersOverrides)
     eventId = eventId:lower()
     Commands._.registrations.events.ownersOverrides[eventId] = ownersOverrides
