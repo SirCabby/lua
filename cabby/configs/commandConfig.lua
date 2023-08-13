@@ -2,7 +2,7 @@ local Debug = require("utils.Debug.Debug")
 local StringUtils = require("utils.StringUtils.StringUtils")
 local TableUtils = require("utils.TableUtils.TableUtils")
 
-local Broadcast = require("cabby.commands.broadcast")
+local Speak = require("cabby.commands.speak")
 local Commands = require("cabby.commands.commands")
 local Owners = require("cabby.commands.owners")
 
@@ -41,6 +41,11 @@ local function initAndValidate()
         CommandConfig._.configData.owners = {}
         taint = true
     end
+    if CommandConfig._.configData.speak == nil then
+        DebugLog("Speak was not set, updating...")
+        CommandConfig._.configData.speak = {}
+        taint = true
+    end
     if CommandConfig._.configData.commandOverrides == nil then
         DebugLog("CommandOverrides were not set, updating...")
         CommandConfig._.configData.commandOverrides = {}
@@ -58,7 +63,7 @@ local function initAndValidate()
     -- load overrides for commands
     for command, overrides in pairs(CommandConfig._.configData.commandOverrides) do
         if overrides.activeChannels ~= nil then
-            Commands.SetPhrasePatternOverrides(command, Broadcast.GetPhrasePatterns(overrides.activeChannels))
+            Commands.SetPhrasePatternOverrides(command, Speak.GetPhrasePatterns(overrides.activeChannels))
         end
 
         if overrides.owners ~= nil then
@@ -75,7 +80,9 @@ local function initAndValidate()
 
     -- Init Commands
     local owners = Owners.new(CommandConfig._.config, CommandConfig._.configData.owners)
-    Commands.Init(CommandConfig._.config, owners)
+    local speak = Speak.new(CommandConfig._.configData.speak)
+---@diagnostic disable-next-line: param-type-mismatch
+    Commands.Init(CommandConfig._.config, owners, speak)
 end
 
 ---Initialize the static object, only done once
@@ -88,10 +95,9 @@ function CommandConfig.Init(config)
         -- Init any keys that were not setup
         initAndValidate()
 
-        local configForCommands = CommandConfig._.configData
-
         -- Validation reminders
 
+        local configForCommands = CommandConfig._.configData
         if #configForCommands.activeChannels < 1 then
             print("Not currently listening on any active channels. To learn more, /chelp activechannels")
         else
@@ -108,7 +114,7 @@ function CommandConfig.Init(config)
                 return
             elseif #args == 1 then
                 -- /activechannels <channel type>
-                if Broadcast.IsChannelType(args[1]:lower()) then
+                if Speak.IsChannelType(args[1]:lower()) then
                     print("(/activechannels " .. args[1] .. "):")
                     CommandConfig.ToggleActiveChannel(args[1]:lower())
                     return
@@ -134,7 +140,7 @@ function CommandConfig.Init(config)
                             CommandConfig._.config:SaveConfig()
                         end
                         Commands.SetPhrasePatternOverrides(command, nil)
-                        print("(activechannels "..command.." "..channelType..") Removed active channel override for command: [" .. command .. "]")
+                        print("(/activechannels "..command.." "..channelType..") Removed active channel override for command: [" .. command .. "]")
                         return
                     end
 
@@ -148,14 +154,14 @@ function CommandConfig.Init(config)
 
                     print("(/activechannels " .. args[1] .. " " .. args[2] .. "):")
                     CommandConfig.ToggleActiveChannel(channelType, configForCommands.commandOverrides[command])
-                    Commands.SetPhrasePatternOverrides(command, Broadcast.GetPhrasePatterns(configForCommands.commandOverrides[command].activeChannels))
+                    Commands.SetPhrasePatternOverrides(command, Speak.GetPhrasePatterns(configForCommands.commandOverrides[command].activeChannels))
                     return
                 end
             end
 
             print("(/activechannels) Channels used for listening to commands")
             print("To toggle an active channel, use: /activechannels <channel type>")
-            print(" -- Valid Active Channel Types: [" .. StringUtils.Join(TableUtils.GetValues(Broadcast.GetAllChannelTypes()), ", ") .. "]")
+            print(" -- Valid Active Channel Types: [" .. StringUtils.Join(TableUtils.GetValues(Speak.GetAllChannelTypes()), ", ") .. "]")
             print(" -- Currently active channels: [" .. StringUtils.Join(CommandConfig._.configData.activeChannels, ", ") .. "]")
             print("To override active channels for a specific communication command, use: /activechannels <command> <channel type>")
             print(" -- Currently registered commands: [" .. StringUtils.Join(Commands.GetCommsPhrases(), ", ") .. "]")
@@ -163,6 +169,212 @@ function CommandConfig.Init(config)
             print(" -- Reset command overrides with: /activechannels <command> reset")
         end
         Commands.RegisterSlashCommand("activechannels", Bind_ActiveChannels)
+
+        local function Bind_Speak(...)
+            local args = {...} or {}
+
+            -- /speak
+            if args == nil or #args < 1 then
+                print("(/speak):")
+                Commands.GetCommandSpeak("dne-global-speak"):Print()
+                return
+            elseif #args == 1 then
+                -- /speak <channeltype>
+                if Speak.IsChannelType(args[1]) and not Speak.IsTellType(args[1]) then
+                    local channel = args[1]:lower()
+                    if TableUtils.ArrayContains(configForCommands.speak, channel) then
+                        print("(/speak " .. channel .. ") Channel removed")
+                        TableUtils.RemoveByValue(configForCommands.speak, channel)
+                    else
+                        print("(/speak " .. channel .. ") Channel added")
+                        table.insert(configForCommands.speak, channel)
+                    end
+                    CommandConfig._.config:SaveConfig()
+                    ---@diagnostic disable-next-line: param-type-mismatch
+                    Commands.SetSpeak(Speak.new(configForCommands.speak))
+                    return
+                end
+
+                -- /speak <command>
+                if TableUtils.ArrayContains(Commands.GetCommsPhrases(), args[1]) then
+                    local command = args[1]:lower()
+                    print("(/speak " .. command .. "):")
+                    Commands.GetCommandSpeak(command):Print()
+                    return
+                end
+
+                -- /speak <event>
+                if TableUtils.ArrayContains(Commands.GetEventIds(), args[1]) then
+                    local event = args[1]:lower()
+                    print("(/speak " .. event .. "):")
+                    Commands.GetEventSpeak(event):Print()
+                    return
+                end
+            elseif #args == 2 then
+                -- /speak <channeltype> [tellto]
+                if Speak.IsTellType(args[1]) then
+                    local channel = args[1]:lower() .. " " .. args[2]:lower()
+                    if TableUtils.ArrayContains(configForCommands.speak, channel) then
+                        print("(/speak " .. channel .. ") Channel removed")
+                        TableUtils.RemoveByValue(configForCommands.speak, channel)
+                    else
+                        print("(/speak " .. channel .. ") Channel added")
+                        table.insert(configForCommands.speak, channel)
+                    end
+                    CommandConfig._.config:SaveConfig()
+                    ---@diagnostic disable-next-line: param-type-mismatch
+                    Commands.SetSpeak(Speak.new(configForCommands.speak))
+                    return
+                end
+
+                -- /speak <command> <channeltype | reset>
+                if TableUtils.ArrayContains(Commands.GetCommsPhrases(), args[1]) then
+                    local command = args[1]:lower()
+                    local channelType = args[2]:lower()
+
+                    if channelType == "reset" then
+                        if configForCommands.commandOverrides[command] ~= nil then
+                            configForCommands.commandOverrides[command].speak = nil
+                            CommandConfig._.config:SaveConfig()
+                        end
+                        Commands.SetCommandSpeakOverrides(command, nil)
+                        print("(/speak "..command.." "..channelType..") Removed speak override for command: [" .. command .. "]")
+                        return
+                    end
+
+                    if Speak.IsChannelType(channelType) and not Speak.IsTellType(channelType) then
+                        -- init override
+                        if configForCommands.commandOverrides[command] == nil then
+                            configForCommands.commandOverrides[command] = {}
+                        end
+                        if configForCommands.commandOverrides[command].speak == nil then
+                            configForCommands.commandOverrides[command].speak = {}
+                        end
+
+                        local commandSpeakChannels = configForCommands.commandOverrides[command].speak
+                        if TableUtils.ArrayContains(commandSpeakChannels, channelType) then
+                            print("(/speak " .. channelType .. ") Channel removed")
+                            TableUtils.RemoveByValue(commandSpeakChannels, channelType)
+                        else
+                            print("(/speak " .. channelType .. ") Channel added")
+                            table.insert(commandSpeakChannels, channelType)
+                        end
+                        CommandConfig._.config:SaveConfig()
+                        local commandSpeak = Speak.new(commandSpeakChannels)
+                        Commands.SetCommandSpeakOverrides(command, commandSpeak)
+                        print("(/speak " .. args[1] .. " " .. args[2] .. "):")
+                        ---@diagnostic disable-next-line: need-check-nil
+                        commandSpeak:Print()
+                        return
+                    end
+                end
+
+                -- /speak <event> <channeltype | reset>
+                if TableUtils.ArrayContains(Commands.GetEventIds(), args[1]) then
+                    local eventId = args[1]:lower()
+                    local channelType = args[2]:lower()
+
+                    if channelType == "reset" then
+                        if configForCommands.eventOverrides[eventId] ~= nil then
+                            configForCommands.eventOverrides[eventId].speak = nil
+                            CommandConfig._.config:SaveConfig()
+                        end
+                        Commands.SetEventSpeakOverrides(eventId, nil)
+                        print("(/speak "..eventId.." "..channelType..") Removed speak override for event: [" .. eventId .. "]")
+                        return
+                    end
+
+                    if Speak.IsChannelType(channelType) and not Speak.IsTellType(channelType) then
+                        -- init override
+                        if configForCommands.eventOverrides[eventId] == nil then
+                            configForCommands.eventOverrides[eventId] = {}
+                        end
+                        if configForCommands.eventOverrides[eventId].speak == nil then
+                            configForCommands.eventOverrides[eventId].speak = {}
+                        end
+
+                        local eventSpeakChannels = configForCommands.eventOverrides[eventId].speak
+                        if TableUtils.ArrayContains(eventSpeakChannels, channelType) then
+                            print("(/speak " .. channelType .. ") Channel removed")
+                            TableUtils.RemoveByValue(eventSpeakChannels, channelType)
+                        else
+                            print("(/speak " .. channelType .. ") Channel added")
+                            table.insert(eventSpeakChannels, channelType)
+                        end
+                        CommandConfig._.config:SaveConfig()
+                        local eventSpeak = Speak.new(eventSpeakChannels)
+                        Commands.SetEventSpeakOverrides(eventId, eventSpeak)
+                        print("(/speak " .. args[1] .. " " .. args[2] .. "):")
+                        ---@diagnostic disable-next-line: need-check-nil
+                        eventSpeak:Print()
+                        return
+                    end
+                end
+            elseif #args == 3 then
+                local commandOrEvent = args[1]:lower()
+                local channelType = args[2]:lower() .. " " .. args[3]:lower()
+
+                if Speak.IsTellType(args[2]) then
+                    ---@type table
+                    local overrides
+                    ---@type function
+                    local overrideFunc
+
+                    -- /speak <command> <channeltype> [tellto]
+                    if TableUtils.ArrayContains(Commands.GetCommsPhrases(), commandOrEvent) then
+                        overrides = configForCommands.commandOverrides
+                        overrideFunc = Commands.SetCommandSpeakOverrides
+                    end
+
+                    -- /speak <event> <channeltype> [tellto]
+                    if TableUtils.ArrayContains(Commands.GetEventIds(), args[1]) then
+                        overrides = configForCommands.eventOverrides
+                        overrideFunc = Commands.SetEventSpeakOverrides
+                    end
+
+                    if overrides ~= nil then
+                        -- init override
+                        if overrides[commandOrEvent] == nil then
+                            overrides[commandOrEvent] = {}
+                        end
+                        if overrides[commandOrEvent].speak == nil then
+                            overrides[commandOrEvent].speak = {}
+                        end
+
+                        local overrideSpeakChannels = overrides[commandOrEvent].speak
+                        if TableUtils.ArrayContains(overrideSpeakChannels, channelType) then
+                            print("(/speak " .. channelType .. ") Channel removed")
+                            TableUtils.RemoveByValue(overrideSpeakChannels, channelType)
+                        else
+                            print("(/speak " .. channelType .. ") Channel added")
+                            table.insert(overrideSpeakChannels, channelType)
+                        end
+                        CommandConfig._.config:SaveConfig()
+
+                        local overrideSpeak = Speak.new(overrideSpeakChannels)
+                        overrideFunc(commandOrEvent, overrideSpeak)
+                        print("(/speak " .. args[1] .. " " .. args[2] .. " " .. args[3] .. "):")
+                        ---@diagnostic disable-next-line: need-check-nil
+                        overrideSpeak:Print()
+                        return
+                    end
+                end
+            end
+
+            -- /speak
+            -- /speak <channeltype> [tellTo]
+            -- /speak <command | event>
+            -- /speak <command | event> <channeltype | reset> [tellTo]
+            print("(/speak) Manage which channels that commands/events respond in")
+            print(" -- To add/remove a speak channel, use: /speak <channel>")
+            print(" -- To override speaks for a specific communication command or event, use: /speak <command|event> <channel>")
+            print(" -- View command overrides with: /owners <command|event>")
+            print(" -- To remove overrides, use: /speak <command|event> reset")
+            print(" -- Currently registered commands: [" .. StringUtils.Join(Commands.GetCommsPhrases(), ", ") .. "]")
+            print(" -- Currently registered events: [" .. StringUtils.Join(Commands.GetEventIds(), ", ") .. "]")
+            Commands.GetCommandSpeak("dne-global-owners"):Print()
+        end
+        Commands.RegisterSlashCommand("speak", Bind_Speak)
 
         local function Bind_Owners(...)
             local args = {...} or {}
@@ -313,12 +525,12 @@ function CommandConfig.Init(config)
 end
 
 ---Toggles an active command channel
----@param channel string Available types found in GeneralConfig.channelTypes
+---@param channel string Available types found in Speak.channelTypes
 ---@param configLocation table? table to work on active channels within
 function CommandConfig.ToggleActiveChannel(channel, configLocation)
     local generalConfig = configLocation or CommandConfig._.configData
-    if not Broadcast.IsChannelType(channel) then
-        print(" -- Invalid Channel Type [" .. channel .. "]. Valid Channel Types: [" .. StringUtils.Join(TableUtils.GetValues(Broadcast.GetAllChannelTypes()), ", ") .. "]")
+    if not Speak.IsChannelType(channel) then
+        print(" -- Invalid Channel Type [" .. channel .. "]. Valid Channel Types: [" .. StringUtils.Join(TableUtils.GetValues(Speak.GetAllChannelTypes()), ", ") .. "]")
         return
     end
     if TableUtils.ArrayContains(generalConfig.activeChannels, channel) then
@@ -333,12 +545,12 @@ function CommandConfig.ToggleActiveChannel(channel, configLocation)
 end
 
 ---Adds an active command channel
----@param channel string Available types found in GeneralConfig.channelTypes
+---@param channel string Available types found in Speak.channelTypes
 ---@param configLocation table? table to work on active channels within
 function CommandConfig.AddChannel(channel, configLocation)
     local generalConfig = configLocation or CommandConfig._.configData
-    if not Broadcast.IsChannelType(channel) then
-        print("Invalid Channel Type. Valid Channel Types: [" .. StringUtils.Join(TableUtils.GetValues(Broadcast.GetAllChannelTypes()), ", ") .. "]")
+    if not Speak.IsChannelType(channel) then
+        print("Invalid Channel Type. Valid Channel Types: [" .. StringUtils.Join(TableUtils.GetValues(Speak.GetAllChannelTypes()), ", ") .. "]")
         return
     end
     if not TableUtils.ArrayContains(generalConfig.activeChannels, channel) then
@@ -351,12 +563,12 @@ function CommandConfig.AddChannel(channel, configLocation)
 end
 
 ---Removes an active command channel
----@param channel string Available types found in GeneralConfig.channelTypes
+---@param channel string Available types found in Speak.channelTypes
 ---@param configLocation table? table to work on active channels within
 function CommandConfig.RemoveChannel(channel, configLocation)
     local generalConfig = configLocation or CommandConfig._.configData
-    if not Broadcast.IsChannelType(channel) then
-        print("Invalid Channel Type. Valid Channel Types: [" .. StringUtils.Join(TableUtils.GetValues(Broadcast.GetAllChannelTypes()), ", ") .. "]")
+    if not Speak.IsChannelType(channel) then
+        print("Invalid Channel Type. Valid Channel Types: [" .. StringUtils.Join(TableUtils.GetValues(Speak.GetAllChannelTypes()), ", ") .. "]")
         return
     end
     if TableUtils.ArrayContains(generalConfig.activeChannels, channel) then
@@ -370,7 +582,7 @@ end
 
 ---Syncs registered events to all active channels
 function CommandConfig.UpdateEventChannels()
-    Commands.SetChannelPatterns(Broadcast.GetPhrasePatterns(CommandConfig._.configData.activeChannels))
+    Commands.SetChannelPatterns(Speak.GetPhrasePatterns(CommandConfig._.configData.activeChannels))
 end
 
 function CommandConfig.Print()

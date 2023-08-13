@@ -9,20 +9,23 @@ local Commands = {
     key = "Commands",
     _ = {
         isInit = false,
+        speak = {},
         config = {},
         registrations = {
             commands = {
                 registeredCommands = {}, -- { <command id> = <command> }
                 defaultChannelPatterns = {}, -- { "some pattern with <<phrase>> in it, which will be replaced later with registeredComms.commandId.phrase" }
-                phrasePatternOverrides = {}, -- { <command id> = { array of patterns } }
-                ownersOverrides = {} -- { <command id> = { owners } }
+                phrasePatternOverrides = {}, -- { <phrase> = { array of patterns } }
+                ownersOverrides = {}, -- { <phrase> = { owners } }
+                speakOverrides = {} -- { <phrase> = { speak } }
             },
             slashcommands = {
                 registeredSlashCommands = {} -- { "/cmd1", "/cmd2" }
             },
             events = {
                 registeredEvents = {}, -- { <event id> = <event> }
-                ownersOverrides = {} -- { <event id> = { owners } }
+                ownersOverrides = {}, -- { <event id> = { owners } }
+                speakOverrides = {} -- { <event id> = { speak } }
             }
         }
     }
@@ -32,7 +35,10 @@ local function DebugLog(str)
     Debug.Log(Commands.key, str)
 end
 
-function Commands.Init(config, owners)
+---@param config Config
+---@param owners Owners
+---@param speak Speak
+function Commands.Init(config, owners, speak)
     if not Commands._.isInit then
         local ftkey = Global.tracing.open("Commands Init")
         Commands._.config = config
@@ -93,8 +99,16 @@ function Commands.Init(config, owners)
             end
         end
         Commands.RegisterSlashCommand("chelp", Bind_Chelp)
+
+        Commands.SetSpeak(speak)
+
         Global.tracing.close(ftkey)
     end
+end
+
+---@param speak Speak
+function Commands.SetSpeak(speak)
+    Commands._.speak = speak
 end
 
 ---@param command string
@@ -205,6 +219,24 @@ function Commands.GetCommandOwners(phrase)
     return Commands._.owners
 end
 
+---@param phrase string
+---@return Speak speak
+function Commands.GetCommandSpeak(phrase)
+    phrase = StringUtils.Split(phrase)[1]
+    local speakOverrides = Commands._.registrations.commands.speakOverrides[phrase]
+    if speakOverrides ~= nil then
+        return speakOverrides
+    end
+    return Commands._.speak
+end
+
+---@param phrase string
+---@param speakOverrides Speak?
+function Commands.SetCommandSpeakOverrides(phrase, speakOverrides)
+    phrase = StringUtils.Split(phrase)[1]
+    Commands._.registrations.commands.speakOverrides[phrase] = speakOverrides
+end
+
 ---@param event Event
 function Commands.RegisterEvent(event)
     if not TableUtils.ArrayContains(TableUtils.GetKeys(Commands._.registrations.events.registeredEvents), event.id) then
@@ -239,6 +271,24 @@ end
 function Commands.SetEventOwnersOverrides(eventId, ownersOverrides)
     eventId = eventId:lower()
     Commands._.registrations.events.ownersOverrides[eventId] = ownersOverrides
+end
+
+---@param eventId string
+---@return Speak speak
+function Commands.GetEventSpeak(eventId)
+    eventId = eventId:lower()
+    local speakOverrides = Commands._.registrations.events.speakOverrides[eventId]
+    if speakOverrides ~= nil then
+        return speakOverrides
+    end
+    return Commands._.speak
+end
+
+---@param eventId string
+---@param speakOverrides Speak?
+function Commands.SetEventSpeakOverrides(eventId, speakOverrides)
+    eventId = eventId:lower()
+    Commands._.registrations.events.speakOverrides[eventId] = speakOverrides
 end
 
 return Commands

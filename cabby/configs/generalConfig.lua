@@ -4,7 +4,7 @@ local Debug = require("utils.Debug.Debug")
 local StringUtils = require("utils.StringUtils.StringUtils")
 local TableUtils = require("utils.TableUtils.TableUtils")
 
-local Broadcast = require("cabby.commands.broadcast")
+local Speak = require("cabby.commands.speak")
 local Command = require("cabby.commands.command")
 local Commands = require("cabby.commands.commands")
 local Event = require("cabby.commands.event")
@@ -113,11 +113,11 @@ function GeneralConfig.Init(config)
                 local args = StringUtils.Split(message, " ")
 
                 if #args == 1 and TableUtils.ArrayContains(GeneralConfig.equipmentSlots, args[1]:lower()) then
-                    Broadcast.Respond(_, speaker, args[1]:lower()..": "..mq.TLO.Me.Inventory(args[1]).ItemLink("CLICKABLE")())
+                    Speak.Respond(_, speaker, args[1]:lower()..": "..mq.TLO.Me.Inventory(args[1]).ItemLink("CLICKABLE")())
                     return
                 end
 
-                Broadcast.Respond(_, speaker, "(inspect <slot>) Slot types: [" .. StringUtils.Join(GeneralConfig.equipmentSlots, ", ") .. "]")
+                Speak.Respond(_, speaker, "(inspect <slot>) Slot types: [" .. StringUtils.Join(GeneralConfig.equipmentSlots, ", ") .. "]")
             end
         end
         Commands.RegisterCommEvent(Command.new(GeneralConfig.eventIds.inspectRequest, "inspect #2#", event_InspectRequest, inspectHelp))
@@ -139,22 +139,36 @@ function GeneralConfig.Init(config)
 
         local function Bind_SetRelayTellsToFunc(...)
             local args = {...} or {}
-            if args == nil or #args < 1 or args[1]:lower() == "help" then
-                print("(/relaytellsto) Relays tells received to this character")
-                print(" -- Usage: /relaytellsto name|clear")
-                local who = GeneralConfig.GetRelayTellsTo() or ""
-                print(" -- Currently set to: [" .. who .. "]")
-            else
-                arg =  args[1]:lower()
-                if arg == "clear" then
-                    GeneralConfig.SetRelayTellsTo("")
-                    print("Relaying tells is now disabled")
-                else
-                    GeneralConfig.SetRelayTellsTo(args[1])
-                    local who = GeneralConfig.GetRelayTellsTo() or ""
-                    print("Relaying future tells to: [" .. who .. "]")
+
+            if args ~= nil and #args > 0 then
+                local channel = args[1]:lower()
+                if channel ~= "clear" and not Speak.IsChannelType(channel) then
+                    print("(/relaytellsto " .. channel .. "): Invalid channel type. Allowed channel types: [" .. StringUtils.Join(Speak.GetAllChannelTypes(), ", ") .. "]")
+                    return
+                end
+
+                if #args == 1 and args[1]:lower() ~= "help" then
+                    if channel == "clear" then
+                        GeneralConfig.SetRelayTellsTo("")
+                        print("Relaying tells is now disabled")
+                    else
+                        GeneralConfig.SetRelayTellsTo(channel)
+                        print("Relaying future tells to: [" .. channel .. "]")
+                    end
+                    return
+                elseif #args == 2 and Speak.IsTellType(channel) then
+                    local tellTo = channel .. " " .. args[2]:lower()
+                    GeneralConfig.SetRelayTellsTo(tellTo)
+                    print("Relaying future tells to: [" .. tellTo .. "]")
+                    return
                 end
             end
+
+            print("(/relaytellsto) Relays tells received to this character")
+            print(" -- Usage: /relaytellsto name|clear [who]")
+            print(" -- supply 'who' when using a tell-type channel such as 'tell' or 'bct'")
+            local cmd = GeneralConfig.GetRelayTellsTo() or ""
+            print(" -- Currently set to: [" .. cmd .. "]")
         end
         Commands.RegisterSlashCommand("relaytellsto", Bind_SetRelayTellsToFunc)
 
@@ -169,13 +183,13 @@ function GeneralConfig.Init(config)
         Commands.RegisterSlashCommand("restart", Bind_Restart)
 
         local function tellToMeHelp()
-            print("(event "..GeneralConfig.eventIds.tellToMe..") Forwards any received tells that were not part of an issued command to the broadcast channel")
+            print("(event "..GeneralConfig.eventIds.tellToMe..") Forwards any received tells that were not part of an issued command to the speak channel")
         end
         local function event_TellToMe(_, speaker, message)
             local tellTo = GeneralConfig.GetRelayTellsTo()
             if tellTo ~= "" and tellTo ~= nil and tellTo ~= speaker and mq.TLO.SpawnCount("npc " .. speaker)() < 1 then
                 mq.cmd("/tell " .. tellTo .. " " .. speaker .. " told me: " .. message)
-                Broadcast.Message(Broadcast.channelTypes.bc, speaker .. " told me: " .. message)
+                Speak.Message(Speak.channelTypes.bc, speaker .. " told me: " .. message)
             end
         end
         Commands.RegisterEvent(Event.new(GeneralConfig.eventIds.tellToMe, "#1# tells you, '#2#'", event_TellToMe, tellToMeHelp, true))
