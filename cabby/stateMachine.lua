@@ -25,9 +25,7 @@ local function runChecks(self)
     for _, state in ipairs(self.registeredStates) do
         ---@type State
         state = state
-        local hasAction = state:Check()
-        if hasAction then
-            state:Go()
+        if state:Go() then
             return
         end
     end
