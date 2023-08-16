@@ -10,9 +10,9 @@ local Commands = require("cabby.commands.commands")
 local FollowState = {
     key = "FollowState",
     eventIds = {
-        followMe = "Follow Me",
-        stopFollow = "Stop Follow",
-        moveToMe = "Move to Me"
+        followMe = "FollowMe",
+        stopFollow = "StopFollow",
+        moveToMe = "MoveToMe"
     },
     _ = {
         isInit = false,
@@ -93,7 +93,7 @@ function FollowState.Init()
                 if spawn ~= nil then
                     mq.cmd("/moveto id " .. tostring(spawn.ID))
                 else
-                    mq.cmd("/bc Follow target [" .. FollowState._.followTarget .. "] out of range, aborting...")
+                    Commands.GetCommandSpeak("m2m"):speak("Follow target [" .. FollowState._.followTarget .. "] out of range, aborting...")
                 end
                 Reset()
             else
@@ -133,9 +133,9 @@ function FollowState.Check()
 
         if not FollowState._.checkingRetry then
             if mq.TLO.Spawn("pc " .. FollowState._.followTarget).Name() ~= nil then
-                mq.cmd("/bc Follow target [" .. FollowState._.followTarget .. "] out of range, waiting...")
+                Commands.GetCommandSpeak("followme"):speak("Follow target [" .. FollowState._.followTarget .. "] out of range, waiting...")
             else
-                mq.cmd("/bc Follow target [" .. FollowState._.followTarget .. "] no longer appears to be in the zone, waiting...")
+                Commands.GetCommandSpeak("followme"):speak("Follow target [" .. FollowState._.followTarget .. "] no longer appears to be in the zone, waiting...")
             end
         end
         FollowState._.checkingRetry = true
@@ -183,7 +183,7 @@ function FollowState.Check()
         -- If we've timed out in this position, abort
         if FollowState._.currentActionTimer:timer_expired() then
             if CloseToLastLoc() then
-                mq.cmd("/bc I got stuck while following [" .. FollowState._.followTarget .. "], aborting...")
+                Commands.GetCommandSpeak("followme"):speak("I got stuck while following [" .. FollowState._.followTarget .. "], aborting...")
                 mq.cmd("/afollow off")
                 Reset()
             else

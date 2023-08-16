@@ -179,7 +179,7 @@ function GeneralConfig.Init(config)
             if #args < 1 then
                 mq.cmd("/luar cabby")
             else
-                print("(/restart) Restart cabby script...")
+                print("(/restart) Restart cabby script")
             end
         end
         Commands.RegisterSlashCommand("restart", Bind_Restart)
@@ -190,8 +190,7 @@ function GeneralConfig.Init(config)
         local function event_TellToMe(_, speaker, message)
             local tellTo = GeneralConfig.GetRelayTellsTo()
             if tellTo ~= "" and tellTo ~= nil and tellTo ~= speaker and mq.TLO.SpawnCount("npc " .. speaker)() < 1 then
-                mq.cmd("/tell " .. tellTo .. " " .. speaker .. " told me: " .. message)
-                Speak.Message(Speak.channelTypes.bc, speaker .. " told me: " .. message)
+                Commands.GetEventSpeak(GeneralConfig.eventIds.tellToMe):speak(speaker .. " told me: " .. message)
             end
         end
         Commands.RegisterEvent(Event.new(GeneralConfig.eventIds.tellToMe, "#1# tells you, '#2#'", event_TellToMe, tellToMeHelp, true))
