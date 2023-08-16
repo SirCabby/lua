@@ -73,6 +73,8 @@ local function initAndValidate()
     if taint then
         GeneralConfig._.config:SaveConfig()
     end
+
+    mq.cmd("/squelch /alias /luar /lua run luarun")
 end
 
 local function getConfigSection()
