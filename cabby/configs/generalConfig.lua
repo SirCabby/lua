@@ -19,7 +19,7 @@ local GeneralConfig = {
     eventIds = {
         groupInvited = "groupInvited",
         tellToMe = "tellToMe",
-        inspectRequest = "inspectRequest",
+        inspectRequest = "inspect #2#",
         restart = "restart"
     },
     equipmentSlots = {
@@ -111,7 +111,7 @@ function GeneralConfig.Init(config)
             print("(inspect <slot>) Slot types: [" .. StringUtils.Join(GeneralConfig.equipmentSlots, ", ") .. "]")
         end
         local function event_InspectRequest(_, speaker, message)
-            if Commands.GetCommandOwners("inspect"):HasPermission(speaker) then
+            if Commands.GetCommandOwners(GeneralConfig.eventIds.inspectRequest):HasPermission(speaker) then
                 local args = StringUtils.Split(message, " ")
 
                 if #args == 1 and TableUtils.ArrayContains(GeneralConfig.equipmentSlots, args[1]:lower()) then
@@ -122,10 +122,10 @@ function GeneralConfig.Init(config)
                 Speak.Respond(_, speaker, "(inspect <slot>) Slot types: [" .. StringUtils.Join(GeneralConfig.equipmentSlots, ", ") .. "]")
             end
         end
-        Commands.RegisterCommEvent(Command.new(GeneralConfig.eventIds.inspectRequest, "inspect #2#", event_InspectRequest, inspectHelp))
+        Commands.RegisterCommEvent(Command.new(GeneralConfig.eventIds.inspectRequest, event_InspectRequest, inspectHelp))
 
         local function event_Restart(_, speaker)
-            if Commands.GetCommandOwners("restart"):HasPermission(speaker) then
+            if Commands.GetCommandOwners(GeneralConfig.eventIds.restart):HasPermission(speaker) then
                 DebugLog("Restarting on request of speaker [" .. speaker .. "]")
                 mq.cmd("/luar cabby")
             else
@@ -135,7 +135,7 @@ function GeneralConfig.Init(config)
         local function restartHelp()
             print("(restart) Tells listener(s) to restart cabby script")
         end
-        Commands.RegisterCommEvent(Command.new(GeneralConfig.eventIds.restart, "restart", event_Restart, restartHelp))
+        Commands.RegisterCommEvent(Command.new(GeneralConfig.eventIds.restart, event_Restart, restartHelp))
 
         -- Binds
 
@@ -182,7 +182,7 @@ function GeneralConfig.Init(config)
                 print("(/restart) Restart cabby script")
             end
         end
-        Commands.RegisterSlashCommand("restart", Bind_Restart)
+        Commands.RegisterSlashCommand(GeneralConfig.eventIds.restart, Bind_Restart)
 
         local function tellToMeHelp()
             print("(event "..GeneralConfig.eventIds.tellToMe..") Forwards any received tells that were not part of an issued command to the speak channel")

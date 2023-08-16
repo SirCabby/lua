@@ -13,16 +13,14 @@ setmetatable(Command, {
     end
 })
 
----@param id string
 ---@param phrase string
 ---@param eventFunction function
 ---@param helpFunction function
 ---@param phrasePatternOverrides array?
 ---@return Command
-function Command.new(id, phrase, eventFunction, helpFunction, phrasePatternOverrides)
+function Command.new(phrase, eventFunction, helpFunction, phrasePatternOverrides)
     local self = setmetatable({}, Command)
 
-    self.id = id
     self.phrase = phrase
     self.eventFunction = eventFunction
     self.helpFunction = helpFunction

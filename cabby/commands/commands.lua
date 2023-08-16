@@ -13,7 +13,7 @@ local Commands = {
         config = {},
         registrations = {
             commands = {
-                registeredCommands = {}, -- { <command id> = <command> }
+                registeredCommands = {}, -- { <phrase> = <command> }
                 defaultChannelPatterns = {}, -- { "some pattern with <<phrase>> in it, which will be replaced later with registeredComms.commandId.phrase" }
                 phrasePatternOverrides = {}, -- { <phrase> = { array of patterns } }
                 ownersOverrides = {}, -- { <phrase> = { owners } }
@@ -160,12 +160,12 @@ end
 
 ---@param command Command
 function Commands.RegisterCommEvent(command)
-    if not TableUtils.ArrayContains(TableUtils.GetKeys(Commands._.registrations.commands.registeredCommands), command.id) then
-        Commands._.registrations.commands.registeredCommands[command.id] = command
+    if not TableUtils.ArrayContains(TableUtils.GetKeys(Commands._.registrations.commands.registeredCommands), command.phrase) then
+        Commands._.registrations.commands.registeredCommands[command.phrase] = command
         command.registeredEvents = {}
         UpdateCommEvent(command)
     else
-        print("Cannot re-register same command Id: ["..command.id.."]")
+        print("Cannot re-register same command: ["..command.phrase.."]")
     end
 end
 
