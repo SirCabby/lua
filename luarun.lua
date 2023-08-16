@@ -21,7 +21,7 @@ do
         print("Must supply a lua file name to run. Usage:")
         print("-- /lua run luarun somefile.lua")
         print("Alternatively, setup an alias via:")
-        print("-- /alias /luar /lua run luarun somefile.lua")
+        print("-- /alias /luar /lua run luarun")
         print("Alias usage:")
         print("-- /luar somefile.lua")
         mq.exit()
