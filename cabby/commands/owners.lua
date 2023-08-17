@@ -74,7 +74,7 @@ function Owners:IsOwner(name)
 end
 
 function Owners:HasPermission(name)
-    return self._.data.open or Owners:IsOwner(name)
+    return self._.data.open or self:IsOwner(name)
 end
 
 function Owners:Print()

@@ -152,7 +152,7 @@ local function UpdateCommEvent(command)
 
     for _, pattern in ipairs(patternArray) do
         local thisPhrase = string.gsub(pattern, "<<phrase>>", command.phrase)
-        local newEventId = command.id .. tostring(#command.registeredEvents + 1)
+        local newEventId = command.phrase .. tostring(#command.registeredEvents + 1)
         table.insert(command.registeredEvents, newEventId)
         mq.event(newEventId, thisPhrase, command.eventFunction)
     end
