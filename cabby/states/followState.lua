@@ -158,7 +158,18 @@ function FollowState.Go()
         return false
     -- Keeping close to target
     elseif FollowState._.currentActionIndex == 2 then
+        -- Follow target not in zone?
         if mq.TLO.Spawn("pc " .. FollowState._.followTarget).Name() == nil then
+            local corpse = mq.TLO.Spawn("corpse " .. FollowState._.followTarget)
+            if corpse.Name() == nil or corpse.Distance() > 100 then
+                -- target zoned without dying, check for nearby switch
+                local switch = mq.TLO.Switch("nearest")
+                if switch ~= nil and switch.Distance() < 100 then
+                    FollowState._.currentActionIndex = 11
+                    return true
+                end
+            end
+
             FollowState._.currentActionIndex = 1
             return true
         end
