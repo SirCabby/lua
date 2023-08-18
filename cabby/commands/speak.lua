@@ -9,31 +9,31 @@ local Speak = {
         bc = {
             name = "bc",
             command = "bc",
-            phrasePattern = "<#1#> <<phrase>>",
+            phrasePattern = "<#1#> <<phrase>>#2#",
             isTellType = false
         },
         bct = {
             name = "bct",
             command = "bct",
-            phrasePattern = "[#1#(msg)] <<phrase>>",
+            phrasePattern = "[#1#(msg)] <<phrase>>#2#",
             isTellType = true
         },
         tell = {
             name = "tell",
             command = "tell",
-            phrasePattern = "#1# tells you, '<<phrase>>'",
+            phrasePattern = "#1# tells you, '<<phrase>>#2#'",
             isTellType = true
         },
         raid = {
             name = "raid",
             command = "rs",
-            phrasePattern = "#1# tells the raid, '<<phrase>>'",
+            phrasePattern = "#1# tells the raid, '<<phrase>>#2#'",
             isTellType = false
         },
         group = {
             name = "group",
             command = "g",
-            phrasePattern = "#1# tells the group, '<<phrase>>'",
+            phrasePattern = "#1# tells the group, '<<phrase>>#2#'",
             isTellType = false
         }
     }
@@ -138,6 +138,7 @@ end
 function Speak.GetRequestChannel(line)
     for _, channelType in pairs(Speak.channelTypes) do
         local regex = string.gsub(channelType.phrasePattern, "%#1%#", "%.%*")
+        regex = string.gsub(regex, "%#2%#", "%.%*")
         regex = string.gsub(regex, "%<%<phrase%>%>", "%.%*")
         regex = string.gsub(regex, "%<", "%%%<")
         regex = string.gsub(regex, "%>", "%%%>")
@@ -146,6 +147,7 @@ function Speak.GetRequestChannel(line)
         regex = string.gsub(regex, "%]", "%%%]")
         regex = string.gsub(regex, "%(", "%%%(")
         regex = string.gsub(regex, "%)", "%%%)")
+
         if line:find(regex) ~= nil then
             return channelType
         end

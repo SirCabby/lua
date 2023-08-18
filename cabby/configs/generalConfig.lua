@@ -19,7 +19,7 @@ local GeneralConfig = {
     eventIds = {
         groupInvited = "groupInvited",
         tellToMe = "tellToMe",
-        inspectRequest = "inspect #2#",
+        inspectRequest = "inspect",
         restart = "restart"
     },
     equipmentSlots = {
@@ -110,9 +110,9 @@ function GeneralConfig.Init(config)
         local function inspectHelp()
             print("(inspect <slot>) Slot types: [" .. StringUtils.Join(GeneralConfig.equipmentSlots, ", ") .. "]")
         end
-        local function event_InspectRequest(_, speaker, message)
+        local function event_InspectRequest(_, speaker, args)
             if Commands.GetCommandOwners(GeneralConfig.eventIds.inspectRequest):HasPermission(speaker) then
-                local args = StringUtils.Split(message, " ")
+                local args = StringUtils.Split(StringUtils.TrimFront(args))
 
                 if #args == 1 and TableUtils.ArrayContains(GeneralConfig.equipmentSlots, args[1]:lower()) then
                     Speak.Respond(_, speaker, args[1]:lower()..": "..mq.TLO.Me.Inventory(args[1]).ItemLink("CLICKABLE")())
