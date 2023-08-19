@@ -3,6 +3,7 @@ local mq = require("mq")
 local Config = require("utils.Config.Config")
 local Debug = require("utils.Debug.Debug")
 
+local CharacterConfig = require("cabby.configs.characterConfig")
 local CommandConfig = require("cabby.configs.commandConfig")
 local DebugConfig = require("cabby.configs.debugConfig")
 local GeneralConfig = require("cabby.configs.generalConfig")
@@ -81,6 +82,7 @@ local function ConfigSetup(configFilePath)
     CommandConfig.Init(Setup.config)
     DebugConfig.Init(Setup.config)
     GeneralConfig.Init(Setup.config)
+    CharacterConfig.Init(Setup.config)
 
     Global.tracing.close(ftkey)
 end
