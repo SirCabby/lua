@@ -11,7 +11,7 @@ local function passive()
     return false
 end
 
----@class FollowState
+---@class State
 local FollowState = {
     key = "FollowState",
     eventIds = {
@@ -275,6 +275,7 @@ FollowState._.anchorActions.stayingAtAnchor = function()
     return false
 end
 
+---@diagnostic disable-next-line: duplicate-set-field
 function FollowState.Init()
     if not FollowState._.isInit then
         local function event_FollowMe(_, speaker)
@@ -385,13 +386,9 @@ function FollowState.Init()
 
         FollowState._.isInit = true
     end
-
-    ---@type State
----@diagnostic disable-next-line: assign-type-mismatch
-    local followState = FollowState
-    return followState
 end
 
+---@diagnostic disable-next-line: duplicate-set-field
 function FollowState.Go()
     return FollowState._.currentAction()
 end
