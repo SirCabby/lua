@@ -4,9 +4,10 @@ local TableUtils = require("utils.TableUtils.TableUtils")
 
 local Speak = require("cabby.commands.speak")
 local Commands = require("cabby.commands.commands")
+local Menu = require("cabby.menu")
 local Owners = require("cabby.commands.owners")
 
----@class CommandConfig
+---@type CabbyConfig
 local CommandConfig = {
     key = "CommandConfig",
     _ = {
@@ -87,6 +88,7 @@ end
 
 ---Initialize the static object, only done once
 ---@param config Config
+---@diagnostic disable-next-line: duplicate-set-field
 function CommandConfig.Init(config)
     if not CommandConfig._.isInit then
         local ftkey = Global.tracing.open("CommandConfig Setup")
@@ -134,26 +136,8 @@ function CommandConfig.Init(config)
                     local command = args[1]:lower()
                     local channelType = args[2]:lower()
 
-                    if channelType == "reset" then
-                        if configForCommands.commandOverrides[command] ~= nil then
-                            configForCommands.commandOverrides[command].activeChannels = nil
-                            CommandConfig._.config:SaveConfig()
-                        end
-                        Commands.SetPhrasePatternOverrides(command, nil)
-                        print("(/activechannels "..command.." "..channelType..") Removed active channel override for command: [" .. command .. "]")
-                        return
-                    end
-
-                    -- init override
-                    if configForCommands.commandOverrides[command] == nil then
-                        configForCommands.commandOverrides[command] = {}
-                    end
-                    if configForCommands.commandOverrides[command].activeChannels == nil then
-                        configForCommands.commandOverrides[command].activeChannels = {}
-                    end
-
                     print("(/activechannels " .. args[1] .. " " .. args[2] .. "):")
-                    CommandConfig.ToggleActiveChannel(channelType, configForCommands.commandOverrides[command])
+                    CommandConfig.ToggleActiveChannel(channelType, command)
                     Commands.SetPhrasePatternOverrides(command, Speak.GetPhrasePatterns(configForCommands.commandOverrides[command].activeChannels))
                     return
                 end
@@ -519,6 +503,8 @@ function CommandConfig.Init(config)
         Commands.RegisterSlashCommand("owners", Bind_Owners)
 
         CommandConfig.UpdateEventChannels()
+        Menu.RegisterConfig(CommandConfig)
+        
         CommandConfig._.isInit = true
         Global.tracing.close(ftkey)
     end
@@ -526,18 +512,43 @@ end
 
 ---Toggles an active command channel
 ---@param channel string Available types found in Speak.channelTypes
----@param configLocation table? table to work on active channels within
-function CommandConfig.ToggleActiveChannel(channel, configLocation)
-    local generalConfig = configLocation or CommandConfig._.configData
+---@param command string? command phrase to work on active channels within
+function CommandConfig.ToggleActiveChannel(channel, command)
+    local config = CommandConfig._.configData
+    if command ~= nil then
+        config = config.commandOverrides[command]
+
+        if channel == "reset" then
+            if config ~= nil then
+                config.activeChannels = nil
+                CommandConfig._.config:SaveConfig()
+            end
+            Commands.SetPhrasePatternOverrides(command, nil)
+            CommandConfig._.config:SaveConfig()
+            CommandConfig.UpdateEventChannels()
+            print("Removed active channel override for command: [" .. command .. "]")
+            return
+        end
+
+        -- init override
+        if config == nil then
+            CommandConfig._.configData.commandOverrides[command] = {}
+            config = CommandConfig._.configData.commandOverrides[command]
+        end
+        if config.activeChannels == nil then
+            config.activeChannels = {}
+        end
+    end
+
     if not Speak.IsChannelType(channel) then
         print(" -- Invalid Channel Type [" .. channel .. "]. Valid Channel Types: [" .. StringUtils.Join(TableUtils.GetValues(Speak.GetAllChannelTypes()), ", ") .. "]")
         return
     end
-    if TableUtils.ArrayContains(generalConfig.activeChannels, channel) then
-        TableUtils.RemoveByValue(generalConfig.activeChannels, channel)
+    if TableUtils.ArrayContains(config.activeChannels, channel) then
+        TableUtils.RemoveByValue(config.activeChannels, channel)
         print(" -- Removed [" .. channel .. "] as active channel")
     else
-        generalConfig.activeChannels[#generalConfig.activeChannels + 1] = channel
+        config.activeChannels[#config.activeChannels + 1] = channel
         print(" -- Added [" .. channel .. "] to active channels")
     end
     CommandConfig._.config:SaveConfig()
@@ -553,6 +564,11 @@ function CommandConfig.AddChannel(channel, configLocation)
         print("Invalid Channel Type. Valid Channel Types: [" .. StringUtils.Join(TableUtils.GetValues(Speak.GetAllChannelTypes()), ", ") .. "]")
         return
     end
+
+    if generalConfig.activeChannels == nil then
+        generalConfig.activeChannels = {}
+    end
+
     if not TableUtils.ArrayContains(generalConfig.activeChannels, channel) then
         generalConfig.activeChannels[#generalConfig.activeChannels + 1] = channel
         print("Added [" .. channel .. "] to active channels")
@@ -587,6 +603,169 @@ end
 
 function CommandConfig.Print()
     TableUtils.Print(CommandConfig._.configData)
+end
+
+---@param config table?
+---@return array availableChannels
+local function GetAvailableActiveChannels(config)
+    config = config or CommandConfig._.configData
+    local allChannels = Speak.GetAllChannelTypes()
+    local availableChannels = {}
+    if config.activeChannels ~= nil then
+        for _, channel in ipairs(allChannels) do
+            if not TableUtils.ArrayContains(config.activeChannels, channel) then
+                table.insert(availableChannels, channel)
+            end
+        end
+    else
+        availableChannels = allChannels
+    end
+
+    return availableChannels
+end
+
+local selectedCommandIndex = 0
+local selectedChannelIndex = 0
+local selectedAddChannelIndex = 0
+local selectedConfig = CommandConfig._.configData or {}
+local selectedUsesDefaults = true
+---@diagnostic disable-next-line: duplicate-set-field
+function CommandConfig.BuildMenu()
+    ImGui.BeginTabBar("Command Tabs")
+        if ImGui.BeginTabItem("Active Channels") then
+            ImGui.Text("Active Channels are where this character will listen for commands from other characters.")
+            ImGui.Text("")
+
+            --build command list
+            local commands = Commands.GetCommsPhrases()
+            local selectedCommand = "Default"
+            if selectedCommandIndex > 0 then
+                selectedCommand = commands[selectedCommandIndex]
+            end
+
+            ImGui.AlignTextToFramePadding()
+            ImGui.TextUnformatted("Command:")
+            ImGui.SameLine()
+            ImGui.PushItemWidth(120)
+            if ImGui.BeginCombo("##foo1", selectedCommand) then
+                if ImGui.Selectable("Default", selectedCommandIndex == 0) then
+                    selectedCommandIndex = 0
+                end
+
+                for index, channel in ipairs(commands) do
+                    if ImGui.Selectable(channel, selectedCommandIndex == index) then
+                        selectedCommandIndex = index
+                    end
+                end
+                selectedChannelIndex = 0
+                selectedAddChannelIndex = 0
+                ImGui.EndCombo()
+            end
+
+            -- Update shown command list
+            if selectedCommandIndex <= 0 then
+                selectedCommand = commands[selectedCommandIndex]
+                selectedConfig = CommandConfig._.configData
+                selectedUsesDefaults = true
+            else
+                local override = CommandConfig._.configData.commandOverrides[selectedCommand]
+                if override ~= nil and override.activeChannels ~= nil then
+                    selectedConfig = override
+                    selectedUsesDefaults = false
+                else
+                    selectedConfig = CommandConfig._.configData
+                    selectedUsesDefaults = true
+                end
+            end
+
+            ImGui.BeginChild("listItems", 200, 200, true)
+                if selectedConfig.activeChannels ~= nil and #selectedConfig.activeChannels > 0 then
+                    for i, channel in ipairs(selectedConfig.activeChannels) do
+                        if ImGui.Selectable(channel, selectedChannelIndex == i) then
+                            selectedChannelIndex = i
+                        end
+                    end
+                end
+            ImGui.EndChild()
+            ImGui.SameLine()
+            ImGui.BeginGroup()
+                ImGui.BeginDisabled()
+                ImGui.Checkbox("Uses Default", selectedUsesDefaults)
+                ImGui.EndDisabled()
+
+                if selectedChannelIndex <= 0 then
+                    ImGui.BeginDisabled()
+                end
+                if ImGui.Button("Remove Selected", 120, 22) then
+                    if selectedChannelIndex > 0 then
+                        if selectedUsesDefaults and selectedCommandIndex > 0 then
+                            CommandConfig._.configData.commandOverrides[selectedCommand] = CommandConfig._.configData.commandOverrides[selectedCommand] or {}
+                            CommandConfig._.configData.commandOverrides[selectedCommand].activeChannels = TableUtils.DeepClone(CommandConfig._.configData.activeChannels)
+                            selectedConfig = CommandConfig._.configData.commandOverrides[selectedCommand]
+                        end
+                        CommandConfig.RemoveChannel(selectedConfig.activeChannels[selectedChannelIndex], selectedConfig)
+                        selectedChannelIndex = 0
+                    end
+                end
+                if selectedChannelIndex <= 0 then
+                    ImGui.EndDisabled()
+                end
+
+                if selectedUsesDefaults then
+                    ImGui.BeginDisabled()
+                end
+                if ImGui.Button("Reset to Defaults", 120, 22) then
+                    if CommandConfig._.configData.commandOverrides[selectedCommand] ~= nil then
+                        CommandConfig._.configData.commandOverrides[selectedCommand].activeChannels = nil
+                        CommandConfig._.config:SaveConfig()
+                    end
+                end
+                if selectedUsesDefaults then
+                    ImGui.EndDisabled()
+                end
+            ImGui.EndGroup()
+
+            local availableChannels = GetAvailableActiveChannels(selectedConfig)
+            local comboDisplay = ""
+            if selectedAddChannelIndex > 0 then
+                comboDisplay = availableChannels[selectedAddChannelIndex]
+            end
+            if ImGui.BeginCombo("##foo2", comboDisplay) then
+                for index, channel in ipairs(availableChannels) do
+                    if ImGui.Selectable(channel, selectedAddChannelIndex == index) then
+                        selectedAddChannelIndex = index
+                    end
+                end
+                ImGui.EndCombo()
+            end
+            ImGui.SameLine()
+            if comboDisplay == "" then
+                ImGui.BeginDisabled()
+            end
+            if ImGui.Button("Add", 70, 22) then
+                if selectedUsesDefaults and selectedCommandIndex > 0 then
+                    CommandConfig._.configData.commandOverrides[selectedCommand] = CommandConfig._.configData.commandOverrides[selectedCommand] or {}
+                    CommandConfig._.configData.commandOverrides[selectedCommand].activeChannels = TableUtils.DeepClone(CommandConfig._.configData.activeChannels)
+                    selectedConfig = CommandConfig._.configData.commandOverrides[selectedCommand]
+                end
+                CommandConfig.AddChannel(comboDisplay, selectedConfig)
+                selectedAddChannelIndex = 0
+            end
+            if comboDisplay == "" then
+                ImGui.EndDisabled()
+            end
+
+            ImGui.EndTabItem()
+        end
+
+        if ImGui.BeginTabItem("Speak Channels") then
+            ImGui.EndTabItem()
+        end
+
+        if ImGui.BeginTabItem("Owners") then
+            ImGui.EndTabItem()
+        end
+    ImGui.EndTabBar()
 end
 
 return CommandConfig

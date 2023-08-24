@@ -2,8 +2,9 @@ local Debug = require("utils.Debug.Debug")
 local TableUtils = require("utils.TableUtils.TableUtils")
 
 local Commands = require("cabby.commands.commands")
+local Menu = require("cabby.menu")
 
----@class DebugConfig
+---@type CabbyConfig
 local DebugConfig = {
     key = "DebugConfig",
     _ = {
@@ -34,6 +35,7 @@ end
 
 ---Initialize the static object, only done once
 ---@param config Config
+---@diagnostic disable-next-line: duplicate-set-field
 function DebugConfig.Init(config)
     if not DebugConfig._.isInit then
         local ftkey = Global.tracing.open("DebugConfig Setup")
@@ -74,7 +76,9 @@ function DebugConfig.Init(config)
             end
         end
         Commands.RegisterSlashCommand("debug", Bind_Debug)
-        
+
+        Menu.RegisterConfig(DebugConfig)
+
         DebugConfig._.isInit = true
         Global.tracing.close(ftkey)
     end

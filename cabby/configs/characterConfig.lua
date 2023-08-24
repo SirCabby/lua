@@ -3,8 +3,9 @@ local mq = require("mq")
 local Debug = require("utils.Debug.Debug")
 
 local Character = require("cabby.character")
+local Menu = require("cabby.menu")
 
----@class CharacterConfig
+---@type CabbyConfig
 local CharacterConfig = {
     key = "CharacterConfig",
     _ = {
@@ -41,12 +42,14 @@ end
 
 ---Initialize the static object, only done once
 ---@param config Config
+---@diagnostic disable-next-line: duplicate-set-field
 function CharacterConfig.Init(config)
     if not CharacterConfig._.isInit then
         local ftkey = Global.tracing.open("CharacterConfig Setup")
         CharacterConfig._.config = config
 
         initAndValidate()
+        Menu.RegisterConfig(CharacterConfig)
 
         CharacterConfig._.isInit = true
         Global.tracing.close(ftkey)
