@@ -636,13 +636,14 @@ function CommandConfig.BuildMenu()
             ImGui.Text("Active Channels are where this character will listen for commands from other characters.")
             ImGui.Text("")
 
-            --build command list
+            -- Build command list
             local commands = Commands.GetCommsPhrases()
             local selectedCommand = "Default"
             if selectedCommandIndex > 0 then
                 selectedCommand = commands[selectedCommandIndex]
             end
 
+            -- Build commands combo box
             ImGui.AlignTextToFramePadding()
             ImGui.TextUnformatted("Command:")
             ImGui.SameLine()
@@ -662,7 +663,7 @@ function CommandConfig.BuildMenu()
                 ImGui.EndCombo()
             end
 
-            -- Update shown command list
+            -- Update channel list for selected command
             if selectedCommandIndex <= 0 then
                 selectedCommand = commands[selectedCommandIndex]
                 selectedConfig = CommandConfig._.configData
@@ -678,6 +679,7 @@ function CommandConfig.BuildMenu()
                 end
             end
 
+            -- Build channel list
             ImGui.BeginChild("listItems", 200, 200, true)
                 if selectedConfig.activeChannels ~= nil and #selectedConfig.activeChannels > 0 then
                     for i, channel in ipairs(selectedConfig.activeChannels) do
@@ -688,11 +690,13 @@ function CommandConfig.BuildMenu()
                 end
             ImGui.EndChild()
             ImGui.SameLine()
+            -- Build right side options
             ImGui.BeginGroup()
                 ImGui.BeginDisabled()
                 ImGui.Checkbox("Uses Default", selectedUsesDefaults)
                 ImGui.EndDisabled()
 
+                -- Remove-Selected Button
                 if selectedChannelIndex <= 0 then
                     ImGui.BeginDisabled()
                 end
@@ -711,6 +715,7 @@ function CommandConfig.BuildMenu()
                     ImGui.EndDisabled()
                 end
 
+                -- Reset Button
                 if selectedUsesDefaults then
                     ImGui.BeginDisabled()
                 end
@@ -725,6 +730,7 @@ function CommandConfig.BuildMenu()
                 end
             ImGui.EndGroup()
 
+            -- Build available channels Combo Box
             local availableChannels = GetAvailableActiveChannels(selectedConfig)
             local comboDisplay = ""
             if selectedAddChannelIndex > 0 then
@@ -739,6 +745,7 @@ function CommandConfig.BuildMenu()
                 ImGui.EndCombo()
             end
             ImGui.SameLine()
+            -- Build Add-Channel Button
             if comboDisplay == "" then
                 ImGui.BeginDisabled()
             end
@@ -754,6 +761,20 @@ function CommandConfig.BuildMenu()
             if comboDisplay == "" then
                 ImGui.EndDisabled()
             end
+
+            ImGui.Text("")
+            ImGui.Text("Overridden Commmands")
+            ImGui.SameLine()
+            Menu.HelpMarker("All commands follow the `Default` channel list but can be overridden. This list shows which commands have overrides.")
+
+            -- Build Override List
+            ImGui.BeginChild("overrideCommands", 200, 200, true)
+                for command, overrides in pairs(CommandConfig._.configData.commandOverrides) do
+                    if overrides.activeChannels ~= nil then
+                        ImGui.Selectable(command, false)
+                    end
+                end
+            ImGui.EndChild()
 
             ImGui.EndTabItem()
         end
