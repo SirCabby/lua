@@ -23,7 +23,6 @@ end
 
 local function CleanSave()
     local configRoot = CommandConfig._.configData
-    print("hi")
     -- Clean empty command overrides
     for command, overrides in pairs(configRoot.commandOverrides) do
         if #TableUtils.GetKeys(overrides) <= 0 then
