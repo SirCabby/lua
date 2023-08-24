@@ -1,6 +1,7 @@
 local mq = require("mq")
 
 local Debug = require("utils.Debug.Debug")
+local TableUtils = require("utils.TableUtils.TableUtils")
 
 ---@class Character
 local Character = {
@@ -38,6 +39,12 @@ Character.Refresh = function()
     -- aa
     -- combatabilities (discs?) auras?
     -- songs
+end
+
+---@param ability string
+---@return boolean hasAbility
+Character.HasAbility = function(ability)
+    return TableUtils.ArrayContains(Character._.character.abilities, ability)
 end
 
 return Character

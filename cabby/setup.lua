@@ -7,7 +7,7 @@ local CharacterConfig = require("cabby.configs.characterConfig")
 local CommandConfig = require("cabby.configs.commandConfig")
 local DebugConfig = require("cabby.configs.debugConfig")
 local GeneralConfig = require("cabby.configs.generalConfig")
-local FollowState = require("cabby.states.followState")
+local Menu = require("cabby.menu")
 
 local Setup = {
     key = "Setup",
@@ -58,10 +58,10 @@ local function PluginSetup()
     SetupEqbc()
     CheckPlugin("MQ2MoveUtils")
     CheckPlugin("MQ2AdvPath")
-    CheckPlugin("MQ2Rez")
-    CheckPlugin("MQ2Twist")
-    CheckPlugin("MQ2Melee")
-    CheckPlugin("MQ2Cast")
+    -- CheckPlugin("MQ2Rez")
+    -- CheckPlugin("MQ2Twist")
+    -- CheckPlugin("MQ2Melee")
+    -- CheckPlugin("MQ2Cast")
 
     Global.tracing.close(ftkey)
 end
@@ -84,14 +84,37 @@ local function ConfigSetup(configFilePath)
     GeneralConfig.Init(Setup.config)
     CharacterConfig.Init(Setup.config)
 
+    Menu.Init()
+
     Global.tracing.close(ftkey)
 end
 
 ---@param stateMachine StateMachine
-local function StateSetup(stateMachine)
+local function ClassSetup(stateMachine)
     local ftkey = Global.tracing.open("State Setup")
 
-    stateMachine:Register(FollowState.Init())
+    local className = mq.TLO.Me.Class.ShortName()
+    ---@type Class
+    local class
+    if className == "BRD" then
+    elseif className == "BST" then
+    elseif className == "BER" then
+    elseif className == "CLR" then
+    elseif className == "DRU" then
+    elseif className == "ENC" then
+    elseif className == "MAG" then
+    elseif className == "MNK" then
+        class = require("cabby.classes.monk")
+    elseif className == "NEC" then
+    elseif className == "PAL" then
+    elseif className == "RNG" then
+    elseif className == "SHD" then
+    elseif className == "SHM" then
+    elseif className == "WAR" then
+    elseif className == "WIZ" then
+    end
+
+    class.Init(stateMachine)
 
     Global.tracing.close(ftkey)
     
@@ -118,7 +141,7 @@ function Setup:Init(configFilePath, stateMachine)
     DebugLog("Starting Cabby Setup...")
 
     ConfigSetup(configFilePath)
-    StateSetup(stateMachine)
+    ClassSetup(stateMachine)
 
     DebugLog("Finished Cabby Setup")
 end
