@@ -769,9 +769,15 @@ function CommandConfig.BuildMenu()
 
             -- Build Override List
             ImGui.BeginChild("overrideCommands", 200, 200, true)
-                for command, overrides in pairs(CommandConfig._.configData.commandOverrides) do
+                for thisCommand, overrides in pairs(CommandConfig._.configData.commandOverrides) do
                     if overrides.activeChannels ~= nil then
-                        ImGui.Selectable(command, false)
+                        if ImGui.Selectable(thisCommand, false) then
+                            for index, thatCommand in ipairs(commands) do
+                                if thisCommand == thatCommand then
+                                    selectedCommandIndex = index
+                                end
+                            end
+                        end
                     end
                 end
             ImGui.EndChild()
