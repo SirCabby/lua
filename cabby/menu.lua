@@ -24,6 +24,17 @@ local function PageDne()
     ImGui.Text("Settings page does not yet exist for this selection")
 end
 
+Menu.HelpMarker = function(message)
+    ImGui.TextDisabled("(?)");
+    if ImGui.IsItemHovered() then
+        ImGui.BeginTooltip();
+        ImGui.PushTextWrapPos(ImGui.GetFontSize() * 35.0);
+        ImGui.TextUnformatted(message);
+        ImGui.PopTextWrapPos();
+        ImGui.EndTooltip();
+    end
+end
+
 Menu.Init = function()
     if not Menu._.isInit then
         local selectedIndex = 0
