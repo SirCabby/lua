@@ -21,6 +21,26 @@ local function DebugLog(str)
     Debug.Log(CommandConfig.key, str)
 end
 
+local function CleanSave()
+    local configRoot = CommandConfig._.configData
+    print("hi")
+    -- Clean empty command overrides
+    for command, overrides in pairs(configRoot.commandOverrides) do
+        if #TableUtils.GetKeys(overrides) <= 0 then
+            configRoot.commandOverrides[command] = nil
+        end
+    end
+
+    -- Clean empty event overrides
+    for event, overrides in pairs(configRoot.eventOverrides) do
+        if #TableUtils.GetKeys(overrides) <= 0 then
+            configRoot.eventOverrides[event] = nil
+        end
+    end
+
+    CommandConfig._.config:SaveConfig()
+end
+
 local function initAndValidate()
     local configRoot = CommandConfig._.config:GetConfigRoot()
 
@@ -219,7 +239,7 @@ function CommandConfig.Init(config)
                     if channelType == "reset" then
                         if configForCommands.commandOverrides[command] ~= nil then
                             configForCommands.commandOverrides[command].speak = nil
-                            CommandConfig._.config:SaveConfig()
+                            CleanSave()
                         end
                         Commands.SetCommandSpeakOverrides(command, nil)
                         print("(/speak "..command.." "..channelType..") Removed speak override for command: [" .. command .. "]")
@@ -261,7 +281,7 @@ function CommandConfig.Init(config)
                     if channelType == "reset" then
                         if configForCommands.eventOverrides[eventId] ~= nil then
                             configForCommands.eventOverrides[eventId].speak = nil
-                            CommandConfig._.config:SaveConfig()
+                            CleanSave()
                         end
                         Commands.SetEventSpeakOverrides(eventId, nil)
                         print("(/speak "..eventId.." "..channelType..") Removed speak override for event: [" .. eventId .. "]")
@@ -414,7 +434,7 @@ function CommandConfig.Init(config)
                     if name == "reset" then
                         if configForCommands.commandOverrides[command] ~= nil then
                             configForCommands.commandOverrides[command].owners = nil
-                            CommandConfig._.config:SaveConfig()
+                            CleanSave()
                         end
                         Commands.SetCommandOwnersOverrides(command, nil)
                         print("(/owners "..command.." "..name..") Removed owner override for command: [" .. command .. "]")
@@ -455,7 +475,7 @@ function CommandConfig.Init(config)
                     if name == "reset" then
                         if configForCommands.eventOverrides[event] ~= nil then
                             configForCommands.eventOverrides[event].owners = nil
-                            CommandConfig._.config:SaveConfig()
+                            CleanSave()
                         end
                         Commands.SetEventOwnersOverrides(event, nil)
                         print("(/owners "..event.." "..name..") Removed owner override for command: [" .. event .. "]")
@@ -519,12 +539,13 @@ function CommandConfig.ToggleActiveChannel(channel, command)
         config = config.commandOverrides[command]
 
         if channel == "reset" then
+            Commands.SetPhrasePatternOverrides(command, nil)
             if config ~= nil then
                 config.activeChannels = nil
+                CleanSave()
+            else
                 CommandConfig._.config:SaveConfig()
             end
-            Commands.SetPhrasePatternOverrides(command, nil)
-            CommandConfig._.config:SaveConfig()
             CommandConfig.UpdateEventChannels()
             print("Removed active channel override for command: [" .. command .. "]")
             return
@@ -722,7 +743,7 @@ function CommandConfig.BuildMenu()
                 if ImGui.Button("Reset to Defaults", 120, 22) then
                     if CommandConfig._.configData.commandOverrides[selectedCommand] ~= nil then
                         CommandConfig._.configData.commandOverrides[selectedCommand].activeChannels = nil
-                        CommandConfig._.config:SaveConfig()
+                        CleanSave()
                     end
                 end
                 if selectedUsesDefaults then
@@ -763,7 +784,7 @@ function CommandConfig.BuildMenu()
             end
 
             ImGui.Text("")
-            ImGui.Text("Overridden Commmands")
+            ImGui.Text("Overridden Commands")
             ImGui.SameLine()
             Menu.HelpMarker("All commands follow the `Default` channel list but can be overridden. This list shows which commands have overrides.")
 
