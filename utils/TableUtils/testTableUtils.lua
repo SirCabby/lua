@@ -240,33 +240,12 @@ test.TableUtils.DeepClone_emptyTable = function()
     test.assert(TableUtils.Compare({}, clone))
 end
 
+test.TableUtils.Subtract = function()
+    local superset = { 1, 2, 3, 2, 2, 4, 5 }
+    local subset = { 2, 3 }
+    local result = TableUtils.ArraySubtract(superset, subset)
+    test.equal(#result, 3)
+end
+
 -- RUN TESTS
 test.summary()
-
-
-
-
-
--- local testArray1 = { 1, 2, "foo", true }
--- local testArray2 = {}
--- local notArray1 = { one = 1, two = 2}
-
--- assert(TableUtils.IsArray(testArray1))
--- assert(TableUtils.IsArray(testArray2))
--- assert(not TableUtils.IsArray(notArray1))
-
-
--- local arrayKeys1 = TableUtils.GetKeys(testArray1)
--- local arrayKeys2 = TableUtils.GetKeys(testArray2)
--- local notArrayKeys1 = TableUtils.GetKeys(notArray1)
-
--- TableUtils.Print(arrayKeys1)
--- TableUtils.Print(arrayKeys2)
--- TableUtils.Print(notArrayKeys1)
-
--- TableUtils.RemoveByValue(testArray1, 2)
--- TableUtils.Print(testArray1)
--- print()
-
--- TableUtils.RemoveByValue(notArray1, 2)
--- TableUtils.Print(notArray1)

@@ -86,7 +86,7 @@ function TableUtils.GetKeys(tbl)
     DebugLog("Getting keys from table")
     local result = {}
     local count = 0
-    for key,_ in pairs(tbl) do
+    for key in pairs(tbl) do
         count = count + 1
         result[count] = key
         DebugLog("Key [" .. tostring(key) .. "]")
@@ -106,7 +106,7 @@ function TableUtils.GetValues(tbl)
     end
     local result = {}
     local count = 0
-    for _,value in pairs(tbl) do
+    for _, value in pairs(tbl) do
         count = count + 1
         result[count] = value
         DebugLog("Value [" .. tostring(value) .. "]")
@@ -119,7 +119,7 @@ end
 ---@param tbl2 table
 ---@return boolean isEqual true if equal, false if not
 function TableUtils.Compare(tbl1, tbl2)
-    for k,v in pairs(tbl1) do
+    for k, v in pairs(tbl1) do
         DebugLog("Comparing table key: [" .. k .. "]")
         if type(v) == "boolean" or type(v) == "string" or type(v) == "number" or type(v) == "nil" then
             if v ~= tbl2[k] then
@@ -133,7 +133,7 @@ function TableUtils.Compare(tbl1, tbl2)
             end
         end
     end
-    for k,v in pairs(tbl2) do
+    for k, v in pairs(tbl2) do
         DebugLog("Comparing table key: [" .. k .. "]")
         if type(v) == "boolean" or type(v) == "string" or type(v) == "number" or type(v) == "nil" then
             if v ~= tbl1[k] then
@@ -159,13 +159,34 @@ function TableUtils.DeepClone(tbl)
         DebugLog("tbl was not a table [" .. tostring(tbl) .. "]")
         return nil
     end
-    local result = {}
 
-    for k,v in pairs(tbl) do
+    local result = {}
+    for k, v in pairs(tbl) do
         if type(v) == "boolean" or type(v) == "string" or type(v) == "number" or type(v) == "nil" then
             result[k] = v
         elseif type(v) == "table" then
             result[k] = TableUtils.DeepClone(v)
+        end
+    end
+
+    return result
+end
+
+---@param minuend array The array to subtract from
+---@param subtrahend array The subtracted array
+---@return array difference Difference from the subtraction
+function TableUtils.ArraySubtract(minuend, subtrahend)
+    local result = {}
+    local matches = {}
+
+    for k, v in pairs(minuend) do result[k] = v end
+
+    for i = 1, #subtrahend do
+        matches[subtrahend[i]] = true
+    end
+    for i = #minuend, 1, -1 do
+        if matches[minuend[i]] then
+            table.remove(result, i)
         end
     end
 
