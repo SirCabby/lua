@@ -233,7 +233,6 @@ end
 ---@param phrase string
 ---@param speakOverrides Speak?
 function Commands.SetCommandSpeakOverrides(phrase, speakOverrides)
-    phrase = StringUtils.Split(phrase)[1]
     Commands._.registrations.commands.speakOverrides[phrase] = speakOverrides
 end
 

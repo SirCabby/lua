@@ -1,4 +1,5 @@
 local mq = require("mq")
+local TableUtils = require("utils.TableUtils.TableUtils")
 
 local Config = require("utils.Config.Config")
 local Debug = require("utils.Debug.Debug")
@@ -74,9 +75,6 @@ local function ConfigSetup(configFilePath)
 
     local ftkey2 = Global.tracing.open("Config new")
     Setup.config = Config.new(configFilePath)
-    if Setup.config:GetConfigRoot()[CommandConfig.key] == nil then
-        Setup.config:GetConfigRoot()[CommandConfig.key] = {}
-    end
     Global.tracing.close(ftkey2)
 
     CommandConfig.Init(Setup.config)
