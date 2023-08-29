@@ -39,7 +39,7 @@ Menu.Init = function()
     if not Menu._.isInit then
         local selectedIndex = 0
         mq.imgui.init("Cabby Menu", function()
-            ImGui.Begin("Cabby Menu")
+            if ImGui.Begin("Cabby Menu") then
                 local indexBase = 0
                 local selectedMenu = NotSelected
                 local _, height = ImGui.GetContentRegionAvail()
@@ -94,7 +94,8 @@ Menu.Init = function()
                 ImGui.BeginChild("displayPane", width - 178, height, true)
                     selectedMenu()
                 ImGui.EndChild()
-            ImGui.End()
+                ImGui.End()
+            end
         end)
 
         Menu._.isInit = true

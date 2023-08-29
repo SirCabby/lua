@@ -113,11 +113,10 @@ function DebugConfig.BuildMenu()
     ImGui.Text("Toggle debug logging for the following areas")
     ImGui.Text("")
 
-    ImGui.BeginTable("checkbox list", 1, ImGuiTableFlags.SizingStretchProp)
+    if ImGui.BeginTable("checkbox list", 1, ImGuiTableFlags.SizingStretchProp) then
         ImGui.TableNextColumn()
         local sortedKeys = TableUtils.GetKeys(Debug._.toggles)
         table.sort(sortedKeys)
-        ---@diagnostic disable-next-line: param-type-mismatch
         for _, key in ipairs(sortedKeys) do
             ---@type boolean
             local clicked
@@ -126,7 +125,8 @@ function DebugConfig.BuildMenu()
                 DebugConfig._.config:SaveConfig()
             end
         end
-    ImGui.EndTable()
+        ImGui.EndTable()
+    end
 end
 
 return DebugConfig
