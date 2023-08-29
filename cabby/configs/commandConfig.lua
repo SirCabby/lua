@@ -38,6 +38,26 @@ local CommandConfig = {
                     selectedUsesDefaults = { value = true },
                     tellName = { value = "" }
                 }
+            },
+            owners = {
+                commands = {
+                    selectedCommandIndex = { value = 0 },
+                    selectedChannelIndex = { value = 0 },
+                    selectedAddChannelIndex = { value = 0 },
+                    selectedConfig = { value = {} },
+                    selectedUsesDefaults = { value = true },
+                    tellName = { value = "" },
+                    isOpen = { value = false }
+                },
+                events = {
+                    selectedEventIndex = { value = 0 },
+                    selectedChannelIndex = { value = 0 },
+                    selectedAddChannelIndex = { value = 0 },
+                    selectedConfig = { value = {} },
+                    selectedUsesDefaults = { value = true },
+                    tellName = { value = "" },
+                    isOpen = { value = false }
+                }
             }
         }
     }
@@ -168,6 +188,7 @@ function CommandConfig.Init(config)
 
         local function Bind_ActiveChannels(...)
             local args = {...} or {}
+
             -- /activechannels
             if args == nil or #args < 1 then
                 print("(/activechannels) Currently active channels: [" .. StringUtils.Join(CommandConfig._.configData.activeChannels, ", ") .. "]")
@@ -289,14 +310,6 @@ function CommandConfig.Init(config)
         end
         Commands.RegisterSlashCommand("speak", Bind_Speak)
 
-
-
-
-
-
-
-
-
         local function Bind_Owners(...)
             local args = {...} or {}
 
@@ -347,7 +360,7 @@ function CommandConfig.Init(config)
                     local command = args[1]:lower()
                     local name = args[2]:lower()
 
-                    -- /ownrs <command> reset
+                    -- /owners <command> reset
                     if name == "reset" then
                         if configForCommands.commandOverrides[command] ~= nil then
                             configForCommands.commandOverrides[command].owners = nil
@@ -441,36 +454,11 @@ function CommandConfig.Init(config)
 
         CommandConfig.UpdateEventChannels()
         Menu.RegisterConfig(CommandConfig)
-        
+
         CommandConfig._.isInit = true
         Global.tracing.close(ftkey)
     end
 end
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
 ---Toggles an active command channel
 ---@param channel string Available types found in Speak.channelTypes
@@ -559,7 +547,7 @@ function CommandConfig.RemoveActiveChannel(channel, configLocation)
     DebugLog(channel .. " was not an active channel")
 end
 
----Toggles an speak command channel
+---Toggles a speak command channel
 ---@param channel string Available types found in Speak.channelTypes
 ---@param to string? required for tell speak types
 ---@param commandOrEvent string? command/event phrase to modify speak channels for
@@ -622,11 +610,22 @@ function CommandConfig.ToggleSpeakChannel(channel, to, commandOrEvent, isEventTy
         table.insert(config.speak, channel)
     end
     CommandConfig._.config:SaveConfig()
-    ---@diagnostic disable-next-line: param-type-mismatch
-    Commands.SetSpeak(Speak.new(config.speak))
+
+    local speak = Speak.new(config.speak)
+    if commandOrEvent ~= nil then
+        
+        if isEventType then
+            Commands.SetEventSpeakOverrides(commandOrEvent, speak)
+        else
+            Commands.SetCommandSpeakOverrides(commandOrEvent, speak)
+        end
+    else
+        ---@diagnostic disable-next-line: param-type-mismatch
+        Commands.SetSpeak(speak)
+    end
 end
 
----Adds an active command channel
+---Adds a speak command channel
 ---@param channel string Available types found in Speak.channelTypes
 ---@param configLocation table? table to work on active channels within
 ---@param to string? required for tell speak types
@@ -658,7 +657,7 @@ function CommandConfig.AddSpeakChannel(channel, configLocation, to)
     DebugLog(channel .. " was already a speak channel")
 end
 
----Removes an active command channel
+---Removes a speak command channel
 ---@param channel string Available types found in Speak.channelTypes
 ---@param configLocation table? table to work on active channels within
 ---@param to string? required for tell speak types
@@ -687,43 +686,87 @@ function CommandConfig.RemoveSpeakChannel(channel, configLocation, to)
     DebugLog(channel .. " was not a speak channel")
 end
 
+---Toggles an owner
+---@param name string Any character name, "reset", "open"
+---@param commandOrEvent string? command/event phrase to modify owners for
+---@param isEventType boolean? Defaults to Command
+function CommandConfig.ToggleOwner(name, commandOrEvent, isEventType)
+    if isEventType == nil then isEventType = false end
+    local overrides = "commandOverrides"
+    if isEventType then overrides = "eventOverrides" end
 
+    local config = CommandConfig._.configData
+    local owners = Commands.GetCommandOwners("dne-global-owners")
+    if commandOrEvent ~= nil then
+        config = config[overrides][commandOrEvent]
 
+        if name == "reset" then
+            if config ~= nil then
+                config.owners = nil
+                CleanSave()
+            else
+                CommandConfig._.config:SaveConfig()
+            end
 
+            if isEventType then
+                Commands.SetEventOwnersOverrides(commandOrEvent, nil)
+                print(" -- Removed owner override for event: [" .. commandOrEvent .. "]")
+            else
+                Commands.SetCommandOwnersOverrides(commandOrEvent, nil)
+                print(" -- Removed owner override for command: [" .. commandOrEvent .. "]")
+            end
+            return
+        end
 
+        -- init override
+        if config == nil then
+            CommandConfig._.configData[overrides][commandOrEvent] = {}
+            config = CommandConfig._.configData[overrides][commandOrEvent]
+        end
+        if config.owners == nil then
+            config.owners = {}
+            config.owners.open = false
+        end
+        config.owners.list = config.owners.list or {}
+        owners = Owners.new(CommandConfig._.config, config)
+    end
 
+    if owners:IsOwner(name) then
+        owners:Remove(name)
+    else
+        owners:Add(name)
+    end
 
+    if commandOrEvent ~= nil then
+        if isEventType then
+            Commands.SetEventOwnersOverrides(commandOrEvent, owners)
+        else
+            Commands.SetCommandOwnersOverrides(commandOrEvent, owners)
+        end
+    end
 
+    CommandConfig._.config:SaveConfig()
+end
 
+---Adds an owner
+---@param name string Any character name
+---@param owners Owners
+function CommandConfig.AddOwner(name, owners)
+    if not owners:IsOwner(name) then
+        owners:Add(name)
+    end
+    DebugLog(name .. " was already an owner")
+end
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
+---Removes an owner
+---@param name string Any character name
+---@param owners Owners
+function CommandConfig.RemoveOwner(name, owners)
+    if owners:IsOwner(name) then
+        owners:Remove(name)
+    end
+    DebugLog(name .. " was not an owner")
+end
 
 ---Syncs registered events to all active channels
 function CommandConfig.UpdateEventChannels()
@@ -744,11 +787,12 @@ end
 ---@param selectedUsesDefaults table
 ---@param tellName table? nil if don't need tell names
 ---@param subType string activeChannels, speak, owners
----@param allSubtypeList array
+---@param allSubtypeList array? nil for no list, names only
 ---@param addFunc function
 ---@param removeFunc function
+---@param isOpen table?
 local function buildCommandEventEditor(commandOrEvent, overrideHelpText, allCommandsOrEventsList, selectedCommandEventIndex, selectedSubtypeIndex,
-    selectedAddSubtypeIndex, selectedConfig, selectedUsesDefaults, tellName, subType, allSubtypeList, addFunc, removeFunc)
+    selectedAddSubtypeIndex, selectedConfig, selectedUsesDefaults, tellName, subType, allSubtypeList, addFunc, removeFunc, isOpen)
     -- Build command/event list
     local commandOrEventOverrideType = commandOrEvent:lower() .. "Overrides"
     local selectedCommandEvent = "Default"
@@ -778,7 +822,6 @@ local function buildCommandEventEditor(commandOrEvent, overrideHelpText, allComm
 
     -- Update subtype list for selected command/event
     if selectedCommandEventIndex.value <= 0 then
-        selectedCommandEvent = allCommandsOrEventsList[selectedCommandEventIndex.value]
         selectedConfig.value = CommandConfig._.configData
         selectedUsesDefaults.value = true
     else
@@ -794,10 +837,14 @@ local function buildCommandEventEditor(commandOrEvent, overrideHelpText, allComm
 
     -- Build subtype list
     local subTypeCount = 0
-    ImGui.BeginChild("listItems", 200, 200, true)
-        if selectedConfig.value[subType] ~= nil and #selectedConfig.value[subType] > 0 then
-            for i, channel in ipairs(selectedConfig.value[subType]) do
-                if ImGui.Selectable(channel, selectedSubtypeIndex.value == i) then
+    ImGui.BeginChild("listItems", 200, 210, true)
+        if selectedConfig.value[subType] ~= nil then
+            local subTypeList = selectedConfig.value[subType]
+            if allSubtypeList == nil then
+                subTypeList = subTypeList.list
+            end
+            for i, subTypeItem in ipairs(subTypeList) do
+                if ImGui.Selectable(subTypeItem, selectedSubtypeIndex.value == i) then
                     selectedSubtypeIndex.value = i
                 end
                 subTypeCount = subTypeCount + 1
@@ -823,16 +870,27 @@ local function buildCommandEventEditor(commandOrEvent, overrideHelpText, allComm
         end
         if ImGui.Button("Remove Selected", 120, 22) then
             if selectedSubtypeIndex.value > 0 then
-                if selectedUsesDefaults.value and selectedCommandEventIndex.value > 0 then
-                    CommandConfig._.configData[commandOrEventOverrideType][selectedCommandEvent] = CommandConfig._.configData[commandOrEventOverrideType][selectedCommandEvent] or {}
-                    CommandConfig._.configData[commandOrEventOverrideType][selectedCommandEvent][subType] = TableUtils.DeepClone(CommandConfig._.configData[subType])
-                    selectedConfig.value = CommandConfig._.configData[commandOrEventOverrideType][selectedCommandEvent]
-                end
-                local removeValues = StringUtils.Split(selectedConfig.value[subType][selectedSubtypeIndex.value])
-                if #removeValues > 1 then
-                    removeFunc(removeValues[1], selectedConfig.value, removeValues[2])
+                if allSubtypeList == nil then
+                    ---@type Owners
+                    local owners
+                    if commandOrEvent:lower() == "command" then
+                        owners = Commands.GetCommandOwners(selectedCommandEvent)
+                    else
+                        owners = Commands.GetEventOwners(selectedCommandEvent)
+                    end
+                    removeFunc(selectedConfig.value[subType].list[selectedSubtypeIndex.value], owners)
                 else
-                    removeFunc(removeValues[1], selectedConfig.value)
+                    if selectedUsesDefaults.value and selectedCommandEventIndex.value > 0 then
+                        CommandConfig._.configData[commandOrEventOverrideType][selectedCommandEvent] = CommandConfig._.configData[commandOrEventOverrideType][selectedCommandEvent] or {}
+                        CommandConfig._.configData[commandOrEventOverrideType][selectedCommandEvent][subType] = TableUtils.DeepClone(CommandConfig._.configData[subType])
+                        selectedConfig.value = CommandConfig._.configData[commandOrEventOverrideType][selectedCommandEvent]
+                    end
+                    local removeValues = StringUtils.Split(selectedConfig.value[subType][selectedSubtypeIndex.value])
+                    if #removeValues > 1 then
+                        removeFunc(removeValues[1], selectedConfig.value, removeValues[2])
+                    else
+                        removeFunc(removeValues[1], selectedConfig.value)
+                    end
                 end
                 selectedSubtypeIndex.value = 0
             end
@@ -854,65 +912,139 @@ local function buildCommandEventEditor(commandOrEvent, overrideHelpText, allComm
         if selectedUsesDefaults.value then
             ImGui.EndDisabled()
         end
+
+        -- IsOpen Checkbox
+        if isOpen ~= nil then
+            ---@type boolean
+            local openClicked
+            isOpen.value, openClicked = ImGui.Checkbox("Open", isOpen.value)
+            if openClicked then
+                if selectedCommandEventIndex.value > 0 then
+                    -- init override
+                    if CommandConfig._.configData[commandOrEventOverrideType][selectedCommandEvent] == nil then
+                        CommandConfig._.configData[commandOrEventOverrideType][selectedCommandEvent] = {}
+                    end
+                    if CommandConfig._.configData[commandOrEventOverrideType][selectedCommandEvent].owners == nil then
+                        CommandConfig._.configData[commandOrEventOverrideType][selectedCommandEvent].owners = TableUtils.DeepClone(CommandConfig._.configData.owners)
+                        Commands.SetCommandOwnersOverrides(selectedCommandEvent, Owners.new(CommandConfig._.config, CommandConfig._.configData[commandOrEventOverrideType][selectedCommandEvent].owners))
+                    end
+                end
+
+                ---@type Owners
+                local owners
+                if commandOrEvent:lower() == "command" then
+                    owners = Commands.GetCommandOwners(selectedCommandEvent)
+                else
+                    owners = Commands.GetEventOwners(selectedCommandEvent)
+                end
+                ---@diagnostic disable-next-line: need-check-nil
+                print(tostring(isOpen.value))
+                owners:Open(isOpen.value)
+            end
+            ImGui.SameLine()
+            Menu.HelpMarker("When Open, the list is ignored and all speakers are allowed to issue this command.")
+        end
+
+        -- Add Button here if no subType list
+        ImGui.BeginChild("separator", 1, 70)
+        ImGui.EndChild()
+        if allSubtypeList == nil then
+            local isDisabled = false
+            if tellName == nil or tellName.value == "" then
+                ImGui.BeginDisabled()
+                isDisabled = true
+            end
+            if ImGui.Button("Add", 70, 22) then
+                if selectedCommandEventIndex.value > 0 then
+                    -- init override
+                    if CommandConfig._.configData[commandOrEventOverrideType][selectedCommandEvent] == nil then
+                        CommandConfig._.configData[commandOrEventOverrideType][selectedCommandEvent] = {}
+                    end
+                    if CommandConfig._.configData[commandOrEventOverrideType][selectedCommandEvent].owners == nil then
+                        CommandConfig._.configData[commandOrEventOverrideType][selectedCommandEvent].owners = TableUtils.DeepClone(CommandConfig._.configData.owners)
+                        Commands.SetCommandOwnersOverrides(selectedCommandEvent, Owners.new(CommandConfig._.config, CommandConfig._.configData[commandOrEventOverrideType][selectedCommandEvent].owners))
+                    end
+                end
+
+                ---@type Owners
+                local owners
+                if commandOrEvent:lower() == "command" then
+                    owners = Commands.GetCommandOwners(selectedCommandEvent)
+                else
+                    owners = Commands.GetEventOwners(selectedCommandEvent)
+                end
+                ---@diagnostic disable-next-line: need-check-nil
+                addFunc(tellName.value, owners)
+
+                selectedAddSubtypeIndex.value = 0
+                if tellName ~= nil then tellName.value = "" end
+            end
+            if isDisabled then
+                ImGui.EndDisabled()
+            end
+        end
     ImGui.EndGroup()
 
     -- Build available subtype Combo Box
-    ---@type table
-    ---@diagnostic disable-next-line: assign-type-mismatch
-    local subtractConfig = TableUtils.DeepClone(selectedConfig.value[subType] or CommandConfig._.configData[subType])
-    for index, subType in ipairs(subtractConfig) do
-        subtractConfig[index] = StringUtils.Split(subType)[1]
-    end
-    local availableSubtypes = TableUtils.ArraySubtract(allSubtypeList, subtractConfig)
     local comboDisplay = ""
-    if selectedAddSubtypeIndex.value > 0 then
-        comboDisplay = availableSubtypes[selectedAddSubtypeIndex.value]
-    end
-    if ImGui.BeginCombo("##foo2", comboDisplay) then
-        for index, channel in ipairs(availableSubtypes) do
-            if ImGui.Selectable(channel, selectedAddSubtypeIndex.value == index) then
-                selectedAddSubtypeIndex.value = index
+    if allSubtypeList ~= nil then
+        ---@type table
+        ---@diagnostic disable-next-line: assign-type-mismatch
+        local subtractConfig = TableUtils.DeepClone(selectedConfig.value[subType] or CommandConfig._.configData[subType])
+        for index, subType in ipairs(subtractConfig) do
+            subtractConfig[index] = StringUtils.Split(subType)[1]
+        end
+        local availableSubtypes = TableUtils.ArraySubtract(allSubtypeList, subtractConfig)
+        if selectedAddSubtypeIndex.value > 0 then
+            comboDisplay = availableSubtypes[selectedAddSubtypeIndex.value]
+        end
+        if ImGui.BeginCombo("##foo2", comboDisplay) then
+            for index, channel in ipairs(availableSubtypes) do
+                if ImGui.Selectable(channel, selectedAddSubtypeIndex.value == index) then
+                    selectedAddSubtypeIndex.value = index
+                end
             end
+            ImGui.EndCombo()
         end
-        ImGui.EndCombo()
-    end
-    ImGui.SameLine()
-    -- Build Add Button
-    local needsTellName = tellName ~= nil and tellName.value == "" and Speak.IsTellType(comboDisplay)
-    local isDisabled = false
-    if comboDisplay == "" or needsTellName then
-        ImGui.BeginDisabled()
-        isDisabled = true
-    end
-    if ImGui.Button("Add", 70, 22) then
-        if selectedUsesDefaults.value and selectedCommandEventIndex.value > 0 then
-            CommandConfig._.configData[commandOrEventOverrideType][selectedCommandEvent] = CommandConfig._.configData[commandOrEventOverrideType][selectedCommandEvent] or {}
-            CommandConfig._.configData[commandOrEventOverrideType][selectedCommandEvent][subType] = TableUtils.DeepClone(CommandConfig._.configData[subType])
-            selectedConfig.value = CommandConfig._.configData[commandOrEventOverrideType][selectedCommandEvent]
-        end
+        ImGui.SameLine()
 
-        if tellName ~= nil and tellName.value ~= "" and Speak.IsTellType(comboDisplay) then
-            ---@diagnostic disable-next-line: need-check-nil
-            addFunc(comboDisplay, selectedConfig.value, tellName.value)
-        else
-            addFunc(comboDisplay, selectedConfig.value)
+        -- Build Add Button
+        local needsTellName = tellName ~= nil and tellName.value == "" and Speak.IsTellType(comboDisplay)
+        local isDisabled = false
+        if comboDisplay == "" or needsTellName then
+            ImGui.BeginDisabled()
+            isDisabled = true
         end
+        if ImGui.Button("Add", 70, 22) then
+            if selectedUsesDefaults.value and selectedCommandEventIndex.value > 0 then
+                CommandConfig._.configData[commandOrEventOverrideType][selectedCommandEvent] = CommandConfig._.configData[commandOrEventOverrideType][selectedCommandEvent] or {}
+                CommandConfig._.configData[commandOrEventOverrideType][selectedCommandEvent][subType] = TableUtils.DeepClone(CommandConfig._.configData[subType])
+                selectedConfig.value = CommandConfig._.configData[commandOrEventOverrideType][selectedCommandEvent]
+            end
 
-        selectedAddSubtypeIndex.value = 0
-        if tellName ~= nil then tellName.value = "" end
-    end
-    if isDisabled then
-        ImGui.EndDisabled()
+            if tellName ~= nil and tellName.value ~= "" and Speak.IsTellType(comboDisplay) then
+                ---@diagnostic disable-next-line: need-check-nil
+                addFunc(comboDisplay, selectedConfig.value, tellName.value)
+            else
+                addFunc(comboDisplay, selectedConfig.value)
+            end
+
+            selectedAddSubtypeIndex.value = 0
+            if tellName ~= nil then tellName.value = "" end
+        end
+        if isDisabled then
+            ImGui.EndDisabled()
+        end
     end
 
     -- Build Tell Type
     if tellName ~= nil then
-        if not Speak.IsTellType(comboDisplay) then
+        if allSubtypeList ~= nil and not Speak.IsTellType(comboDisplay) then
             ImGui.BeginDisabled()
-            ImGui.InputText("Name", "", ImGuiInputTextFlags.CharsNoBlank)
+            ImGui.InputTextWithHint("Name##foo3", "(disabled)", "")
             ImGui.EndDisabled()
         else
-            tellName.value = ImGui.InputTextWithHint("Name", "Enter Name", tellName.value)
+            tellName.value = ImGui.InputTextWithHint("Name##foo4", "Enter Name", tellName.value)
         end
     end
 
@@ -921,7 +1053,7 @@ local function buildCommandEventEditor(commandOrEvent, overrideHelpText, allComm
     ImGui.Text("Overridden " .. commandOrEvent .. "s")
     ImGui.SameLine()
     Menu.HelpMarker(overrideHelpText)
-    ImGui.BeginChild("overrideCommands" .. overrideHelpText, 200, 200, true)
+    ImGui.BeginChild("overrideCommands" .. overrideHelpText, 200, 210, true)
         for thisCommand, overrides in pairs(CommandConfig._.configData[commandOrEventOverrideType]) do
             if overrides[subType] ~= nil then
                 if ImGui.Selectable(thisCommand, false) then
@@ -1013,15 +1145,66 @@ local function buildSpeakChannelTab()
     end
 end
 
+local function buildOwnerChannelTab()
+    if ImGui.BeginTabItem("Owners") then
+        ImGui.Text("Owners are who have rights to give this character commands or invoke certain events.")
+        ImGui.Text("")
+
+        ImGui.BeginTable("owner table", 2, ImGuiTableFlags.BordersInnerV)
+            ImGui.TableSetupColumn("", ImGuiTableColumnFlags.WidthFixed)
+            ImGui.TableSetupColumn("", ImGuiTableColumnFlags.WidthStretch)
+            ImGui.TableNextColumn()
+
+            ImGui.PushID("owner commands")
+            buildCommandEventEditor(
+                "Command",
+                "All commands follow the `Default` owner list but can be overridden. This list shows which commands have overrides.",
+                Commands.GetCommsPhrases(),
+                CommandConfig._.menu.owners.commands.selectedCommandIndex,
+                CommandConfig._.menu.owners.commands.selectedChannelIndex,
+                CommandConfig._.menu.owners.commands.selectedAddChannelIndex,
+                CommandConfig._.menu.owners.commands.selectedConfig,
+                CommandConfig._.menu.owners.commands.selectedUsesDefaults,
+                CommandConfig._.menu.owners.commands.tellName,
+                "owners",
+                nil,
+                CommandConfig.AddOwner,
+                CommandConfig.RemoveOwner,
+                CommandConfig._.menu.owners.commands.isOpen
+            )
+            ImGui.PopID()
+
+            ImGui.TableNextColumn()
+            ImGui.PushID("owner events")
+            buildCommandEventEditor(
+                "Event",
+                "All events follow the `Default` owner list but can be overridden. This list shows which events have overrides.",
+                Commands.GetEventIds(),
+                CommandConfig._.menu.owners.events.selectedEventIndex,
+                CommandConfig._.menu.owners.events.selectedChannelIndex,
+                CommandConfig._.menu.owners.events.selectedAddChannelIndex,
+                CommandConfig._.menu.owners.events.selectedConfig,
+                CommandConfig._.menu.owners.events.selectedUsesDefaults,
+                CommandConfig._.menu.owners.events.tellName,
+                "owners",
+                nil,
+                CommandConfig.AddOwner,
+                CommandConfig.RemoveOwner,
+                CommandConfig._.menu.owners.events.isOpen
+            )
+            ImGui.PopID()
+        ImGui.EndTable()
+
+        ImGui.EndTabItem()
+    end
+end
+
 ---@diagnostic disable-next-line: duplicate-set-field
 function CommandConfig.BuildMenu()
     ImGui.BeginTabBar("Command Tabs")
         buildActiveChannelTab()
         buildSpeakChannelTab()
-
-        if ImGui.BeginTabItem("Owners") then
-            ImGui.EndTabItem()
-        end
+        buildOwnerChannelTab()
     ImGui.EndTabBar()
 end
 
