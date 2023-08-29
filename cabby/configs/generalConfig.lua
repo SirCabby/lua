@@ -4,14 +4,15 @@ local Debug = require("utils.Debug.Debug")
 local StringUtils = require("utils.StringUtils.StringUtils")
 local TableUtils = require("utils.TableUtils.TableUtils")
 
-local Speak = require("cabby.commands.speak")
 local Command = require("cabby.commands.command")
 local Commands = require("cabby.commands.commands")
 local Event = require("cabby.commands.event")
+local Menu = require("cabby.menu")
+local Speak = require("cabby.commands.speak")
 
----@class GeneralConfig
+---@type CabbyConfig
 local GeneralConfig = {
-    key = "General",
+    key = "GeneralConfig",
     keys = {
         version = "version",
         relayTellsTo = "relayTellsTo"
@@ -67,7 +68,7 @@ local function initAndValidate()
     end
     if GeneralConfig._.config:GetConfigRoot()[GeneralConfig.key][GeneralConfig.keys.version] == nil then
         DebugLog("General Version was not set, updating...")
-        GeneralConfig._.config:GetConfigRoot()[GeneralConfig.key][GeneralConfig.keys.version] = "1"
+        GeneralConfig._.config:GetConfigRoot()[GeneralConfig.key][GeneralConfig.keys.version] = "0.0.1"
         taint = true
     end
     if taint then
@@ -83,6 +84,7 @@ end
 
 ---Initialize the static object, only done once
 ---@param config Config
+---@diagnostic disable-next-line: duplicate-set-field
 function GeneralConfig.Init(config)
     if not GeneralConfig._.isInit then
         local ftkey = Global.tracing.open("GeneralConfig Setup")
@@ -195,9 +197,51 @@ function GeneralConfig.Init(config)
         end
         Commands.RegisterEvent(Event.new(GeneralConfig.eventIds.tellToMe, "#1# tells you, '#2#'", event_TellToMe, tellToMeHelp, true))
 
+        Menu.RegisterConfig(GeneralConfig)
+
         GeneralConfig._.isInit = true
         Global.tracing.close(ftkey)
     end
+end
+
+local selectedRelayIndex = 0
+local relayToName = ""
+---@diagnostic disable-next-line: duplicate-set-field
+function GeneralConfig.BuildMenu()
+    local generalConfig = getConfigSection()
+
+    ImGui.Text("Config Version: " .. generalConfig[GeneralConfig.keys.version])
+
+    ImGui.Text("Relay Tells To: ")
+    ImGui.SameLine()
+    local channels = Speak.GetAllChannelTypes()
+    local selectedChannel = getConfigSection()
+    ImGui.PushItemWidth(70)
+    if ImGui.BeginCombo("", "") then
+        -- Determine which is selected
+        -- Determine if is tell type
+            -- Enable name box
+            -- Name needs 4+ characters to be valid
+        -- Save if valid
+        for index, channel in ipairs(channels) do
+            local isSelected = selectedRelayIndex == index
+            if ImGui.Selectable(channel, isSelected) then
+                if selectedRelayIndex ~= index then
+                    selectedRelayIndex = index
+                end
+                selectedChannel = channel
+            end
+
+            if isSelected then
+                ImGui.SetItemDefaultFocus()
+            end
+        end
+        ImGui.EndCombo()
+    end
+    ImGui.SameLine()
+    ImGui.PushItemWidth(140)
+    
+    ImGui.InputText("To", "", ImGuiInputTextFlags.CharsNoBlank)
 end
 
 function GeneralConfig.GetRelayTellsTo()

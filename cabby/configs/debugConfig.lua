@@ -18,6 +18,10 @@ local function DebugLog(str)
     Debug.Log(DebugConfig.key, str)
 end
 
+local function getConfigSection()
+    return DebugConfig._.config:GetConfigRoot()[DebugConfig.key]
+end
+
 local function initAndValidate()
     if DebugConfig._.config:GetConfigRoot()[DebugConfig.key] == nil then
         DebugLog("DebugConfig Section was not set, updating...")
@@ -27,10 +31,12 @@ local function initAndValidate()
         DebugLog("Debug 'all' option was not set, setting to false")
         DebugConfig._.config:GetConfigRoot()[DebugConfig.key].all = false
     end
-end
 
-local function getConfigSection()
-    return DebugConfig._.config:GetConfigRoot()[DebugConfig.key]
+    local debugConfig2 = getConfigSection()
+    for k, v in pairs(debugConfig2) do
+        Debug.SetToggle(k, v)
+    end
+    DebugConfig._.config:GetConfigRoot()[DebugConfig.key] = Debug._.toggles
 end
 
 ---Initialize the static object, only done once
@@ -43,11 +49,7 @@ function DebugConfig.Init(config)
 
         -- Sync Debug with DebugConfig on this ctor
         initAndValidate()
-        local debugConfig2 = getConfigSection()
-        for k, v in pairs(debugConfig2) do
-            Debug.SetToggle(k, v)
-        end
-        DebugConfig._.config:GetConfigRoot()[DebugConfig.key] = Debug._.toggles
+        
 
         local function Bind_Debug(...)
             local args = {...} or {}
@@ -104,6 +106,27 @@ end
 
 function DebugConfig.Print()
     TableUtils.Print(Debug._.toggles)
+end
+
+---@diagnostic disable-next-line: duplicate-set-field
+function DebugConfig.BuildMenu()
+    ImGui.Text("Toggle debug logging for the following areas")
+    ImGui.Text("")
+
+    ImGui.BeginTable("checkbox list", 1, ImGuiTableFlags.SizingStretchProp)
+        ImGui.TableNextColumn()
+        local sortedKeys = TableUtils.GetKeys(Debug._.toggles)
+        table.sort(sortedKeys)
+        ---@diagnostic disable-next-line: param-type-mismatch
+        for _, key in ipairs(sortedKeys) do
+            ---@type boolean
+            local clicked
+            Debug._.toggles[key], clicked = ImGui.Checkbox(key, Debug._.toggles[key])
+            if clicked then
+                DebugConfig._.config:SaveConfig()
+            end
+        end
+    ImGui.EndTable()
 end
 
 return DebugConfig
