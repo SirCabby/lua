@@ -113,7 +113,7 @@ function DebugConfig.BuildMenu()
     ImGui.Text("Toggle debug logging for the following areas")
     ImGui.Text("")
 
-    if ImGui.BeginTable("checkbox list", 1, ImGuiTableFlags.SizingStretchProp) then
+    if ImGui.BeginTable("checkbox list", 1, ImGuiTableFlags.ScrollY) then
         ImGui.TableNextColumn()
         local sortedKeys = TableUtils.GetKeys(Debug._.toggles)
         table.sort(sortedKeys)

@@ -1201,11 +1201,12 @@ end
 
 ---@diagnostic disable-next-line: duplicate-set-field
 function CommandConfig.BuildMenu()
-    ImGui.BeginTabBar("Command Tabs")
+    if ImGui.BeginTabBar("Command Tabs") then
         buildActiveChannelTab()
         buildSpeakChannelTab()
         buildOwnerChannelTab()
-    ImGui.EndTabBar()
+        ImGui.EndTabBar()
+    end
 end
 
 return CommandConfig
