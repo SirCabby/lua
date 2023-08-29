@@ -14,8 +14,7 @@ local Speak = require("cabby.commands.speak")
 local GeneralConfig = {
     key = "GeneralConfig",
     keys = {
-        version = "version",
-        relayTellsTo = "relayTellsTo"
+        version = "version"
     },
     eventIds = {
         groupInvited = "groupInvited",
@@ -141,41 +140,6 @@ function GeneralConfig.Init(config)
 
         -- Binds
 
-        local function Bind_SetRelayTellsToFunc(...)
-            local args = {...} or {}
-
-            if args ~= nil and #args > 0 then
-                local channel = args[1]:lower()
-                if channel ~= "clear" and not Speak.IsChannelType(channel) then
-                    print("(/relaytellsto " .. channel .. "): Invalid channel type. Allowed channel types: [" .. StringUtils.Join(Speak.GetAllChannelTypes(), ", ") .. "]")
-                    return
-                end
-
-                if #args == 1 and args[1]:lower() ~= "help" then
-                    if channel == "clear" then
-                        GeneralConfig.SetRelayTellsTo("")
-                        print("Relaying tells is now disabled")
-                    else
-                        GeneralConfig.SetRelayTellsTo(channel)
-                        print("Relaying future tells to: [" .. channel .. "]")
-                    end
-                    return
-                elseif #args == 2 and Speak.IsTellType(channel) then
-                    local tellTo = channel .. " " .. args[2]:lower()
-                    GeneralConfig.SetRelayTellsTo(tellTo)
-                    print("Relaying future tells to: [" .. tellTo .. "]")
-                    return
-                end
-            end
-
-            print("(/relaytellsto) Relays tells received to this character")
-            print(" -- Usage: /relaytellsto name|clear [who]")
-            print(" -- supply 'who' when using a tell-type channel such as 'tell' or 'bct'")
-            local cmd = GeneralConfig.GetRelayTellsTo() or ""
-            print(" -- Currently set to: [" .. cmd .. "]")
-        end
-        Commands.RegisterSlashCommand("relaytellsto", Bind_SetRelayTellsToFunc)
-
         local function Bind_Restart(...)
             local args = {...} or {}
             if #args < 1 then
@@ -190,8 +154,7 @@ function GeneralConfig.Init(config)
             print("(event "..GeneralConfig.eventIds.tellToMe..") Forwards any received tells that were not part of an issued command to the speak channel")
         end
         local function event_TellToMe(_, speaker, message)
-            local tellTo = GeneralConfig.GetRelayTellsTo()
-            if tellTo ~= "" and tellTo ~= nil and tellTo ~= speaker and mq.TLO.SpawnCount("npc " .. speaker)() < 1 then
+            if mq.TLO.SpawnCount("npc " .. speaker)() < 1 then
                 Commands.GetEventSpeak(GeneralConfig.eventIds.tellToMe):speak(speaker .. " told me: " .. message)
             end
         end
@@ -204,56 +167,10 @@ function GeneralConfig.Init(config)
     end
 end
 
-local selectedRelayIndex = 0
-local relayToName = ""
 ---@diagnostic disable-next-line: duplicate-set-field
 function GeneralConfig.BuildMenu()
     local generalConfig = getConfigSection()
-
     ImGui.Text("Config Version: " .. generalConfig[GeneralConfig.keys.version])
-
-    ImGui.Text("Relay Tells To: ")
-    ImGui.SameLine()
-    local channels = Speak.GetAllChannelTypes()
-    local selectedChannel = getConfigSection()
-    ImGui.PushItemWidth(70)
-    if ImGui.BeginCombo("", "") then
-        -- Determine which is selected
-        -- Determine if is tell type
-            -- Enable name box
-            -- Name needs 4+ characters to be valid
-        -- Save if valid
-        for index, channel in ipairs(channels) do
-            local isSelected = selectedRelayIndex == index
-            if ImGui.Selectable(channel, isSelected) then
-                if selectedRelayIndex ~= index then
-                    selectedRelayIndex = index
-                end
-                selectedChannel = channel
-            end
-
-            if isSelected then
-                ImGui.SetItemDefaultFocus()
-            end
-        end
-        ImGui.EndCombo()
-    end
-    ImGui.SameLine()
-    ImGui.PushItemWidth(140)
-    
-    ImGui.InputText("To", "", ImGuiInputTextFlags.CharsNoBlank)
-end
-
-function GeneralConfig.GetRelayTellsTo()
-    local generalConfig = getConfigSection()
-    return generalConfig[GeneralConfig.keys.relayTellsTo]
-end
-
-function GeneralConfig.SetRelayTellsTo(name)
-    local generalConfig = getConfigSection()
-    generalConfig[GeneralConfig.keys.relayTellsTo] = name
-    GeneralConfig._.config:SaveConfig()
-    DebugLog("Set relayTellsTo: [" .. name .. "]")
 end
 
 function GeneralConfig.Print()
