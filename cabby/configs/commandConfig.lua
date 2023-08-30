@@ -1071,7 +1071,9 @@ end
 local function buildActiveChannelTab()
     if ImGui.BeginTabItem("Active Channels") then
         ImGui.Text("Active Channels are where this character will listen for commands from other characters.")
-        ImGui.Text("")
+        if ImGui.BeginChild("sizer", 0, 22, false) then
+        end
+        ImGui.EndChild()
 
         ImGui.PushID("activechannels")
             buildCommandEventEditor(
@@ -1098,7 +1100,9 @@ end
 local function buildSpeakChannelTab()
     if ImGui.BeginTabItem("Speak Channels") then
         ImGui.Text("Speak Channels are where this character will broadcast information from commands or events.")
-        ImGui.Text("")
+        if ImGui.BeginChild("sizer", 665, 22, false) then
+        end
+        ImGui.EndChild()
 
         local tableSorting_flags = bit32.bor(ImGuiTableFlags.BordersInnerV, ImGuiTableFlags.SizingFixedFit)
         if ImGui.BeginTable("speak table", 2, tableSorting_flags) then
@@ -1152,7 +1156,9 @@ end
 local function buildOwnerChannelTab()
     if ImGui.BeginTabItem("Owners") then
         ImGui.Text("Owners are who have rights to give this character commands or invoke certain events.")
-        ImGui.Text("")
+        if ImGui.BeginChild("sizer", 665, 22, false) then
+        end
+        ImGui.EndChild()
 
         local tableSorting_flags = bit32.bor(ImGuiTableFlags.BordersInnerV, ImGuiTableFlags.SizingFixedFit)
         if ImGui.BeginTable("owner table", 2, tableSorting_flags) then
