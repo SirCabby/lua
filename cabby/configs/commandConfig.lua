@@ -804,7 +804,11 @@ local function buildCommandEventEditor(commandOrEvent, overrideHelpText, allComm
     ImGui.AlignTextToFramePadding()
     ImGui.TextUnformatted(commandOrEvent .. ":")
     ImGui.SameLine()
-    ImGui.PushItemWidth(120)
+    local width = 124
+    if commandOrEvent:lower() == "event" then
+        width = 154
+    end
+    ImGui.PushItemWidth(width)
     if ImGui.BeginCombo("##foo1", selectedCommandEvent) then
         if ImGui.Selectable("Default", selectedCommandEventIndex.value == 0) then
             selectedCommandEventIndex.value = 0
@@ -817,8 +821,10 @@ local function buildCommandEventEditor(commandOrEvent, overrideHelpText, allComm
         end
         selectedSubtypeIndex.value = 0
         selectedAddSubtypeIndex.value = 0
+        if tellName ~= nil then tellName.value = "" end
         ImGui.EndCombo()
     end
+    ImGui.PopItemWidth()
 
     -- Update subtype list for selected command/event
     if selectedCommandEventIndex.value <= 0 then
@@ -938,51 +944,10 @@ local function buildCommandEventEditor(commandOrEvent, overrideHelpText, allComm
                     owners = Commands.GetEventOwners(selectedCommandEvent)
                 end
                 ---@diagnostic disable-next-line: need-check-nil
-                print(tostring(isOpen.value))
                 owners:Open(isOpen.value)
             end
             ImGui.SameLine()
             Menu.HelpMarker("When Open, the list is ignored and all speakers are allowed to issue this command.")
-        end
-
-        -- Add Button here if no subType list
-        if ImGui.BeginChild("separator", 1, 70) then
-        end
-        ImGui.EndChild()
-        if allSubtypeList == nil then
-            local isDisabled = false
-            if tellName == nil or tellName.value == "" then
-                ImGui.BeginDisabled()
-                isDisabled = true
-            end
-            if ImGui.Button("Add", 70, 22) then
-                if selectedCommandEventIndex.value > 0 then
-                    -- init override
-                    if CommandConfig._.configData[commandOrEventOverrideType][selectedCommandEvent] == nil then
-                        CommandConfig._.configData[commandOrEventOverrideType][selectedCommandEvent] = {}
-                    end
-                    if CommandConfig._.configData[commandOrEventOverrideType][selectedCommandEvent].owners == nil then
-                        CommandConfig._.configData[commandOrEventOverrideType][selectedCommandEvent].owners = TableUtils.DeepClone(CommandConfig._.configData.owners)
-                        Commands.SetCommandOwnersOverrides(selectedCommandEvent, Owners.new(CommandConfig._.config, CommandConfig._.configData[commandOrEventOverrideType][selectedCommandEvent].owners))
-                    end
-                end
-
-                ---@type Owners
-                local owners
-                if commandOrEvent:lower() == "command" then
-                    owners = Commands.GetCommandOwners(selectedCommandEvent)
-                else
-                    owners = Commands.GetEventOwners(selectedCommandEvent)
-                end
-                ---@diagnostic disable-next-line: need-check-nil
-                addFunc(tellName.value, owners)
-
-                selectedAddSubtypeIndex.value = 0
-                if tellName ~= nil then tellName.value = "" end
-            end
-            if isDisabled then
-                ImGui.EndDisabled()
-            end
         end
     ImGui.EndGroup()
 
@@ -999,6 +964,7 @@ local function buildCommandEventEditor(commandOrEvent, overrideHelpText, allComm
         if selectedAddSubtypeIndex.value > 0 then
             comboDisplay = availableSubtypes[selectedAddSubtypeIndex.value]
         end
+        ImGui.PushItemWidth(122)
         if ImGui.BeginCombo("##foo2", comboDisplay) then
             for index, channel in ipairs(availableSubtypes) do
                 if ImGui.Selectable(channel, selectedAddSubtypeIndex.value == index) then
@@ -1007,6 +973,7 @@ local function buildCommandEventEditor(commandOrEvent, overrideHelpText, allComm
             end
             ImGui.EndCombo()
         end
+        ImGui.PopItemWidth()
         ImGui.SameLine()
 
         -- Build Add Button
@@ -1040,12 +1007,61 @@ local function buildCommandEventEditor(commandOrEvent, overrideHelpText, allComm
 
     -- Build Tell Type
     if tellName ~= nil then
+        ImGui.TextUnformatted("Name:")
+
+        ImGui.SameLine()
+        ImGui.PushItemWidth(152)
         if allSubtypeList ~= nil and not Speak.IsTellType(comboDisplay) then
             ImGui.BeginDisabled()
-            ImGui.InputTextWithHint("Name##foo3", "(disabled)", "")
+            ImGui.InputTextWithHint("##foo3", "(disabled)", "")
             ImGui.EndDisabled()
         else
-            tellName.value = ImGui.InputTextWithHint("Name##foo4", "Enter Name", tellName.value)
+            ---@type boolean
+            local selected
+            tellName.value, selected = ImGui.InputTextWithHint("##foo4", "Enter Name", tellName.value, ImGuiInputTextFlags.EnterReturnsTrue)
+            if selected then
+                doADd()
+            end
+        end
+        ImGui.PopItemWidth()
+    end
+
+    -- Add Button here if no subType list
+    if allSubtypeList == nil then
+        ImGui.SameLine()
+
+        local isDisabled = false
+        if tellName == nil or tellName.value == "" then
+            ImGui.BeginDisabled()
+            isDisabled = true
+        end
+        if ImGui.Button("Add", 70, 22) then
+            if selectedCommandEventIndex.value > 0 then
+                -- init override
+                if CommandConfig._.configData[commandOrEventOverrideType][selectedCommandEvent] == nil then
+                    CommandConfig._.configData[commandOrEventOverrideType][selectedCommandEvent] = {}
+                end
+                if CommandConfig._.configData[commandOrEventOverrideType][selectedCommandEvent].owners == nil then
+                    CommandConfig._.configData[commandOrEventOverrideType][selectedCommandEvent].owners = TableUtils.DeepClone(CommandConfig._.configData.owners)
+                    Commands.SetCommandOwnersOverrides(selectedCommandEvent, Owners.new(CommandConfig._.config, CommandConfig._.configData[commandOrEventOverrideType][selectedCommandEvent].owners))
+                end
+            end
+
+            ---@type Owners
+            local owners
+            if commandOrEvent:lower() == "command" then
+                owners = Commands.GetCommandOwners(selectedCommandEvent)
+            else
+                owners = Commands.GetEventOwners(selectedCommandEvent)
+            end
+            ---@diagnostic disable-next-line: need-check-nil
+            addFunc(tellName.value, owners)
+
+            selectedAddSubtypeIndex.value = 0
+            if tellName ~= nil then tellName.value = "" end
+        end
+        if isDisabled then
+            ImGui.EndDisabled()
         end
     end
 
