@@ -777,6 +777,51 @@ function CommandConfig.Print()
     TableUtils.Print(CommandConfig._.configData)
 end
 
+local function menuAddNoSubType(selectedCommandEventIndex, commandOrEventOverrideType, selectedCommandEvent, commandOrEvent, addFunc, tellName, selectedAddSubtypeIndex)
+    if selectedCommandEventIndex.value > 0 then
+        -- init override
+        if CommandConfig._.configData[commandOrEventOverrideType][selectedCommandEvent] == nil then
+            CommandConfig._.configData[commandOrEventOverrideType][selectedCommandEvent] = {}
+        end
+        if CommandConfig._.configData[commandOrEventOverrideType][selectedCommandEvent].owners == nil then
+            CommandConfig._.configData[commandOrEventOverrideType][selectedCommandEvent].owners = TableUtils.DeepClone(CommandConfig._.configData.owners)
+            Commands.SetCommandOwnersOverrides(selectedCommandEvent, Owners.new(CommandConfig._.config, CommandConfig._.configData[commandOrEventOverrideType][selectedCommandEvent].owners))
+        end
+    end
+
+    ---@type Owners
+    local owners
+    if commandOrEvent:lower() == "command" then
+        owners = Commands.GetCommandOwners(selectedCommandEvent)
+    else
+        owners = Commands.GetEventOwners(selectedCommandEvent)
+    end
+    ---@diagnostic disable-next-line: need-check-nil
+    addFunc(tellName.value, owners)
+
+    selectedAddSubtypeIndex.value = 0
+    if tellName ~= nil then tellName.value = "" end
+end
+
+local function menuAddWithSubType(selectedUsesDefaults, selectedCommandEventIndex, commandOrEventOverrideType, selectedCommandEvent, subType,
+    tellName, selectedConfig, comboDisplay, addFunc, selectedAddSubtypeIndex)
+    if selectedUsesDefaults.value and selectedCommandEventIndex.value > 0 then
+        CommandConfig._.configData[commandOrEventOverrideType][selectedCommandEvent] = CommandConfig._.configData[commandOrEventOverrideType][selectedCommandEvent] or {}
+        CommandConfig._.configData[commandOrEventOverrideType][selectedCommandEvent][subType] = TableUtils.DeepClone(CommandConfig._.configData[subType])
+        selectedConfig.value = CommandConfig._.configData[commandOrEventOverrideType][selectedCommandEvent]
+    end
+
+    if tellName ~= nil and tellName.value ~= "" and Speak.IsTellType(comboDisplay) then
+        ---@diagnostic disable-next-line: need-check-nil
+        addFunc(comboDisplay, selectedConfig.value, tellName.value)
+    else
+        addFunc(comboDisplay, selectedConfig.value)
+    end
+
+    selectedAddSubtypeIndex.value = 0
+    if tellName ~= nil then tellName.value = "" end
+end
+
 ---@param commandOrEvent string "Command" or "Event"
 ---@param overrideHelpText string
 ---@param allCommandsOrEventsList table
@@ -984,21 +1029,7 @@ local function buildCommandEventEditor(commandOrEvent, overrideHelpText, allComm
             isDisabled = true
         end
         if ImGui.Button("Add", 70, 22) then
-            if selectedUsesDefaults.value and selectedCommandEventIndex.value > 0 then
-                CommandConfig._.configData[commandOrEventOverrideType][selectedCommandEvent] = CommandConfig._.configData[commandOrEventOverrideType][selectedCommandEvent] or {}
-                CommandConfig._.configData[commandOrEventOverrideType][selectedCommandEvent][subType] = TableUtils.DeepClone(CommandConfig._.configData[subType])
-                selectedConfig.value = CommandConfig._.configData[commandOrEventOverrideType][selectedCommandEvent]
-            end
-
-            if tellName ~= nil and tellName.value ~= "" and Speak.IsTellType(comboDisplay) then
-                ---@diagnostic disable-next-line: need-check-nil
-                addFunc(comboDisplay, selectedConfig.value, tellName.value)
-            else
-                addFunc(comboDisplay, selectedConfig.value)
-            end
-
-            selectedAddSubtypeIndex.value = 0
-            if tellName ~= nil then tellName.value = "" end
+            menuAddWithSubType(selectedUsesDefaults, selectedCommandEventIndex, commandOrEventOverrideType, selectedCommandEvent, subType, tellName, selectedConfig, comboDisplay, addFunc, selectedAddSubtypeIndex)
         end
         if isDisabled then
             ImGui.EndDisabled()
@@ -1020,7 +1051,11 @@ local function buildCommandEventEditor(commandOrEvent, overrideHelpText, allComm
             local selected
             tellName.value, selected = ImGui.InputTextWithHint("##foo4", "Enter Name", tellName.value, ImGuiInputTextFlags.EnterReturnsTrue)
             if selected then
-                doADd()
+                if allSubtypeList ~= nil then
+                    menuAddWithSubType(selectedUsesDefaults, selectedCommandEventIndex, commandOrEventOverrideType, selectedCommandEvent, subType, tellName, selectedConfig, comboDisplay, addFunc, selectedAddSubtypeIndex)
+                else
+                    menuAddNoSubType(selectedCommandEventIndex, commandOrEventOverrideType, selectedCommandEvent, commandOrEvent, addFunc, tellName, selectedAddSubtypeIndex)
+                end
             end
         end
         ImGui.PopItemWidth()
@@ -1036,29 +1071,7 @@ local function buildCommandEventEditor(commandOrEvent, overrideHelpText, allComm
             isDisabled = true
         end
         if ImGui.Button("Add", 70, 22) then
-            if selectedCommandEventIndex.value > 0 then
-                -- init override
-                if CommandConfig._.configData[commandOrEventOverrideType][selectedCommandEvent] == nil then
-                    CommandConfig._.configData[commandOrEventOverrideType][selectedCommandEvent] = {}
-                end
-                if CommandConfig._.configData[commandOrEventOverrideType][selectedCommandEvent].owners == nil then
-                    CommandConfig._.configData[commandOrEventOverrideType][selectedCommandEvent].owners = TableUtils.DeepClone(CommandConfig._.configData.owners)
-                    Commands.SetCommandOwnersOverrides(selectedCommandEvent, Owners.new(CommandConfig._.config, CommandConfig._.configData[commandOrEventOverrideType][selectedCommandEvent].owners))
-                end
-            end
-
-            ---@type Owners
-            local owners
-            if commandOrEvent:lower() == "command" then
-                owners = Commands.GetCommandOwners(selectedCommandEvent)
-            else
-                owners = Commands.GetEventOwners(selectedCommandEvent)
-            end
-            ---@diagnostic disable-next-line: need-check-nil
-            addFunc(tellName.value, owners)
-
-            selectedAddSubtypeIndex.value = 0
-            if tellName ~= nil then tellName.value = "" end
+            menuAddNoSubType(selectedCommandEventIndex, commandOrEventOverrideType, selectedCommandEvent, commandOrEvent, addFunc, tellName, selectedAddSubtypeIndex)
         end
         if isDisabled then
             ImGui.EndDisabled()
