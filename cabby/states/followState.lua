@@ -45,6 +45,9 @@ local FollowState = {
         },
         anchorActions = {
             stayingAtAnchor = passive
+        },
+        menu = {
+            
         }
     }
 }
@@ -394,6 +397,37 @@ end
 ---@diagnostic disable-next-line: duplicate-set-field
 function FollowState.Go()
     return FollowState._.currentAction()
+end
+
+---@diagnostic disable-next-line: duplicate-set-field
+function FollowState.BuildMenu()
+    ImGui.Text("Follow State status:")
+    if ImGui.BeginChild("c1", 0, 22, false) then
+    end
+    ImGui.EndChild()
+
+    local tableSorting_flags = bit32.bor(ImGuiTableFlags.RowBg, ImGuiTableFlags.BordersOuter, ImGuiTableFlags.BordersInner,
+    ImGuiTableFlags.NoHostExtendX)
+
+    if ImGui.BeginTable("t1", 2, tableSorting_flags) then
+        ImGui.TableSetupColumn("col1", ImGuiTableColumnFlags.WidthFixed, 140)
+        ImGui.TableSetupColumn("col2", ImGuiTableColumnFlags.WidthFixed, 100)
+
+        ImGui.TableNextColumn()
+        ImGui.Text("Follow Target")
+
+        ImGui.TableNextColumn()
+        ImGui.Text(FollowState._.followTarget)
+
+        ImGui.TableNextRow()
+        ImGui.TableNextColumn()
+        ImGui.Text("Anchor Loc (x,y)")
+
+        ImGui.TableNextColumn()
+        ImGui.Text(FollowState._.anchor.x .. ", " .. FollowState._.anchor.y)
+
+        ImGui.EndTable()
+    end
 end
 
 return FollowState
