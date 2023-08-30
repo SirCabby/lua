@@ -2,6 +2,7 @@ local mq = require("mq")
 
 local Debug = require("utils.Debug.Debug")
 local StringUtils = require("utils.StringUtils.StringUtils")
+local TableUtils = require("utils.TableUtils.TableUtils")
 local Timer = require("utils.Time.Timer")
 
 local Command = require("cabby.commands.command")
@@ -45,9 +46,6 @@ local FollowState = {
         },
         anchorActions = {
             stayingAtAnchor = passive
-        },
-        menu = {
-            
         }
     }
 }
@@ -358,7 +356,7 @@ function FollowState.Init()
                 if #args == 1 and args[1]:lower() == "off" then
                     FollowState._.anchor.x = 0
                     FollowState._.anchor.y = 0
-                    if FollowState._.followTarget then
+                    if FollowState._.followTarget ~= "" then
                         FollowState._.currentAction = FollowState._.followActions.findFollowTarget
                     else
                         FollowState._.currentAction = passive
@@ -371,7 +369,7 @@ function FollowState.Init()
                         FollowState._.currentAction = FollowState._.anchorActions.stayingAtAnchor
                     else
                         Commands.GetCommandSpeak(FollowState.eventIds.anchor):speak("Anchor target [" .. speaker .. "] out of range, aborting...")
-                        if FollowState._.followTarget then
+                        if FollowState._.followTarget ~= "" then
                             FollowState._.currentAction = FollowState._.followActions.findFollowTarget
                         else
                             FollowState._.currentAction = passive
@@ -411,20 +409,35 @@ function FollowState.BuildMenu()
 
     if ImGui.BeginTable("t1", 2, tableSorting_flags) then
         ImGui.TableSetupColumn("col1", ImGuiTableColumnFlags.WidthFixed, 140)
-        ImGui.TableSetupColumn("col2", ImGuiTableColumnFlags.WidthFixed, 100)
+        ImGui.TableSetupColumn("col2", ImGuiTableColumnFlags.WidthFixed, 140)
+
+        ImGui.TableNextRow()
+        ImGui.TableNextColumn()
+        ImGui.Text("Current Action")
 
         ImGui.TableNextColumn()
-        ImGui.Text("Follow Target")
-
-        ImGui.TableNextColumn()
-        ImGui.Text(FollowState._.followTarget)
+        local currentTask = "Standby"
+        if TableUtils.ArrayContains(TableUtils.GetValues(FollowState._.anchorActions), FollowState._.currentAction) then
+            currentTask = "Anchoring"
+        elseif TableUtils.ArrayContains(TableUtils.GetValues(FollowState._.followActions), FollowState._.currentAction) then
+            currentTask = "Following"
+        elseif TableUtils.ArrayContains(TableUtils.GetValues(FollowState._.clickZoneActions), FollowState._.currentAction) then
+            currentTask = "Clicking to Zone"
+        end
+        ImGui.Text(currentTask)
 
         ImGui.TableNextRow()
         ImGui.TableNextColumn()
         ImGui.Text("Anchor Loc (x,y)")
 
         ImGui.TableNextColumn()
-        ImGui.Text(FollowState._.anchor.x .. ", " .. FollowState._.anchor.y)
+        ImGui.Text(tostring(math.floor(FollowState._.anchor.x * 100) / 100) .. ", " .. tostring(math.floor(FollowState._.anchor.y * 100) / 100))
+
+        ImGui.TableNextColumn()
+        ImGui.Text("Follow Target")
+
+        ImGui.TableNextColumn()
+        ImGui.Text(FollowState._.followTarget)
 
         ImGui.EndTable()
     end
