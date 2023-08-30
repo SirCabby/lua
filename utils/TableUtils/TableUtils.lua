@@ -111,7 +111,6 @@ function TableUtils.GetValues(tbl)
         result[count] = value
         DebugLog("Value [" .. tostring(value) .. "]")
     end
-    table.sort(result)
     return result
 end
 
