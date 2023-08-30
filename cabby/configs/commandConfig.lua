@@ -946,7 +946,8 @@ local function buildCommandEventEditor(commandOrEvent, overrideHelpText, allComm
         end
 
         -- Add Button here if no subType list
-        ImGui.BeginChild("separator", 1, 70)
+        if ImGui.BeginChild("separator", 1, 70) then
+        end
         ImGui.EndChild()
         if allSubtypeList == nil then
             local isDisabled = false
@@ -1071,7 +1072,7 @@ end
 local function buildActiveChannelTab()
     if ImGui.BeginTabItem("Active Channels") then
         ImGui.Text("Active Channels are where this character will listen for commands from other characters.")
-        if ImGui.BeginChild("sizer", 0, 22, false) then
+        if ImGui.BeginChild("ac sizer", 0, 22, false) then
         end
         ImGui.EndChild()
 
@@ -1100,14 +1101,14 @@ end
 local function buildSpeakChannelTab()
     if ImGui.BeginTabItem("Speak Channels") then
         ImGui.Text("Speak Channels are where this character will broadcast information from commands or events.")
-        if ImGui.BeginChild("sizer", 665, 22, false) then
+        if ImGui.BeginChild("speak sizer", 665, 22, false) then
         end
         ImGui.EndChild()
 
         local tableSorting_flags = bit32.bor(ImGuiTableFlags.BordersInnerV, ImGuiTableFlags.SizingFixedFit)
         if ImGui.BeginTable("speak table", 2, tableSorting_flags) then
             ImGui.TableSetupColumn("", ImGuiTableColumnFlags.WidthFixed)
-            ImGui.TableSetupColumn("", ImGuiTableColumnFlags.WidthStretch)
+            ImGui.TableSetupColumn("", ImGuiTableColumnFlags.WidthFixed)
             ImGui.TableNextColumn()
 
             ImGui.PushID("speakcommands")
@@ -1156,7 +1157,7 @@ end
 local function buildOwnerChannelTab()
     if ImGui.BeginTabItem("Owners") then
         ImGui.Text("Owners are who have rights to give this character commands or invoke certain events.")
-        if ImGui.BeginChild("sizer", 665, 22, false) then
+        if ImGui.BeginChild("owner sizer", 665, 22, false) then
         end
         ImGui.EndChild()
 
