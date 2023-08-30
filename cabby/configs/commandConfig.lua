@@ -1071,24 +1071,28 @@ end
 local function buildActiveChannelTab()
     if ImGui.BeginTabItem("Active Channels") then
         ImGui.Text("Active Channels are where this character will listen for commands from other characters.")
-        ImGui.Text("")
+        if ImGui.BeginChild("sizer", 0, 22, false) then
+        end
+        ImGui.EndChild()
+
         ImGui.PushID("activechannels")
-        buildCommandEventEditor(
-            "Command",
-            "All commands follow the `Default` channel list but can be overridden. This list shows which commands have overrides.",
-            Commands.GetCommsPhrases(),
-            CommandConfig._.menu.activeChannels.selectedCommandIndex,
-            CommandConfig._.menu.activeChannels.selectedChannelIndex,
-            CommandConfig._.menu.activeChannels.selectedAddChannelIndex,
-            CommandConfig._.menu.activeChannels.selectedConfig,
-            CommandConfig._.menu.activeChannels.selectedUsesDefaults,
-            nil,
-            "activeChannels",
-            Speak.GetAllChannelTypes(),
-            CommandConfig.AddActiveChannel,
-            CommandConfig.RemoveActiveChannel
-        )
+            buildCommandEventEditor(
+                "Command",
+                "All commands follow the `Default` channel list but can be overridden. This list shows which commands have overrides.",
+                Commands.GetCommsPhrases(),
+                CommandConfig._.menu.activeChannels.selectedCommandIndex,
+                CommandConfig._.menu.activeChannels.selectedChannelIndex,
+                CommandConfig._.menu.activeChannels.selectedAddChannelIndex,
+                CommandConfig._.menu.activeChannels.selectedConfig,
+                CommandConfig._.menu.activeChannels.selectedUsesDefaults,
+                nil,
+                "activeChannels",
+                Speak.GetAllChannelTypes(),
+                CommandConfig.AddActiveChannel,
+                CommandConfig.RemoveActiveChannel
+            )
         ImGui.PopID()
+
         ImGui.EndTabItem()
     end
 end
@@ -1096,50 +1100,54 @@ end
 local function buildSpeakChannelTab()
     if ImGui.BeginTabItem("Speak Channels") then
         ImGui.Text("Speak Channels are where this character will broadcast information from commands or events.")
-        ImGui.Text("")
+        if ImGui.BeginChild("sizer", 665, 22, false) then
+        end
+        ImGui.EndChild()
 
-        ImGui.BeginTable("speak table", 2, ImGuiTableFlags.BordersInnerV)
+        local tableSorting_flags = bit32.bor(ImGuiTableFlags.BordersInnerV, ImGuiTableFlags.SizingFixedFit)
+        if ImGui.BeginTable("speak table", 2, tableSorting_flags) then
             ImGui.TableSetupColumn("", ImGuiTableColumnFlags.WidthFixed)
             ImGui.TableSetupColumn("", ImGuiTableColumnFlags.WidthStretch)
             ImGui.TableNextColumn()
 
             ImGui.PushID("speakcommands")
-            buildCommandEventEditor(
-                "Command",
-                "All commands follow the `Default` speak list but can be overridden. This list shows which commands have overrides.",
-                Commands.GetCommsPhrases(),
-                CommandConfig._.menu.speakChannels.commands.selectedCommandIndex,
-                CommandConfig._.menu.speakChannels.commands.selectedChannelIndex,
-                CommandConfig._.menu.speakChannels.commands.selectedAddChannelIndex,
-                CommandConfig._.menu.speakChannels.commands.selectedConfig,
-                CommandConfig._.menu.speakChannels.commands.selectedUsesDefaults,
-                CommandConfig._.menu.speakChannels.commands.tellName,
-                "speak",
-                Speak.GetAllChannelTypes(),
-                CommandConfig.AddSpeakChannel,
-                CommandConfig.RemoveSpeakChannel
-            )
+                buildCommandEventEditor(
+                    "Command",
+                    "All commands follow the `Default` speak list but can be overridden. This list shows which commands have overrides.",
+                    Commands.GetCommsPhrases(),
+                    CommandConfig._.menu.speakChannels.commands.selectedCommandIndex,
+                    CommandConfig._.menu.speakChannels.commands.selectedChannelIndex,
+                    CommandConfig._.menu.speakChannels.commands.selectedAddChannelIndex,
+                    CommandConfig._.menu.speakChannels.commands.selectedConfig,
+                    CommandConfig._.menu.speakChannels.commands.selectedUsesDefaults,
+                    CommandConfig._.menu.speakChannels.commands.tellName,
+                    "speak",
+                    Speak.GetAllChannelTypes(),
+                    CommandConfig.AddSpeakChannel,
+                    CommandConfig.RemoveSpeakChannel
+                )
             ImGui.PopID()
 
             ImGui.TableNextColumn()
             ImGui.PushID("speakevents")
-            buildCommandEventEditor(
-                "Event",
-                "All events follow the `Default` speak list but can be overridden. This list shows which events have overrides.",
-                Commands.GetEventIds(),
-                CommandConfig._.menu.speakChannels.events.selectedEventIndex,
-                CommandConfig._.menu.speakChannels.events.selectedChannelIndex,
-                CommandConfig._.menu.speakChannels.events.selectedAddChannelIndex,
-                CommandConfig._.menu.speakChannels.events.selectedConfig,
-                CommandConfig._.menu.speakChannels.events.selectedUsesDefaults,
-                CommandConfig._.menu.speakChannels.events.tellName,
-                "speak",
-                Speak.GetAllChannelTypes(),
-                CommandConfig.AddSpeakChannel,
-                CommandConfig.RemoveSpeakChannel
-            )
+                buildCommandEventEditor(
+                    "Event",
+                    "All events follow the `Default` speak list but can be overridden. This list shows which events have overrides.",
+                    Commands.GetEventIds(),
+                    CommandConfig._.menu.speakChannels.events.selectedEventIndex,
+                    CommandConfig._.menu.speakChannels.events.selectedChannelIndex,
+                    CommandConfig._.menu.speakChannels.events.selectedAddChannelIndex,
+                    CommandConfig._.menu.speakChannels.events.selectedConfig,
+                    CommandConfig._.menu.speakChannels.events.selectedUsesDefaults,
+                    CommandConfig._.menu.speakChannels.events.tellName,
+                    "speak",
+                    Speak.GetAllChannelTypes(),
+                    CommandConfig.AddSpeakChannel,
+                    CommandConfig.RemoveSpeakChannel
+                )
             ImGui.PopID()
-        ImGui.EndTable()
+            ImGui.EndTable()
+        end
 
         ImGui.EndTabItem()
     end
@@ -1148,52 +1156,56 @@ end
 local function buildOwnerChannelTab()
     if ImGui.BeginTabItem("Owners") then
         ImGui.Text("Owners are who have rights to give this character commands or invoke certain events.")
-        ImGui.Text("")
+        if ImGui.BeginChild("sizer", 665, 22, false) then
+        end
+        ImGui.EndChild()
 
-        ImGui.BeginTable("owner table", 2, ImGuiTableFlags.BordersInnerV)
+        local tableSorting_flags = bit32.bor(ImGuiTableFlags.BordersInnerV, ImGuiTableFlags.SizingFixedFit)
+        if ImGui.BeginTable("owner table", 2, tableSorting_flags) then
             ImGui.TableSetupColumn("", ImGuiTableColumnFlags.WidthFixed)
-            ImGui.TableSetupColumn("", ImGuiTableColumnFlags.WidthStretch)
+            ImGui.TableSetupColumn("", ImGuiTableColumnFlags.WidthFixed)
             ImGui.TableNextColumn()
 
             ImGui.PushID("owner commands")
-            buildCommandEventEditor(
-                "Command",
-                "All commands follow the `Default` owner list but can be overridden. This list shows which commands have overrides.",
-                Commands.GetCommsPhrases(),
-                CommandConfig._.menu.owners.commands.selectedCommandIndex,
-                CommandConfig._.menu.owners.commands.selectedChannelIndex,
-                CommandConfig._.menu.owners.commands.selectedAddChannelIndex,
-                CommandConfig._.menu.owners.commands.selectedConfig,
-                CommandConfig._.menu.owners.commands.selectedUsesDefaults,
-                CommandConfig._.menu.owners.commands.tellName,
-                "owners",
-                nil,
-                CommandConfig.AddOwner,
-                CommandConfig.RemoveOwner,
-                CommandConfig._.menu.owners.commands.isOpen
-            )
+                buildCommandEventEditor(
+                    "Command",
+                    "All commands follow the `Default` owner list but can be overridden. This list shows which commands have overrides.",
+                    Commands.GetCommsPhrases(),
+                    CommandConfig._.menu.owners.commands.selectedCommandIndex,
+                    CommandConfig._.menu.owners.commands.selectedChannelIndex,
+                    CommandConfig._.menu.owners.commands.selectedAddChannelIndex,
+                    CommandConfig._.menu.owners.commands.selectedConfig,
+                    CommandConfig._.menu.owners.commands.selectedUsesDefaults,
+                    CommandConfig._.menu.owners.commands.tellName,
+                    "owners",
+                    nil,
+                    CommandConfig.AddOwner,
+                    CommandConfig.RemoveOwner,
+                    CommandConfig._.menu.owners.commands.isOpen
+                )
             ImGui.PopID()
 
             ImGui.TableNextColumn()
             ImGui.PushID("owner events")
-            buildCommandEventEditor(
-                "Event",
-                "All events follow the `Default` owner list but can be overridden. This list shows which events have overrides.",
-                Commands.GetEventIds(),
-                CommandConfig._.menu.owners.events.selectedEventIndex,
-                CommandConfig._.menu.owners.events.selectedChannelIndex,
-                CommandConfig._.menu.owners.events.selectedAddChannelIndex,
-                CommandConfig._.menu.owners.events.selectedConfig,
-                CommandConfig._.menu.owners.events.selectedUsesDefaults,
-                CommandConfig._.menu.owners.events.tellName,
-                "owners",
-                nil,
-                CommandConfig.AddOwner,
-                CommandConfig.RemoveOwner,
-                CommandConfig._.menu.owners.events.isOpen
-            )
+                buildCommandEventEditor(
+                    "Event",
+                    "All events follow the `Default` owner list but can be overridden. This list shows which events have overrides.",
+                    Commands.GetEventIds(),
+                    CommandConfig._.menu.owners.events.selectedEventIndex,
+                    CommandConfig._.menu.owners.events.selectedChannelIndex,
+                    CommandConfig._.menu.owners.events.selectedAddChannelIndex,
+                    CommandConfig._.menu.owners.events.selectedConfig,
+                    CommandConfig._.menu.owners.events.selectedUsesDefaults,
+                    CommandConfig._.menu.owners.events.tellName,
+                    "owners",
+                    nil,
+                    CommandConfig.AddOwner,
+                    CommandConfig.RemoveOwner,
+                    CommandConfig._.menu.owners.events.isOpen
+                )
             ImGui.PopID()
-        ImGui.EndTable()
+            ImGui.EndTable()
+        end
 
         ImGui.EndTabItem()
     end
@@ -1201,11 +1213,12 @@ end
 
 ---@diagnostic disable-next-line: duplicate-set-field
 function CommandConfig.BuildMenu()
-    ImGui.BeginTabBar("Command Tabs")
+    if ImGui.BeginTabBar("Command Tabs") then
         buildActiveChannelTab()
         buildSpeakChannelTab()
         buildOwnerChannelTab()
-    ImGui.EndTabBar()
+        ImGui.EndTabBar()
+    end
 end
 
 return CommandConfig

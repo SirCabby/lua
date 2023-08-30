@@ -6,6 +6,7 @@ local Timer = require("utils.Time.Timer")
 
 local Command = require("cabby.commands.command")
 local Commands = require("cabby.commands.commands")
+local Menu = require("cabby.menu")
 
 local function passive()
     return false
@@ -383,6 +384,8 @@ function FollowState.Init()
             print(" -- to disable, use: anchor off")
         end
         Commands.RegisterCommEvent(Command.new(FollowState.eventIds.anchor, event_Anchor, anchorHelp))
+
+        Menu.RegisterState(FollowState)
 
         FollowState._.isInit = true
     end
