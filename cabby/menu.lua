@@ -43,7 +43,7 @@ Menu.Init = function()
                 local indexBase = 0
                 local selectedMenu = NotSelected
                 local _, height = ImGui.GetContentRegionAvail()
-                ImGui.BeginChild("listItems", 170, height-2, true)
+                if ImGui.BeginChild("listItems", 170, height-2, true) then
                     if ImGui.TreeNode("Configs") then
                         for i, config in ipairs(Menu._.registrations.configs) do
                             ---@type CabbyConfig
@@ -86,16 +86,18 @@ Menu.Init = function()
                         end
                         ImGui.TreePop()
                     end
+                end
                 ImGui.EndChild()
-                
+
                 -- Right Pane Selected Child Menu
                 local width, height = ImGui.GetContentRegionAvail()
                 ImGui.SameLine()
-                ImGui.BeginChild("displayPane", width - 178, height, true)
+                if ImGui.BeginChild("displayPane", width - 178, height, true, ImGuiWindowFlags.HorizontalScrollbar) then
                     selectedMenu()
+                end
                 ImGui.EndChild()
-                ImGui.End()
             end
+            ImGui.End()
         end)
 
         Menu._.isInit = true

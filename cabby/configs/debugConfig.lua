@@ -49,7 +49,6 @@ function DebugConfig.Init(config)
 
         -- Sync Debug with DebugConfig on this ctor
         initAndValidate()
-        
 
         local function Bind_Debug(...)
             local args = {...} or {}
