@@ -40,6 +40,7 @@ end
 
 function Owners:Open(isOpen)
     self._.data.open = isOpen
+    print("Owners Open: [" .. tostring(isOpen) .. "]")
     self._.config:SaveConfig()
 end
 
