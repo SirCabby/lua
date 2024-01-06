@@ -17,6 +17,7 @@ setmetatable(PriorityQueue, {
 function PriorityQueue.new(maxSize)
     local self = setmetatable({}, PriorityQueue)
 
+---@diagnostic disable-next-line: inject-field
     self._ = {}
     self._.jobs = {}
     self._.maxSize = maxSize

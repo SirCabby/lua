@@ -15,14 +15,14 @@ setmetatable(StateMachine, {
 function StateMachine.new()
     local self = setmetatable({}, StateMachine)
 
-    self.registeredStates = {}
-    self.started = false
+    self._.registeredStates = {}
+    self._.started = false
 
     return self
 end
 
 local function runChecks(self)
-    for _, state in ipairs(self.registeredStates) do
+    for _, state in ipairs(self._.registeredStates) do
         ---@type State
         state = state
         if state:Go() then
@@ -33,16 +33,16 @@ end
 
 ---@param state State
 function StateMachine:Register(state)
-    table.insert(self.registeredStates, state)
+    table.insert(self._.registeredStates, state)
 end
 
 function StateMachine:Unregister(state)
-    TableUtils.RemoveByValue(self.registeredStates, state)
+    TableUtils.RemoveByValue(self._.registeredStates, state)
 end
 
 function StateMachine:Start()
-    self.started = true
-    while (self.started) do
+    self._.started = true
+    while (self._.started) do
         mq.doevents()
         runChecks(self)
         mq.delay(1)
@@ -50,7 +50,7 @@ function StateMachine:Start()
 end
 
 function StateMachine:Stop()
-    self.started = false
+    self._.started = false
 end
 
 return StateMachine

@@ -21,6 +21,7 @@ setmetatable(PriorityQueueJob, {
 function PriorityQueueJob.new(identity, priority, content, timeMs, isUnique)
     local self = setmetatable({}, PriorityQueueJob)
 
+---@diagnostic disable-next-line: inject-field
     self._ = {}
     self._.identity = identity
     self._.priority = priority

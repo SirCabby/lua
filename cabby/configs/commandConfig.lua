@@ -7,7 +7,7 @@ local Commands = require("cabby.commands.commands")
 local Menu = require("cabby.menu")
 local Owners = require("cabby.commands.owners")
 
----@type CabbyConfig
+---@class CabbyConfig
 local CommandConfig = {
     key = "CommandConfig",
     _ = {

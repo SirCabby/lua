@@ -14,6 +14,7 @@ setmetatable(Stack, {
 function Stack.new()
     local self = setmetatable({}, Stack)
 
+---@diagnostic disable-next-line: inject-field
     self._ = {}
     self._.stack = {}
 

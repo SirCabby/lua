@@ -31,6 +31,7 @@ Config.store: { <-- Global / static config manager table
 function Config.new(filePath, fileSystem)
     local self = setmetatable({}, Config)
 
+---@diagnostic disable-next-line: inject-field
     self._ = {}
     self._.fileSystem = fileSystem or FileSystem
 ---@diagnostic disable-next-line: need-check-nil

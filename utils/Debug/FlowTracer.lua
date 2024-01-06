@@ -15,6 +15,7 @@ setmetatable(FlowTracer, {
 function FlowTracer.new()
     local self = setmetatable({}, FlowTracer)
 
+---@diagnostic disable-next-line: inject-field
     self._ = {
         callstack = Stack.new() -- { key = "", message = "", stopwatch = sw }
     }
