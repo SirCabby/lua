@@ -52,6 +52,7 @@ setmetatable(Speak, {
 function Speak.new(channels)
     local self = setmetatable({}, Speak)
 
+---@diagnostic disable-next-line: inject-field
     self._ = {}
     self._.channels = channels
 

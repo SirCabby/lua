@@ -773,6 +773,7 @@ function CommandConfig.UpdateEventChannels()
     Commands.SetChannelPatterns(Speak.GetPhrasePatterns(CommandConfig._.configData.activeChannels))
 end
 
+---@diagnostic disable-next-line: duplicate-set-field
 function CommandConfig.Print()
     TableUtils.Print(CommandConfig._.configData)
 end

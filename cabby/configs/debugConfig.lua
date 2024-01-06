@@ -4,7 +4,7 @@ local TableUtils = require("utils.TableUtils.TableUtils")
 local Commands = require("cabby.commands.commands")
 local Menu = require("cabby.menu")
 
----@type CabbyConfig
+---@class CabbyConfig
 local DebugConfig = {
     key = "DebugConfig",
     _ = {
@@ -103,6 +103,7 @@ function DebugConfig.FlipDebugToggle(key)
     DebugLog("Flipped debug toggle: [" .. key .. "] : [" .. tostring(Debug.GetToggle(key)) .. "]")
 end
 
+---@diagnostic disable-next-line: duplicate-set-field
 function DebugConfig.Print()
     TableUtils.Print(Debug._.toggles)
 end

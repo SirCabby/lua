@@ -24,6 +24,7 @@ function Command.new(phrase, eventFunction, helpFunction, phrasePatternOverrides
     self.phrase = phrase
     self.eventFunction = eventFunction
     self.helpFunction = helpFunction
+---@diagnostic disable-next-line: inject-field
     self.phrasePatternOverrides = phrasePatternOverrides
 
     return self

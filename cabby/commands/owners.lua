@@ -19,6 +19,7 @@ setmetatable(Owners, {
 function Owners.new(config, configData)
     local self = setmetatable({}, Owners)
 
+---@diagnostic disable-next-line: inject-field
     self._ = {}
     self._.config = config
     self._.data = configData

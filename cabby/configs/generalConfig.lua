@@ -173,6 +173,7 @@ function GeneralConfig.BuildMenu()
     ImGui.Text("Config Version: " .. generalConfig[GeneralConfig.keys.version])
 end
 
+---@diagnostic disable-next-line: duplicate-set-field
 function GeneralConfig.Print()
     local generalConfig = getConfigSection()
     TableUtils.Print(generalConfig)
