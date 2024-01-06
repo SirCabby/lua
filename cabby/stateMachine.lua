@@ -15,6 +15,8 @@ setmetatable(StateMachine, {
 function StateMachine.new()
     local self = setmetatable({}, StateMachine)
 
+---@diagnostic disable-next-line: inject-field
+    self._ = {}
     self._.registeredStates = {}
     self._.started = false
 
