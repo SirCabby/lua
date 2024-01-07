@@ -51,7 +51,7 @@ MeleeState._.meleeActions.checkForCombat = function()
                 mq.cmd("/mqtarget npc id " .. tostring(xtarget.ID()))
                 MeleeState._.currentTarget = xtarget.ID()
                 MeleeState._.currentAction = MeleeState._.meleeActions.attackTarget
-                MeleeState._.currentActionTimer = Timer.new(2500)
+                MeleeState._.currentActionTimer = Timer.new(500)
                 return true
             end
         end
@@ -69,22 +69,27 @@ MeleeState._.meleeActions.attackTarget = function()
         return true
     end
 
-    if mq.TLO.Target.Dead then
+    if mq.TLO.Target.Dead() then
         Reset()
         return true
     end
 
-    if mq.TLO.Stick.StickTarget() ~= MeleeState._.currentTarget then
-        mq.cmd("/stick loose " .. tostring(mq.TLO.Target.MaxRangeTo() - 3))
+    local range = math.min(14, mq.TLO.Target.MaxRangeTo() - 3)
+
+    if not mq.TLO.Stick.Active() and mq.TLO.Target.Distance() < 50 and mq.TLO.Target.LineOfSight() then
+        mq.cmd("/stick loose " .. range)
+        return true
     end
 
-    if mq.TLO.Target.Distance() < mq.TLO.Target.MaxRangeTo() then
+    if mq.TLO.Target.Distance() < range then
         if not mq.TLO.Me.Combat() then
             mq.cmd("/attack on")
         end
 
         for _, meleeFunc in ipairs(MeleeState._.registrations.abilities) do
-            meleeFunc()
+            ---@type CabbyAction
+            meleeFunc = meleeFunc
+            meleeFunc.actionFunction()
         end
     end
 
@@ -95,6 +100,20 @@ end
 function MeleeState.Init()
     if not MeleeState._.isInit then
         Menu.RegisterState(MeleeState)
+
+        -- local function event_ClickZone(_, speaker)
+        --     if Commands.GetCommandOwners(FollowState.eventIds.clickZone):HasPermission(speaker) then
+        --         DebugLog("Clickzone speaker [" .. speaker .. "]")
+        --         FollowState._.currentAction = FollowState._.clickZoneActions.findingSwitch
+        --     else
+        --         DebugLog("Ignoring clickzone speaker [" .. speaker .. "]")
+        --     end
+        -- end
+        -- local function clickZoneHelp()
+        --     print("(clickzone) Tells listener(s) to click to zone")
+        -- end
+        -- Commands.RegisterCommEvent(Command.new(FollowState.eventIds.clickZone, event_ClickZone, clickZoneHelp))
+
         MeleeState._.isInit = true
     end
 end
@@ -104,9 +123,9 @@ function MeleeState.Go()
     return MeleeState._.currentAction()
 end
 
----@param meleeFunc function
-MeleeState.RegisterAbility = function(meleeFunc)
-    table.insert(MeleeState._.registrations.abilities, meleeFunc)
+---@param meleeAction CabbyAction
+MeleeState.RegisterAction = function(meleeAction)
+    table.insert(MeleeState._.registrations.abilities, meleeAction)
 end
 
 return MeleeState

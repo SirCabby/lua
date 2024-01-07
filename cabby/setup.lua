@@ -109,6 +109,7 @@ local function ClassSetup(stateMachine)
     elseif className == "SHD" then
     elseif className == "SHM" then
     elseif className == "WAR" then
+        class = require("cabby.classes.warrior")
     elseif className == "WIZ" then
     end
 
