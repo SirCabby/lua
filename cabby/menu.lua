@@ -37,71 +37,74 @@ end
 
 Menu.Init = function()
     if not Menu._.isInit then
-        local selectedIndex = 0
-        mq.imgui.init("Cabby Menu", function()
-            if ImGui.Begin("Cabby Menu") then
-                local indexBase = 0
-                local selectedMenu = NotSelected
-                local _, height = ImGui.GetContentRegionAvail()
-                if ImGui.BeginChild("listItems", 170, height-2, true) then
-                    if ImGui.TreeNode("Configs") then
-                        for i, config in ipairs(Menu._.registrations.configs) do
-                            ---@type CabbyConfig
-                            config = config
-                            local isSelected = selectedIndex == i + indexBase
-                            if ImGui.Selectable(config.key, isSelected) then
-                                selectedIndex = i + indexBase
-                                if config.BuildMenu == nil then
-                                    selectedMenu = PageDne
-                                else
-                                    selectedMenu = config.BuildMenu
-                                end
-                            end
-
-                            if isSelected then
-                                ImGui.SetItemDefaultFocus()
-                            end
-                        end
-                        ImGui.TreePop()
-                    end
-
-                    indexBase = indexBase + #Menu._.registrations.configs
-                    if ImGui.TreeNode("States") then
-                        for i, state in ipairs(Menu._.registrations.states) do
-                            ---@type State
-                            state = state
-                            local isSelected = selectedIndex == i + indexBase
-                            if ImGui.Selectable(state.key, isSelected) then
-                                selectedIndex = i + indexBase
-                                if state.BuildMenu == nil then
-                                    selectedMenu = PageDne
-                                else
-                                    selectedMenu = state.BuildMenu
-                                end
-                            end
-
-                            if isSelected then
-                                ImGui.SetItemDefaultFocus()
-                            end
-                        end
-                        ImGui.TreePop()
-                    end
-                end
-                ImGui.EndChild()
-
-                -- Right Pane Selected Child Menu
-                local width, height = ImGui.GetContentRegionAvail()
-                ImGui.SameLine()
-                if ImGui.BeginChild("displayPane", width - 178, height, true, ImGuiWindowFlags.HorizontalScrollbar) then
-                    selectedMenu()
-                end
-                ImGui.EndChild()
-            end
-            ImGui.End()
-        end)
-
+        Menu.OpenMainMenu()
         Menu._.isInit = true
     end
+end
+
+Menu.OpenMainMenu = function()
+    local selectedIndex = 0
+    mq.imgui.init("Cabby Menu", function()
+        if ImGui.Begin("Cabby Menu") then
+            local indexBase = 0
+            local selectedMenu = NotSelected
+            local _, height = ImGui.GetContentRegionAvail()
+            if ImGui.BeginChild("listItems", 170, height-2, true) then
+                if ImGui.TreeNode("Configs") then
+                    for i, config in ipairs(Menu._.registrations.configs) do
+                        ---@type CabbyConfig
+                        config = config
+                        local isSelected = selectedIndex == i + indexBase
+                        if ImGui.Selectable(config.key, isSelected) then
+                            selectedIndex = i + indexBase
+                            if config.BuildMenu == nil then
+                                selectedMenu = PageDne
+                            else
+                                selectedMenu = config.BuildMenu
+                            end
+                        end
+
+                        if isSelected then
+                            ImGui.SetItemDefaultFocus()
+                        end
+                    end
+                    ImGui.TreePop()
+                end
+
+                indexBase = indexBase + #Menu._.registrations.configs
+                if ImGui.TreeNode("States") then
+                    for i, state in ipairs(Menu._.registrations.states) do
+                        ---@type State
+                        state = state
+                        local isSelected = selectedIndex == i + indexBase
+                        if ImGui.Selectable(state.key, isSelected) then
+                            selectedIndex = i + indexBase
+                            if state.BuildMenu == nil then
+                                selectedMenu = PageDne
+                            else
+                                selectedMenu = state.BuildMenu
+                            end
+                        end
+
+                        if isSelected then
+                            ImGui.SetItemDefaultFocus()
+                        end
+                    end
+                    ImGui.TreePop()
+                end
+            end
+            ImGui.EndChild()
+
+            -- Right Pane Selected Child Menu
+            local width, height = ImGui.GetContentRegionAvail()
+            ImGui.SameLine()
+            if ImGui.BeginChild("displayPane", width - 178, height, true, ImGuiWindowFlags.HorizontalScrollbar) then
+                selectedMenu()
+            end
+            ImGui.EndChild()
+        end
+        ImGui.End()
+    end)
 end
 
 ---@param config CabbyConfig
