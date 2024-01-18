@@ -1,5 +1,4 @@
 local PackageMan = require("mq/PackageMan")
-local Utils = require('mq/Utils')
 
 ---@class Time
 local Time = {
@@ -9,10 +8,7 @@ local Time = {
 
 local function getSocket()
     if Time.socket == nil then
-        Time.socket = Utils.Library.Include('socket')
-        if not Time.socket then
-            Time.socket = PackageMan.Require('luasocket', 'socket')
-        end
+        Time.socket = PackageMan.Require('luasocket', 'socket')
     end
     return Time.socket
 end
