@@ -30,6 +30,11 @@ Global = {
 
 local ftkey = Global.tracing.open("Cabby Script")
 
+-- First time setup
+-- local PackageMan = require("mq/PackageMan")
+-- PackageMan.Install('luasocket')
+-- PackageMan.Install("luafilesystem")
+
 -- Debug toggles
 -- local Debug = require("utils.Debug.Debug")
 -- Debug.writeFile = true

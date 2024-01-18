@@ -1,4 +1,5 @@
 local PackageMan = require("mq/PackageMan")
+local Utils = require('mq/Utils')
 
 local Debug = require("utils.Debug.Debug")
 local StringUtils = require("utils.StringUtils.StringUtils")
@@ -12,7 +13,10 @@ end
 
 local function getLfs()
     if FileSystem.lfs == nil then
-        FileSystem.lfs = PackageMan.Require("luafilesystem", "lfs")
+        FileSystem.lfs = Utils.Library.Include('lfs')
+        if not FileSystem.lfs then
+            FileSystem.lfs = PackageMan.Require("luafilesystem", "lfs")
+        end
     end
     return FileSystem.lfs
 end
