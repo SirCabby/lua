@@ -26,7 +26,7 @@ local FollowState = {
     _ = {
         isInit = false,
         currentAction = passive,
-        currentActionTimer = Timer.new(0),
+        currentActionTimer = nil,
         lastLoc = { x = 0, y = 0, z = 0, zoneId = 0 },
         followTarget = "",
         checkingStuck = false,
@@ -386,6 +386,7 @@ function FollowState.Init()
         end
         Commands.RegisterCommEvent(Command.new(FollowState.eventIds.anchor, event_Anchor, anchorHelp))
 
+        Reset()
         Menu.RegisterState(FollowState)
 
         FollowState._.isInit = true
@@ -399,7 +400,7 @@ end
 
 ---@diagnostic disable-next-line: duplicate-set-field
 function FollowState.BuildMenu()
-    ImGui.Text("Follow State status:")
+    ImGui.Text("Follow State status")
     if ImGui.BeginChild("c1", 0, 22, false) then
     end
     ImGui.EndChild()
