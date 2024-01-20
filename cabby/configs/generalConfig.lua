@@ -82,12 +82,11 @@ local function getConfigSection()
 end
 
 ---Initialize the static object, only done once
----@param config Config
 ---@diagnostic disable-next-line: duplicate-set-field
-function GeneralConfig.Init(config)
+function GeneralConfig.Init()
     if not GeneralConfig._.isInit then
         local ftkey = Global.tracing.open("GeneralConfig Setup")
-        GeneralConfig._.config = config
+        GeneralConfig._.config = Global.configStore
 
         -- Init any keys that were not setup
         initAndValidate()

@@ -25,7 +25,8 @@ Global = {
                 Global.tracing.flowTracer:close(key)
             end
         end
-    }
+    },
+    configStore = nil
 }
 
 local ftkey = Global.tracing.open("Cabby Script")

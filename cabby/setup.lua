@@ -1,18 +1,16 @@
 local mq = require("mq")
-local TableUtils = require("utils.TableUtils.TableUtils")
 
 local Config = require("utils.Config.Config")
 local Debug = require("utils.Debug.Debug")
 
-local CharacterConfig = require("cabby.configs.characterConfig")
 local CommandConfig = require("cabby.configs.commandConfig")
 local DebugConfig = require("cabby.configs.debugConfig")
 local GeneralConfig = require("cabby.configs.generalConfig")
+local MeleeStateConfig = require("cabby.configs.meleeStateConfig")
 local Menu = require("cabby.menu")
 
 local Setup = {
-    key = "Setup",
-    config = {}
+    key = "Setup"
 }
 
 local function DebugLog(str)
@@ -74,15 +72,13 @@ local function ConfigSetup(configFilePath)
     PluginSetup()
 
     local ftkey2 = Global.tracing.open("Config new")
-    Setup.config = Config.new(configFilePath)
+    Global.configStore = Config.new(configFilePath)
     Global.tracing.close(ftkey2)
 
-    CommandConfig.Init(Setup.config)
-    DebugConfig.Init(Setup.config)
-    GeneralConfig.Init(Setup.config)
-    CharacterConfig.Init(Setup.config)
-
-    Menu.Init()
+    CommandConfig.Init()
+    DebugConfig.Init()
+    GeneralConfig.Init()
+    MeleeStateConfig.Init()
 
     Global.tracing.close(ftkey)
 end
@@ -141,6 +137,8 @@ function Setup:Init(configFilePath, stateMachine)
 
     ConfigSetup(configFilePath)
     ClassSetup(stateMachine)
+
+    Menu.Init() -- Needs to be after all importing for imgui, so as last as possible
 
     DebugLog("Finished Cabby Setup")
 end

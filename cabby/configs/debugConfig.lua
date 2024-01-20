@@ -40,12 +40,11 @@ local function initAndValidate()
 end
 
 ---Initialize the static object, only done once
----@param config Config
 ---@diagnostic disable-next-line: duplicate-set-field
-function DebugConfig.Init(config)
+function DebugConfig.Init()
     if not DebugConfig._.isInit then
         local ftkey = Global.tracing.open("DebugConfig Setup")
-        DebugConfig._.config = config
+        DebugConfig._.config = Global.configStore
 
         -- Sync Debug with DebugConfig on this ctor
         initAndValidate()

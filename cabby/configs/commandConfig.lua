@@ -161,12 +161,11 @@ local function initAndValidate()
 end
 
 ---Initialize the static object, only done once
----@param config Config
 ---@diagnostic disable-next-line: duplicate-set-field
-function CommandConfig.Init(config)
+function CommandConfig.Init()
     if not CommandConfig._.isInit then
         local ftkey = Global.tracing.open("CommandConfig Setup")
-        CommandConfig._.config = config
+        CommandConfig._.config = Global.configStore
 
         -- Init any keys that were not setup
         initAndValidate()
