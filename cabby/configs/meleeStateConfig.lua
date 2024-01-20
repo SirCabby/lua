@@ -22,12 +22,23 @@ local function initAndValidate()
     if getConfigSection() == nil then
         DebugLog("MeleeStateConfig Section was not set, updating...")
         MeleeStateConfig._.config:GetConfigRoot()[MeleeStateConfig.key] = {}
+    end
 
-        local configRoot = getConfigSection()
-        configRoot.enabled = true
+    local configRoot = getConfigSection()
+
+    if configRoot.stick == nil then
         configRoot.stick = true
+    end
+
+    if configRoot.stick_distance == nil then
         configRoot.stick_distance = 12
+    end
+
+    if configRoot.engage_range == nil then
         configRoot.engage_range = 50
+    end
+
+    if configRoot.actions == nil then
         configRoot.actions = {}
     end
 end
