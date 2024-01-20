@@ -49,7 +49,7 @@ end
 ---@param root string: absolute file path to root folder to search from
 ---@param searchText string: search file names for this text
 ---@param isRecursive boolean: true to recursively search in sub-folders
----@return array: array of found files
+---@return table: array of found files
 function FileSystem.FindAllFiles(root, searchText, isRecursive)
     local result = {}
     local lfs = getLfs()

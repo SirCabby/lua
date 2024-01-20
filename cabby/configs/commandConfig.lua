@@ -832,7 +832,7 @@ end
 ---@param selectedUsesDefaults table
 ---@param tellName table? nil if don't need tell names
 ---@param subType string activeChannels, speak, owners
----@param allSubtypeList array? nil for no list, names only
+---@param allSubtypeList table? nil for no list, names only
 ---@param addFunc function
 ---@param removeFunc function
 ---@param isOpen table?

@@ -1,6 +1,5 @@
 local mq = require("mq")
 local CabbyAction = require("cabby.actions.cabbyAction")
-local Character = require("cabby.character")
 local FollowState = require("cabby.states.followState")
 local MeleeState = require("cabby.states.meleeState")
 

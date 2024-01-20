@@ -32,7 +32,7 @@ end
 
 ---Determines if the job is unique to the queue. If one already exists, no new job is added.
 ---@param job PriorityQueueJob
----@param jobs array 
+---@param jobs table 
 ---@return boolean isUnique true if this is a unique job to add, false to abort
 local function IsUnique(job, jobs)
     DebugLog("Checking for uniqueness in priorityqueue: " .. job:GetIdentity())
@@ -47,7 +47,7 @@ end
 
 ---Removes Job from queue by index
 ---@param index number job's place in the queue
----@param jobs array 
+---@param jobs table 
 local function RemoveJobByIndex(index, jobs)
     DebugLog("Removing job at index: " .. index)
     if index <= #jobs then
@@ -56,7 +56,7 @@ local function RemoveJobByIndex(index, jobs)
 end
 
 ---Removes all completed jobs from queue
----@param jobs array 
+---@param jobs table 
 local function CleanupCompletedJobs(jobs)
     for i = #jobs, 1, -1 do
         if jobs[i]:IsComplete() then

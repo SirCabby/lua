@@ -14,9 +14,9 @@ test.arguments(args)
 local s1
 ---@type Stack
 local s2
----@type array
+---@type table
 local s1Stack
----@type array
+---@type table
 local s2Stack
 local pushStuff1 = { "p1", { "p2" }, 3, true, false, nil, "p7" }
 local pushStuff2 = { "2p" }

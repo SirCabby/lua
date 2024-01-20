@@ -47,7 +47,7 @@ setmetatable(Speak, {
 })
 
 --- to leverage tell-to channel types, submit string as "<channeltype> <to>"
----@param channels array channel types
+---@param channels table channel types
 ---@return Speak|nil
 function Speak.new(channels)
     local self = setmetatable({}, Speak)
@@ -118,8 +118,8 @@ function Speak.GetAllChannelTypes()
     return result
 end
 
----@param channels array Channel type names to use to generate phrase patterns
----@return array phrasePatterns 
+---@param channels table Channel type names to use to generate phrase patterns
+---@return table phrasePatterns 
 function Speak.GetPhrasePatterns(channels)
     local phrasePatterns = {}
 

@@ -1,8 +1,5 @@
 local Debug = require("utils.Debug.Debug")
 
-local Commands = require("cabby.commands.commands")
-local UserInput = require("cabby.utils.userinput")
-
 ---@class CabbyConfig
 local MeleeStateConfig = {
     key = "MeleeState",

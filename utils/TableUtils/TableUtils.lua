@@ -81,7 +81,7 @@ end
 
 ---Returns all keys associated with obj
 ---@param tbl table
----@return array - array of keys
+---@return table - array of keys
 function TableUtils.GetKeys(tbl)
     DebugLog("Getting keys from table")
     local result = {}
@@ -171,9 +171,9 @@ function TableUtils.DeepClone(tbl)
     return result
 end
 
----@param minuend array The array to subtract from
----@param subtrahend array The subtracted array
----@return array difference Difference from the subtraction
+---@param minuend table The array to subtract from
+---@param subtrahend table The subtracted array
+---@return table difference Difference from the subtraction
 function TableUtils.ArraySubtract(minuend, subtrahend)
     local result = {}
     local matches = {}

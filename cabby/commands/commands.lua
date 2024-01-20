@@ -187,14 +187,14 @@ local function UpdateCommChannels()
 end
 
 ---Replaces current patterns with those provided
----@param channelPatterns array
+---@param channelPatterns table
 function Commands.SetChannelPatterns(channelPatterns)
     Commands._.registrations.commands.defaultChannelPatterns = channelPatterns
     UpdateCommChannels()
 end
 
 ---@param phrase string
----@param phrasePatternOverrides array?
+---@param phrasePatternOverrides table?
 function Commands.SetPhrasePatternOverrides(phrase, phrasePatternOverrides)
     phrase = StringUtils.Split(phrase)[1]
     Commands._.registrations.commands.phrasePatternOverrides[phrase] = phrasePatternOverrides

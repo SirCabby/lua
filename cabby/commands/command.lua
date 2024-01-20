@@ -3,7 +3,7 @@
 ---@field phrase string
 ---@field eventFunction function
 ---@field helpFunction function
----@field registeredEvents array
+---@field registeredEvents table
 local Command = {}
 
 Command.__index = Command
@@ -16,7 +16,7 @@ setmetatable(Command, {
 ---@param phrase string
 ---@param eventFunction function
 ---@param helpFunction function
----@param phrasePatternOverrides array?
+---@param phrasePatternOverrides table?
 ---@return Command
 function Command.new(phrase, eventFunction, helpFunction, phrasePatternOverrides)
     local self = setmetatable({}, Command)
