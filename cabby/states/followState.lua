@@ -8,6 +8,7 @@ local Timer = require("utils.Time.Timer")
 local Command = require("cabby.commands.command")
 local Commands = require("cabby.commands.commands")
 local Menu = require("cabby.menu")
+local UserInput = require("cabby.utils.userinput")
 
 local function passive()
     return false
@@ -386,6 +387,15 @@ function FollowState.Init()
         end
         Commands.RegisterCommEvent(Command.new(FollowState.eventIds.anchor, event_Anchor, anchorHelp))
 
+        if Global.configStore:GetConfigRoot()[FollowState.key] == nil then
+            Global.configStore:GetConfigRoot()[FollowState.key] = {}
+            Global.configStore:SaveConfig()
+        end
+        if Global.configStore:GetConfigRoot()[FollowState.key].enabled == nil then
+            Global.configStore:GetConfigRoot()[FollowState.key].enabled = true
+            Global.configStore:SaveConfig()
+        end
+
         Reset()
         Menu.RegisterState(FollowState)
 
@@ -399,11 +409,31 @@ function FollowState.Go()
 end
 
 ---@diagnostic disable-next-line: duplicate-set-field
+function FollowState.IsEnabled()
+    return Global.configStore:GetConfigRoot()[FollowState.key] ~= nil and UserInput.IsTrue(Global.configStore:GetConfigRoot()[FollowState.key].enabled)
+end
+
+---@param isEnabled boolean
+---@diagnostic disable-next-line: duplicate-set-field
+function FollowState.SetEnabled(isEnabled)
+    Global.configStore:GetConfigRoot()[FollowState.key].enabled = isEnabled
+    Global.configStore:SaveConfig()
+    print("FollowState is Enabled: [" .. tostring(isEnabled) .. "]")
+end
+
+---@diagnostic disable-next-line: duplicate-set-field
 function FollowState.BuildMenu()
     ImGui.Text("Follow State status")
     if ImGui.BeginChild("c1", 0, 22, false) then
     end
     ImGui.EndChild()
+
+    ---@type boolean
+    local clicked, result
+    result, clicked = ImGui.Checkbox("Enabled", FollowState.IsEnabled())
+    if clicked then
+        FollowState.SetEnabled(result)
+    end
 
     local tableSorting_flags = bit32.bor(ImGuiTableFlags.RowBg, ImGuiTableFlags.BordersOuter, ImGuiTableFlags.BordersInner,
     ImGuiTableFlags.NoHostExtendX)

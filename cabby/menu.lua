@@ -1,6 +1,10 @@
 local mq = require("mq")
 local ImGui = require "ImGui"
 
+local Commands = require("cabby.commands.commands")
+local MeleeStateConfig = require("cabby.configs.meleeStateConfig")
+local UserInput = require("cabby.utils.userinput")
+
 ---@class Menu
 local Menu = {
     key = "Menu",
@@ -38,6 +42,49 @@ end
 Menu.Init = function()
     if not Menu._.isInit then
         Menu.OpenMainMenu()
+
+        local function State_Help()
+            print("(/state) Registered States:")
+            for i, state in ipairs(Menu._.registrations.states) do
+                ---@type State
+                state = state
+                print(i .. ") " .. state.key:sub(1, -6) .. ": " .. tostring(state.IsEnabled()))
+            end
+            print("  -- Toggle a state: /state <name>")
+            print("  -- Set enabled: /state <name> <0 | 1>")
+        end
+
+        local function Bind_State(...)
+            local args = {...} or {}
+            if args == nil or #args < 1 or #args > 2 or args[1]:lower() == "help" then
+                State_Help()
+                return
+            end
+
+            local arg1 = args[1]:lower()
+            local arg2 = ""
+            if #args == 2 then
+                arg2 = args[2]:lower()
+            end
+
+            for _, state in ipairs(Menu._.registrations.states) do
+                ---@type State
+                state = state
+                if state.key:sub(1, -6):lower() == arg1 then
+                    if arg2 ~= "" then
+                        state.SetEnabled(UserInput.IsTrue(arg2))
+                    else
+                        state.SetEnabled(not state.IsEnabled())
+                    end
+
+                    return
+                end
+            end
+
+            State_Help()
+        end
+        Commands.RegisterSlashCommand("state", Bind_State)
+
         Menu._.isInit = true
     end
 end

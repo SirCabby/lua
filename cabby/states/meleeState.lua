@@ -1,11 +1,9 @@
 local mq = require("mq")
 
 local Debug = require("utils.Debug.Debug")
-local StringUtils = require("utils.StringUtils.StringUtils")
 local Timer = require("utils.Time.Timer")
 
-local Command = require("cabby.commands.command")
-local Commands = require("cabby.commands.commands")
+local MeleeStateConfig = require("cabby.configs.meleeStateConfig")
 local Menu = require("cabby.menu")
 
 local function passive()
@@ -20,7 +18,7 @@ local MeleeState = {
     _ = {
         isInit = false,
         currentAction = passive,
-        currentActionTimer = Timer.new(0),
+        currentActionTimer = nil,
         currentTarget = 0,
         meleeActions = {
             checkForCombat = passive,
@@ -40,6 +38,22 @@ end
 local function Reset()
     MeleeState._.currentAction = MeleeState._.meleeActions.checkForCombat
     MeleeState._.currentTarget = 0
+    MeleeState._.currentActionTimer = Timer.new(0)
+end
+
+---@return boolean isIncapacitated
+local function IsIncapacitated()
+    return mq.TLO.Me.Stunned() or mq.TLO.Me.Mezzed() ~= nil or mq.TLO.Me.Charmed() ~= nil or mq.TLO.Me.Binding() or mq.TLO.Me.Casting() ~= nil
+end
+
+local function FixCombatState()
+    if mq.TLO.Me.Feigning() or mq.TLO.Me.Ducking() then
+        mq.cmd("/stand")
+    end
+
+    if mq.TLO.Me.Sneaking() then
+        mq.cmd("/doability sneak")
+    end
 end
 
 MeleeState._.meleeActions.checkForCombat = function()
@@ -74,6 +88,12 @@ MeleeState._.meleeActions.attackTarget = function()
         return true
     end
 
+    if IsIncapacitated() then
+        return true
+    end
+
+    FixCombatState()
+
     local range = math.min(14, mq.TLO.Target.MaxRangeTo() - 3)
 
     if not mq.TLO.Stick.Active() and mq.TLO.Target.Distance() < 50 and mq.TLO.Target.LineOfSight() then
@@ -89,7 +109,9 @@ MeleeState._.meleeActions.attackTarget = function()
         for _, meleeFunc in ipairs(MeleeState._.registrations.abilities) do
             ---@type CabbyAction
             meleeFunc = meleeFunc
-            meleeFunc.actionFunction()
+            if meleeFunc.enabled then
+                meleeFunc.actionFunction()
+            end
         end
     end
 
@@ -114,6 +136,8 @@ function MeleeState.Init()
         -- end
         -- Commands.RegisterCommEvent(Command.new(FollowState.eventIds.clickZone, event_ClickZone, clickZoneHelp))
 
+        Reset()
+
         MeleeState._.isInit = true
     end
 end
@@ -126,6 +150,42 @@ end
 ---@param meleeAction CabbyAction
 MeleeState.RegisterAction = function(meleeAction)
     table.insert(MeleeState._.registrations.abilities, meleeAction)
+end
+
+MeleeState.IsFacingTarget = function()
+    if mq.TLO.Target == nil then return false end
+
+    local calc = math.abs(mq.TLO.Target.HeadingTo.DegreesCCW() - mq.TLO.Me.Heading.DegreesCCW())
+    return calc < 50 or calc > 310 -- requires heading difference < 56, so plan for < 50, or > 310 for the wrap-around
+end
+
+---@return boolean isEnabled
+---@diagnostic disable-next-line: duplicate-set-field
+MeleeState.IsEnabled = function()
+    return MeleeStateConfig.IsEnabled()
+end
+
+---@diagnostic disable-next-line: duplicate-set-field
+MeleeState.SetEnabled = function(isEnabled)
+    MeleeStateConfig.SetEnabled(isEnabled)
+end
+
+---@diagnostic disable-next-line: duplicate-set-field
+function MeleeState.BuildMenu()
+    ImGui.Text("Melee State Settings")
+    ImGui.Text("")
+
+    if ImGui.BeginTable("Melee Settings", 1, ImGuiTableFlags.ScrollY) then
+        ImGui.TableNextColumn()
+
+        ---@type boolean
+        local clicked, result
+        result, clicked = ImGui.Checkbox("Enabled", MeleeState.IsEnabled())
+        if clicked then
+            MeleeState.SetEnabled(result)
+        end
+        ImGui.EndTable()
+    end
 end
 
 return MeleeState

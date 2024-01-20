@@ -27,8 +27,11 @@ local function runChecks(self)
     for _, state in ipairs(self._.registeredStates) do
         ---@type State
         state = state
-        if state:Go() then
-            return
+
+        if state:IsEnabled() then
+            if state:Go() then
+                return
+            end
         end
     end
 end
