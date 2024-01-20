@@ -424,16 +424,18 @@ end
 ---@diagnostic disable-next-line: duplicate-set-field
 function FollowState.BuildMenu()
     ImGui.Text("Follow State status")
-    if ImGui.BeginChild("c1", 0, 22, false) then
-    end
-    ImGui.EndChild()
 
+    ImGui.SameLine(math.max(ImGui.GetWindowWidth() - 85, 200))
     ---@type boolean
     local clicked, result
     result, clicked = ImGui.Checkbox("Enabled", FollowState.IsEnabled())
     if clicked then
         FollowState.SetEnabled(result)
     end
+
+    if ImGui.BeginChild("c1", 0, 22, false) then
+    end
+    ImGui.EndChild()
 
     local tableSorting_flags = bit32.bor(ImGuiTableFlags.RowBg, ImGuiTableFlags.BordersOuter, ImGuiTableFlags.BordersInner,
     ImGuiTableFlags.NoHostExtendX)
