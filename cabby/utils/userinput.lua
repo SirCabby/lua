@@ -5,7 +5,7 @@ local UserInput = { author = "judged", key = "UserInput" }
 ---@param inputStr string
 ---@return boolean
 UserInput.IsTrue = function(inputStr)
-    inputStr = inputStr:lower()
+    inputStr = tostring(inputStr):lower()
     return inputStr == "on" or
         inputStr == "true" or
         inputStr == "enable" or
@@ -17,7 +17,7 @@ end
 ---@param inputStr string
 ---@return boolean
 UserInput.IsFalse = function(inputStr)
-    inputStr = inputStr:lower()
+    inputStr = tostring(inputStr):lower()
     return inputStr == "off" or
         inputStr == "false" or
         inputStr == "disable" or
