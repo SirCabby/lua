@@ -134,7 +134,6 @@ Menu.OpenMainMenu = function()
         if open ~= generalConfig.isMenuOpen then
             generalConfig.isMenuOpen = open
             Global.configStore:SaveConfig()
-            print("hi")
         end
         if show then
             local indexBase = 0
