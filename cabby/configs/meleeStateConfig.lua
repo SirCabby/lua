@@ -62,34 +62,6 @@ function MeleeStateConfig.Init()
 
         initAndValidate()
 
-        -- local function CMelee_Help()
-        --     print("(/cmelee <option> <value>) Melee Settings")
-        --     print(" -- enable : " .. tostring(getConfigSection().enabled))
-        -- end
-
-        -- local function Bind_CMelee(...)
-        --     local args = {...} or {}
-        --     if args == nil or #args < 1 or #args > 2 or args[1]:lower() == "help" then
-        --             CMelee_Help()
-        --         return
-        --     end
-
-        --     local arg1 = args[1]:lower()
-        --     local arg2 = ""
-        --     if #args == 2 then
-        --         arg2 = args[2]:lower()
-        --     end
-
-        --     if arg1 == "enabled" then
-        --         if #args == 1 then
-        --             MeleeStateConfig.SetEnabled(not MeleeStateConfig.IsEnabled())
-        --         else
-        --             MeleeStateConfig.SetEnabled(UserInput.IsTrue(arg2))
-        --         end
-        --     end
-        -- end
-        -- Commands.RegisterSlashCommand("cmelee", Bind_CMelee)
-
         MeleeStateConfig._.isInit = true
         Global.tracing.close(ftkey)
     end
