@@ -3,8 +3,11 @@ local mq = require("mq")
 local Debug = require("utils.Debug.Debug")
 local Timer = require("utils.Time.Timer")
 
+local Command = require("cabby.commands.command")
+local Commands = require("cabby.commands.commands")
 local MeleeStateConfig = require("cabby.configs.meleeStateConfig")
 local Menu = require("cabby.menu")
+local StringUtils = require("utils.StringUtils.StringUtils")
 
 local function passive()
     return false
@@ -14,12 +17,13 @@ end
 local MeleeState = {
     key = "MeleeState",
     eventIds = {
+        attack = "attack"
     },
     _ = {
         isInit = false,
         currentAction = passive,
         currentActionTimer = nil,
-        currentTarget = 0,
+        currentTargetID = 0,
         meleeActions = {
             checkForCombat = passive,
             attackTarget = passive
@@ -37,7 +41,7 @@ end
 
 local function Reset()
     MeleeState._.currentAction = MeleeState._.meleeActions.checkForCombat
-    MeleeState._.currentTarget = 0
+    MeleeState._.currentTargetID = 0
     MeleeState._.currentActionTimer = Timer.new(0)
 end
 
@@ -56,16 +60,30 @@ local function FixCombatState()
     end
 end
 
+local function GetSpawnMeleeRange(id)
+    return math.min(14, mq.TLO.Spawn(id).MaxRangeTo() - 3)
+end
+
+---@param range number
+local function StickToCurrentTarget(range)
+    mq.cmd("/stick id " .. tostring(MeleeState._.currentTargetID) .. " loose " .. range)
+end
+
+---@param id number
+local function EngageTargetId(id)
+    mq.cmd("/mqtarget npc id " .. tostring(id))
+    MeleeState._.currentTargetID = id
+    MeleeState._.currentAction = MeleeState._.meleeActions.attackTarget
+    MeleeState._.currentActionTimer = Timer.new(500)
+end
+
 MeleeState._.meleeActions.checkForCombat = function()
     -- Am I under attack?
     if mq.TLO.Me.CombatState() == "COMBAT" then
         for i = 1, 20 do
             local xtarget = mq.TLO.Me.XTarget(i)
             if xtarget.TargetType() == "Auto Hater" and xtarget.ID() > 0 then
-                mq.cmd("/mqtarget npc id " .. tostring(xtarget.ID()))
-                MeleeState._.currentTarget = xtarget.ID()
-                MeleeState._.currentAction = MeleeState._.meleeActions.attackTarget
-                MeleeState._.currentActionTimer = Timer.new(500)
+                EngageTargetId(xtarget.ID())
                 return true
             end
         end
@@ -76,7 +94,7 @@ MeleeState._.currentAction = MeleeState._.meleeActions.checkForCombat
 
 MeleeState._.meleeActions.attackTarget = function()
     -- Not on target? If timed out re-aquire target
-    if mq.TLO.Target.ID() ~= MeleeState._.currentTarget then
+    if mq.TLO.Target.ID() ~= MeleeState._.currentTargetID then
         if MeleeState._.currentActionTimer:timer_expired() then
             Reset()
         end
@@ -94,11 +112,10 @@ MeleeState._.meleeActions.attackTarget = function()
 
     FixCombatState()
 
-    local range = math.min(14, mq.TLO.Target.MaxRangeTo() - 3)
+    local range = GetSpawnMeleeRange(MeleeState._.currentTargetID)
 
     if not mq.TLO.Stick.Active() and mq.TLO.Target.Distance() < 50 and mq.TLO.Target.LineOfSight() then
-        mq.cmd("/stick loose " .. range)
-        return true
+        StickToCurrentTarget(range)
     end
 
     if mq.TLO.Target.Distance() < range then
@@ -123,21 +140,27 @@ function MeleeState.Init()
     if not MeleeState._.isInit then
         Menu.RegisterState(MeleeState)
 
-        -- local function event_ClickZone(_, speaker)
-        --     if Commands.GetCommandOwners(FollowState.eventIds.clickZone):HasPermission(speaker) then
-        --         DebugLog("Clickzone speaker [" .. speaker .. "]")
-        --         FollowState._.currentAction = FollowState._.clickZoneActions.findingSwitch
-        --     else
-        --         DebugLog("Ignoring clickzone speaker [" .. speaker .. "]")
-        --     end
-        -- end
-        -- local function clickZoneHelp()
-        --     print("(clickzone) Tells listener(s) to click to zone")
-        -- end
-        -- Commands.RegisterCommEvent(Command.new(FollowState.eventIds.clickZone, event_ClickZone, clickZoneHelp))
+        local function event_Attack(_, speaker, args)
+            args = StringUtils.Split(StringUtils.TrimFront(args))
+
+            if #args < 1 then return end
+            local targetId = tonumber(args[1])
+            if targetId == nil or mq.TLO.SpawnCount("id " .. args[1] .. " radius 200 los")() < 1 then return end
+
+            if Commands.GetCommandOwners(MeleeState.eventIds.attack):HasPermission(speaker) then
+                DebugLog("MeleeAttack speaker [" .. speaker .. "] targetId: [ " .. targetId .. "]")
+                EngageTargetId(targetId)
+                StickToCurrentTarget(GetSpawnMeleeRange(targetId))
+            else
+                DebugLog("Ignoring MeleeAttack speaker [" .. speaker .. "]")
+            end
+        end
+        local function meleeAttackHelp()
+            print("(attack <id>) Tells listener(s) to attack spawn with <id>")
+        end
+        Commands.RegisterCommEvent(Command.new(MeleeState.eventIds.attack, event_Attack, meleeAttackHelp))
 
         Reset()
-
         MeleeState._.isInit = true
     end
 end
@@ -173,17 +196,20 @@ end
 ---@diagnostic disable-next-line: duplicate-set-field
 function MeleeState.BuildMenu()
     ImGui.Text("Melee State Settings")
+
+    ImGui.SameLine(math.max(ImGui.GetWindowWidth() - 85, 200))
+    ---@type boolean
+    local clicked, result
+    result, clicked = ImGui.Checkbox("Enabled", MeleeState.IsEnabled())
+    if clicked then
+        MeleeState.SetEnabled(result)
+    end
+
     ImGui.Text("")
 
     if ImGui.BeginTable("Melee Settings", 1, ImGuiTableFlags.ScrollY) then
         ImGui.TableNextColumn()
-
-        ---@type boolean
-        local clicked, result
-        result, clicked = ImGui.Checkbox("Enabled", MeleeState.IsEnabled())
-        if clicked then
-            MeleeState.SetEnabled(result)
-        end
+        -- TODO add more stuff here
         ImGui.EndTable()
     end
 end
@@ -199,9 +225,8 @@ return MeleeState
 -- approach target
 -- trigger combat skills
 
--- toggle to disable
 -- running away?
--- group roles for targetting / tanking
+-- group/raid roles for targetting / tanking
 -- use marks for assist instead of MA?
 
 
