@@ -112,7 +112,7 @@ function GeneralConfig.Init()
         end
         local function event_InspectRequest(_, speaker, args)
             if Commands.GetCommandOwners(GeneralConfig.eventIds.inspectRequest):HasPermission(speaker) then
-                local args = StringUtils.Split(StringUtils.TrimFront(args))
+                args = StringUtils.Split(StringUtils.TrimFront(args))
 
                 if #args == 1 and TableUtils.ArrayContains(GeneralConfig.equipmentSlots, args[1]:lower()) then
                     Speak.Respond(_, speaker, args[1]:lower()..": "..mq.TLO.Me.Inventory(args[1]).ItemLink("CLICKABLE")())
