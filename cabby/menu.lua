@@ -2,7 +2,6 @@ local mq = require("mq")
 local ImGui = require "ImGui"
 
 local Commands = require("cabby.commands.commands")
-local MeleeStateConfig = require("cabby.configs.meleeStateConfig")
 local UserInput = require("cabby.utils.userinput")
 
 ---@class Menu
@@ -53,7 +52,6 @@ Menu.Init = function()
             print("  -- Toggle a state: /state <name>")
             print("  -- Set enabled: /state <name> <0 | 1>")
         end
-
         local function Bind_State(...)
             local args = {...} or {}
             if args == nil or #args < 1 or #args > 2 or args[1]:lower() == "help" then
@@ -85,14 +83,60 @@ Menu.Init = function()
         end
         Commands.RegisterSlashCommand("state", Bind_State)
 
+        local function Menu_Help()
+            print("(/cmenu) Toggles the Cabby Menu UI")
+            print("  -- Set On/Off: /cmenu <0 | 1>")
+        end
+        local function Bind_Menu(...)
+            local args = {...} or {}
+            local generalConfig = Global.configStore:GetConfigRoot()["GeneralConfig"]
+
+            if args == nil then
+                generalConfig.isMenuOpen = not generalConfig.isMenuOpen
+                Global.configStore:SaveConfig()
+                return
+            end
+
+            if #args ~= 1 or args[1]:lower() == "help" then
+                Menu_Help()
+                return
+            end
+
+            if UserInput.IsTrue(args[1]) then
+                generalConfig.isMenuOpen = true
+                Global.configStore:SaveConfig()
+                return
+            end
+            if UserInput.IsFalse(args[1]) then
+                generalConfig.isMenuOpen = false
+                Global.configStore:SaveConfig()
+                return
+            end
+
+            Menu_Help()
+        end
+        Commands.RegisterSlashCommand("cmenu", Bind_Menu)
+
         Menu._.isInit = true
     end
 end
 
 Menu.OpenMainMenu = function()
     local selectedIndex = 0
+    local generalConfig = Global.configStore:GetConfigRoot()["GeneralConfig"]
+
     mq.imgui.init("Cabby Menu", function()
-        if ImGui.Begin("Cabby Menu") then
+        if generalConfig.isMenuOpen == nil then generalConfig.isMenuOpen = true end
+
+        if not generalConfig.isMenuOpen then return end
+
+        local open, show = ImGui.Begin("Cabby Menu Window", generalConfig.isMenuOpen)
+        if open ~= generalConfig.isMenuOpen then
+            generalConfig.isMenuOpen = open
+            Global.configStore:SaveConfig()
+            print("hi")
+        end
+        if show then
             local indexBase = 0
             local selectedMenu = NotSelected
             local _, height = ImGui.GetContentRegionAvail()
