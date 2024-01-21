@@ -91,7 +91,7 @@ Menu.Init = function()
             local args = {...} or {}
             local generalConfig = Global.configStore:GetConfigRoot()["GeneralConfig"]
 
-            if args == nil then
+            if #args < 1 then
                 generalConfig.isMenuOpen = not generalConfig.isMenuOpen
                 Global.configStore:SaveConfig()
                 return
