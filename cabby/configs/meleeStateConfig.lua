@@ -95,9 +95,9 @@ end
 
 ---@param distance number
 function MeleeStateConfig.SetEngageDistance(distance)
-    getConfigSection().engage_distance = distance
+    getConfigSection().engage_distance = math.max(math.min(distance, 500), 0)
     MeleeStateConfig._.config:SaveConfig()
-    print("MeleeState engage distance: [" .. tostring(distance) .. "]")
+    -- print("MeleeState engage distance: [" .. tostring(distance) .. "]")
 end
 
 return MeleeStateConfig
