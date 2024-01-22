@@ -8,6 +8,7 @@ local Commands = require("cabby.commands.commands")
 local MeleeStateConfig = require("cabby.configs.meleeStateConfig")
 local Menu = require("cabby.menu")
 local StringUtils = require("utils.StringUtils.StringUtils")
+local TableUtils = require("utils.TableUtils.TableUtils")
 
 local function passive()
     return false
@@ -66,7 +67,9 @@ end
 
 ---@param range number
 local function StickToCurrentTarget(range)
-    mq.cmd("/stick id " .. tostring(MeleeState._.currentTargetID) .. " loose " .. range)
+    if MeleeStateConfig.GetStick() then
+        mq.cmd("/stick id " .. tostring(MeleeState._.currentTargetID) .. " loose " .. range)
+    end
 end
 
 ---@param id number
@@ -114,7 +117,7 @@ MeleeState._.meleeActions.attackTarget = function()
 
     local range = GetSpawnMeleeRange(MeleeState._.currentTargetID)
 
-    if not mq.TLO.Stick.Active() and mq.TLO.Target.Distance() < 50 and mq.TLO.Target.LineOfSight() then
+    if MeleeStateConfig.GetStick() and not mq.TLO.Stick.Active() and mq.TLO.Target.Distance() < MeleeStateConfig.GetEngageDistance() and mq.TLO.Target.LineOfSight() then
         StickToCurrentTarget(range)
     end
 
@@ -145,7 +148,7 @@ function MeleeState.Init()
 
             if #args < 1 then return end
             local targetId = tonumber(args[1])
-            if targetId == nil or mq.TLO.SpawnCount("id " .. args[1] .. " radius 200 los")() < 1 then return end
+            if targetId == nil or mq.TLO.SpawnCount("id " .. args[1] .. " radius 400 los")() < 1 then return end
 
             if Commands.GetCommandOwners(MeleeState.eventIds.attack):HasPermission(speaker) then
                 DebugLog("MeleeAttack speaker [" .. speaker .. "] targetId: [ " .. targetId .. "]")
@@ -195,7 +198,7 @@ end
 
 ---@diagnostic disable-next-line: duplicate-set-field
 function MeleeState.BuildMenu()
-    ImGui.Text("Melee State Settings")
+    ImGui.Text("Melee State Status")
 
     ImGui.SameLine(math.max(ImGui.GetWindowWidth() - 85, 200))
     ---@type boolean
@@ -205,11 +208,35 @@ function MeleeState.BuildMenu()
         MeleeState.SetEnabled(result)
     end
 
-    ImGui.Text("")
+    local tableSorting_flags = bit32.bor(ImGuiTableFlags.RowBg, ImGuiTableFlags.BordersOuter, ImGuiTableFlags.BordersInner, ImGuiTableFlags.NoHostExtendX)
+    if ImGui.BeginTable("t1", 2, tableSorting_flags) then
+        ImGui.TableSetupColumn("col1", ImGuiTableColumnFlags.WidthFixed, 140)
+        ImGui.TableSetupColumn("col2", ImGuiTableColumnFlags.WidthFixed, 300)
 
-    if ImGui.BeginTable("Melee Settings", 1, ImGuiTableFlags.ScrollY) then
+        ImGui.TableNextRow()
         ImGui.TableNextColumn()
-        -- TODO add more stuff here
+        ImGui.Text("Current Action")
+
+        ImGui.TableNextColumn()
+        local currentTask = "Standby"
+        local attacking = false
+        if MeleeState._.currentAction == MeleeState._.meleeActions.attackTarget then
+            currentTask = "Attacking: " .. tostring(MeleeState._.currentTargetID)
+            attacking = true
+        end
+        ImGui.Text(currentTask)
+
+        ImGui.TableNextRow()
+        ImGui.TableNextColumn()
+        ImGui.Text("Attack Target")
+
+        ImGui.TableNextColumn()
+        local targetName = "<NONE>"
+        if attacking then
+            targetName = mq.TLO.Spawn(MeleeState._.currentTargetID).Name()
+        end
+        ImGui.Text(targetName)
+
         ImGui.EndTable()
     end
 end
