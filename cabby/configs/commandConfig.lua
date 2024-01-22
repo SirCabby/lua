@@ -1134,7 +1134,7 @@ local function buildSpeakChannelTab()
         end
         ImGui.EndChild()
 
-        local tableSorting_flags = bit32.bor(ImGuiTableFlags.BordersInnerV, ImGuiTableFlags.SizingFixedFit)
+        local tableSorting_flags = bit32.bor(ImGuiTableFlags.BordersInnerV, ImGuiTableFlags.SizingFixedFit, ImGuiTableFlags.ScrollX)
         if ImGui.BeginTable("speak table", 2, tableSorting_flags) then
             ImGui.TableSetupColumn("", ImGuiTableColumnFlags.WidthFixed)
             ImGui.TableSetupColumn("", ImGuiTableColumnFlags.WidthFixed)
