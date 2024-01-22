@@ -43,6 +43,7 @@ local function Reset()
     MeleeState._.currentAction = MeleeState._.meleeActions.checkForCombat
     MeleeState._.currentTargetID = 0
     MeleeState._.currentActionTimer = Timer.new(0)
+    mq.cmd("/stick off")
 end
 
 ---@return boolean isIncapacitated
@@ -283,10 +284,20 @@ function MeleeState.BuildMenu()
         attackLabel = mq.TLO.Target()
     end
     ImGui.SameLine()
-
     local width = ImGui.GetContentRegionAvail()
     ImGui.PushItemWidth(width)
     ImGui.LabelText("", attackLabel)
+
+    if MeleeState._.currentAction ~= MeleeState._.meleeActions.attackTarget then
+        ImGui.BeginDisabled(true)
+        disabled = true
+    end
+    if ImGui.Button("Back Off", 70, 23) then
+        Reset()
+    end
+    if disabled then
+        ImGui.EndDisabled()
+    end
 end
 
 return MeleeState
