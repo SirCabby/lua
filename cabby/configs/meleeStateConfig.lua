@@ -33,13 +33,8 @@ local function initAndValidate()
         taint = true
     end
 
-    if configRoot.stick_distance == nil then
-        configRoot.stick_distance = 12
-        taint = true
-    end
-
-    if configRoot.engage_range == nil then
-        configRoot.engage_range = 50
+    if configRoot.engage_distance == nil then
+        configRoot.engage_distance = 50
         taint = true
     end
 
@@ -74,10 +69,35 @@ function MeleeStateConfig.IsEnabled()
     return getConfigSection().enabled
 end
 
-function MeleeStateConfig.SetEnabled(isEnabled)
-    getConfigSection().enabled = isEnabled
+---@param enable boolean
+function MeleeStateConfig.SetEnabled(enable)
+    getConfigSection().enabled = enable == true
     MeleeStateConfig._.config:SaveConfig()
-    print("MeleeState is Enabled: [" .. tostring(isEnabled) .. "]")
+    print("MeleeState is Enabled: [" .. tostring(enable) .. "]")
+end
+
+---@return boolean enable
+function MeleeStateConfig.GetStick()
+    return getConfigSection().stick
+end
+
+---@param enable boolean
+function MeleeStateConfig.SetStick(enable)
+    getConfigSection().stick = enable == true
+    MeleeStateConfig._.config:SaveConfig()
+    print("MeleeState stick: [" .. tostring(enable) .. "]")
+end
+
+---@return number engageDistance
+function MeleeStateConfig.GetEngageDistance()
+    return getConfigSection().engage_distance
+end
+
+---@param distance number
+function MeleeStateConfig.SetEngageDistance(distance)
+    getConfigSection().engage_distance = distance
+    MeleeStateConfig._.config:SaveConfig()
+    print("MeleeState engage distance: [" .. tostring(distance) .. "]")
 end
 
 return MeleeStateConfig
