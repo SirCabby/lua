@@ -8,7 +8,6 @@ local Commands = require("cabby.commands.commands")
 local MeleeStateConfig = require("cabby.configs.meleeStateConfig")
 local Menu = require("cabby.menu")
 local StringUtils = require("utils.StringUtils.StringUtils")
-local TableUtils = require("utils.TableUtils.TableUtils")
 
 local function passive()
     return false
@@ -240,6 +239,54 @@ function MeleeState.BuildMenu()
 
         ImGui.EndTable()
     end
+
+    ---@type boolean
+    local clicked, result
+    result, clicked = ImGui.Checkbox("Stick", MeleeStateConfig:GetStick())
+    if clicked then
+        MeleeStateConfig.SetStick(result)
+    end
+
+    ImGui.PushItemWidth(40)
+    ---@type integer
+    local result
+    ---@type boolean
+    local selected
+    result, selected = ImGui.DragInt("Engage Distance", MeleeStateConfig:GetEngageDistance(), 1, 0, 500)
+    if selected then
+        MeleeStateConfig.SetEngageDistance(result)
+    end
+
+    ImGui.SameLine()
+    if ImGui.Button("Reset Default", 100, 23) then
+        MeleeStateConfig.SetEngageDistance(50)
+    end
+
+    local disabled = false
+    if mq.TLO.Target() == nil then
+        ImGui.BeginDisabled(true)
+        disabled = true
+    end
+    if ImGui.Button("Attack", 60, 23) then
+        local targetId = mq.TLO.Target.ID()
+        EngageTargetId(targetId)
+        StickToCurrentTarget(GetSpawnMeleeRange(targetId))
+    end
+    if disabled then
+        ImGui.EndDisabled()
+    end
+
+    local attackLabel = "<No Target>"
+    if mq.TLO.Target() ~= nil then
+        ---@type string
+---@diagnostic disable-next-line: assign-type-mismatch
+        attackLabel = mq.TLO.Target()
+    end
+    ImGui.SameLine()
+
+    local width = ImGui.GetContentRegionAvail()
+    ImGui.PushItemWidth(width)
+    ImGui.LabelText("", attackLabel)
 end
 
 return MeleeState
