@@ -210,8 +210,9 @@ function MeleeState.BuildMenu()
 
     local tableSorting_flags = bit32.bor(ImGuiTableFlags.RowBg, ImGuiTableFlags.BordersOuter, ImGuiTableFlags.BordersInner, ImGuiTableFlags.NoHostExtendX)
     if ImGui.BeginTable("t1", 2, tableSorting_flags) then
+        local width = ImGui.GetContentRegionAvail()
         ImGui.TableSetupColumn("col1", ImGuiTableColumnFlags.WidthFixed, 140)
-        ImGui.TableSetupColumn("col2", ImGuiTableColumnFlags.WidthFixed, 300)
+        ImGui.TableSetupColumn("col2", ImGuiTableColumnFlags.WidthFixed, width - 160)
 
         ImGui.TableNextRow()
         ImGui.TableNextColumn()
