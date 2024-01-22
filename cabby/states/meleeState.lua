@@ -2,12 +2,13 @@ local mq = require("mq")
 
 local Debug = require("utils.Debug.Debug")
 local Timer = require("utils.Time.Timer")
+local StringUtils = require("utils.StringUtils.StringUtils")
 
 local Command = require("cabby.commands.command")
 local Commands = require("cabby.commands.commands")
 local MeleeStateConfig = require("cabby.configs.meleeStateConfig")
 local Menu = require("cabby.menu")
-local StringUtils = require("utils.StringUtils.StringUtils")
+local UserInput = require("cabby.utils.userinput")
 
 local function passive()
     return false
@@ -147,6 +148,12 @@ function MeleeState.Init()
             args = StringUtils.Split(StringUtils.TrimFront(args))
 
             if #args < 1 then return end
+
+            if UserInput.IsFalse(args[1]:lower()) then
+                Reset()
+                return
+            end
+
             local targetId = tonumber(args[1])
             if targetId == nil or mq.TLO.SpawnCount("id " .. args[1] .. " radius 400 los")() < 1 then return end
 
@@ -160,6 +167,7 @@ function MeleeState.Init()
         end
         local function meleeAttackHelp()
             print("(attack <id>) Tells listener(s) to attack spawn with <id>")
+            print("(attack off) Tells listener(s) to call off attacks")
         end
         Commands.RegisterCommEvent(Command.new(MeleeState.eventIds.attack, event_Attack, meleeAttackHelp))
 
