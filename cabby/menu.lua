@@ -130,7 +130,7 @@ Menu.OpenMainMenu = function()
 
         if not generalConfig.isMenuOpen then return end
 
-        local open, show = ImGui.Begin("Cabby Menu Window", generalConfig.isMenuOpen)
+        local open, show = ImGui.Begin("Cabby Menu", generalConfig.isMenuOpen)
         if open ~= generalConfig.isMenuOpen then
             generalConfig.isMenuOpen = open
             Global.configStore:SaveConfig()
