@@ -437,8 +437,7 @@ function FollowState.BuildMenu()
     end
     ImGui.EndChild()
 
-    local tableSorting_flags = bit32.bor(ImGuiTableFlags.RowBg, ImGuiTableFlags.BordersOuter, ImGuiTableFlags.BordersInner,
-    ImGuiTableFlags.NoHostExtendX)
+    local tableSorting_flags = bit32.bor(ImGuiTableFlags.RowBg, ImGuiTableFlags.BordersOuter, ImGuiTableFlags.BordersInner, ImGuiTableFlags.NoHostExtendX)
 
     if ImGui.BeginTable("t1", 2, tableSorting_flags) then
         ImGui.TableSetupColumn("col1", ImGuiTableColumnFlags.WidthFixed, 140)
