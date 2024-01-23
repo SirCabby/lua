@@ -33,6 +33,11 @@ local function initAndValidate()
         taint = true
     end
 
+    if configRoot.auto_engage == nil then
+        configRoot.auto_engage = true
+        taint = true
+    end
+
     if configRoot.engage_distance == nil then
         configRoot.engage_distance = 50
         taint = true
@@ -76,6 +81,18 @@ function MeleeStateConfig.SetEnabled(enable)
     print("MeleeState is Enabled: [" .. tostring(enable) .. "]")
 end
 
+---@return boolean isEnabled
+function MeleeStateConfig.GetAutoEngage()
+    return getConfigSection().auto_engage
+end
+
+---@param enable boolean
+function MeleeStateConfig.SetAutoEngage(enable)
+    getConfigSection().auto_engage = enable == true
+    MeleeStateConfig._.config:SaveConfig()
+    print("MeleeState Auto-Engage is Enabled: [" .. tostring(enable) .. "]")
+end
+
 ---@return boolean enable
 function MeleeStateConfig.GetStick()
     return getConfigSection().stick
@@ -97,7 +114,6 @@ end
 function MeleeStateConfig.SetEngageDistance(distance)
     getConfigSection().engage_distance = math.max(math.min(distance, 500), 0)
     MeleeStateConfig._.config:SaveConfig()
-    -- print("MeleeState engage distance: [" .. tostring(distance) .. "]")
 end
 
 return MeleeStateConfig

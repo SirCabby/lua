@@ -83,7 +83,7 @@ end
 
 MeleeState._.meleeActions.checkForCombat = function()
     -- Am I under attack?
-    if mq.TLO.Me.CombatState() == "COMBAT" then
+    if MeleeStateConfig:GetAutoEngage() and mq.TLO.Me.CombatState() == "COMBAT" then
         for i = 1, 20 do
             local xtarget = mq.TLO.Me.XTarget(i)
             if xtarget.TargetType() == "Auto Hater" and xtarget.ID() > 0 then
@@ -253,6 +253,14 @@ function MeleeState.BuildMenu()
     result, clicked = ImGui.Checkbox("Stick", MeleeStateConfig:GetStick())
     if clicked then
         MeleeStateConfig.SetStick(result)
+    end
+
+    ImGui.SameLine()
+    ---@type boolean
+    local clicked, result
+    result, clicked = ImGui.Checkbox("Auto-Engage", MeleeStateConfig:GetAutoEngage())
+    if clicked then
+        MeleeStateConfig.SetAutoEngage(result)
     end
 
     ImGui.PushItemWidth(40)
