@@ -888,7 +888,8 @@ local function buildCommandEventEditor(commandOrEvent, overrideHelpText, allComm
 
     -- Build subtype list
     local subTypeCount = 0
-    ImGui.BeginChild("listItems", 200, 210, true)
+    local childFlags = bit32.bor(ImGuiChildFlags.Border)
+    ImGui.BeginChild("listItems", 200, 210, childFlags)
         if selectedConfig.value[subType] ~= nil then
             local subTypeList = selectedConfig.value[subType]
             if allSubtypeList == nil then
@@ -1083,7 +1084,8 @@ local function buildCommandEventEditor(commandOrEvent, overrideHelpText, allComm
     ImGui.Text("Overridden " .. commandOrEvent .. "s")
     ImGui.SameLine()
     Menu.HelpMarker(overrideHelpText)
-    ImGui.BeginChild("overrideCommands" .. overrideHelpText, 200, 210, true)
+    local childFlags = bit32.bor(ImGuiChildFlags.Border)
+    ImGui.BeginChild("overrideCommands" .. overrideHelpText, 200, 210, childFlags)
         for thisCommand, overrides in pairs(CommandConfig._.configData[commandOrEventOverrideType]) do
             if overrides[subType] ~= nil then
                 if ImGui.Selectable(thisCommand, false) then
@@ -1101,7 +1103,7 @@ end
 local function buildActiveChannelTab()
     if ImGui.BeginTabItem("Active Channels") then
         ImGui.Text("Active Channels are where this character will listen for commands from other characters.")
-        if ImGui.BeginChild("ac sizer", 0, 22, false) then
+        if ImGui.BeginChild("ac sizer", 0, 22) then
         end
         ImGui.EndChild()
 
@@ -1130,11 +1132,11 @@ end
 local function buildSpeakChannelTab()
     if ImGui.BeginTabItem("Speak Channels") then
         ImGui.Text("Speak Channels are where this character will broadcast information from commands or events.")
-        if ImGui.BeginChild("speak sizer", 665, 22, false) then
+        if ImGui.BeginChild("speak sizer", 665, 22) then
         end
         ImGui.EndChild()
 
-        local tableSorting_flags = bit32.bor(ImGuiTableFlags.BordersInnerV, ImGuiTableFlags.SizingFixedFit, ImGuiTableFlags.ScrollX)
+        local tableSorting_flags = bit32.bor(ImGuiTableFlags.BordersInnerV)
         if ImGui.BeginTable("speak table", 2, tableSorting_flags) then
             ImGui.TableSetupColumn("", ImGuiTableColumnFlags.WidthFixed)
             ImGui.TableSetupColumn("", ImGuiTableColumnFlags.WidthFixed)
@@ -1186,7 +1188,7 @@ end
 local function buildOwnerChannelTab()
     if ImGui.BeginTabItem("Owners") then
         ImGui.Text("Owners are who have rights to give this character commands or invoke certain events.")
-        if ImGui.BeginChild("owner sizer", 665, 22, false) then
+        if ImGui.BeginChild("owner sizer", 665, 22) then
         end
         ImGui.EndChild()
 

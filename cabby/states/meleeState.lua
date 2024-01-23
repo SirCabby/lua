@@ -208,7 +208,7 @@ end
 function MeleeState.BuildMenu()
     ImGui.Text("Melee State Status")
 
-    ImGui.SameLine(math.max(ImGui.GetWindowWidth() - 85, 200))
+    ImGui.SameLine(math.max(ImGui.GetContentRegionAvail() - 68, 200))
     ---@type boolean
     local clicked, result
     result, clicked = ImGui.Checkbox("Enabled", MeleeState.IsEnabled())
@@ -216,11 +216,10 @@ function MeleeState.BuildMenu()
         MeleeState.SetEnabled(result)
     end
 
-    local tableSorting_flags = bit32.bor(ImGuiTableFlags.RowBg, ImGuiTableFlags.BordersOuter, ImGuiTableFlags.BordersInner, ImGuiTableFlags.NoHostExtendX)
+    local tableSorting_flags = bit32.bor(ImGuiTableFlags.RowBg, ImGuiTableFlags.BordersOuter, ImGuiTableFlags.BordersInner)
     if ImGui.BeginTable("t1", 2, tableSorting_flags) then
-        local width = ImGui.GetContentRegionAvail()
         ImGui.TableSetupColumn("col1", ImGuiTableColumnFlags.WidthFixed, 140)
-        ImGui.TableSetupColumn("col2", ImGuiTableColumnFlags.WidthFixed, width - 160)
+        ImGui.TableSetupColumn("col2", ImGuiTableColumnFlags.WidthFixed, 800)
 
         ImGui.TableNextRow()
         ImGui.TableNextColumn()

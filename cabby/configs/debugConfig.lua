@@ -112,20 +112,15 @@ function DebugConfig.BuildMenu()
     ImGui.Text("Toggle debug logging for the following areas")
     ImGui.Text("")
 
-    local tableSorting_flags = bit32.bor(ImGuiTableFlags.BordersInnerV, ImGuiTableFlags.SizingFixedFit, ImGuiTableFlags.ScrollX)
-    if ImGui.BeginTable("checkbox list", 1, tableSorting_flags) then
-        ImGui.TableNextColumn()
-        local sortedKeys = TableUtils.GetKeys(Debug._.toggles)
-        table.sort(sortedKeys)
-        for _, key in ipairs(sortedKeys) do
-            ---@type boolean
-            local clicked
-            Debug._.toggles[key], clicked = ImGui.Checkbox(key, Debug._.toggles[key])
-            if clicked then
-                DebugConfig._.config:SaveConfig()
-            end
+    local sortedKeys = TableUtils.GetKeys(Debug._.toggles)
+    table.sort(sortedKeys)
+    for _, key in ipairs(sortedKeys) do
+        ---@type boolean
+        local clicked
+        Debug._.toggles[key], clicked = ImGui.Checkbox(key, Debug._.toggles[key])
+        if clicked then
+            DebugConfig._.config:SaveConfig()
         end
-        ImGui.EndTable()
     end
 end
 

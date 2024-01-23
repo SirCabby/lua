@@ -139,7 +139,8 @@ Menu.OpenMainMenu = function()
             local indexBase = 0
             local selectedMenu = NotSelected
             local _, height = ImGui.GetContentRegionAvail()
-            if ImGui.BeginChild("listItems", 170, height-2, true) then
+            local childWindowFlags = bit32.bor(ImGuiChildFlags.Border)
+            if ImGui.BeginChild("listItems", 170, height-2, childWindowFlags) then
                 if ImGui.TreeNode("Configs") then
                     for i, config in ipairs(Menu._.registrations.configs) do
                         ---@type CabbyConfig
@@ -187,8 +188,10 @@ Menu.OpenMainMenu = function()
 
             -- Right Pane Selected Child Menu
             local width, height = ImGui.GetContentRegionAvail()
+            local childFlags = bit32.bor(ImGuiChildFlags.Border, ImGuiChildFlags.AutoResizeX)
+            local windowFlags = bit32.bor(ImGuiWindowFlags.HorizontalScrollbar)
             ImGui.SameLine()
-            if ImGui.BeginChild("displayPane", width - 178, height, true, ImGuiWindowFlags.HorizontalScrollbar) then
+            if ImGui.BeginChild("displayPane", width - 178, height, childFlags, windowFlags) then
                 selectedMenu()
             end
             ImGui.EndChild()

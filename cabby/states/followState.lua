@@ -425,7 +425,7 @@ end
 function FollowState.BuildMenu()
     ImGui.Text("Follow State Status")
 
-    ImGui.SameLine(math.max(ImGui.GetWindowWidth() - 85, 200))
+    ImGui.SameLine(math.max(ImGui.GetContentRegionAvail() - 68, 200))
     ---@type boolean
     local clicked, result
     result, clicked = ImGui.Checkbox("Enabled", FollowState.IsEnabled())
