@@ -146,7 +146,7 @@ Menu.OpenMainMenu = function()
                         ---@type CabbyConfig
                         config = config
                         local isSelected = selectedIndex == i + indexBase
-                        if ImGui.Selectable(config.key, isSelected) then
+                        if ImGui.Selectable(config.key:sub(1, -7), isSelected) then
                             selectedIndex = i + indexBase
                             if config.BuildMenu == nil then
                                 selectedMenu = PageDne
@@ -168,7 +168,7 @@ Menu.OpenMainMenu = function()
                         ---@type State
                         state = state
                         local isSelected = selectedIndex == i + indexBase
-                        if ImGui.Selectable(state.key, isSelected) then
+                        if ImGui.Selectable(state.key:sub(1, -6), isSelected) then
                             selectedIndex = i + indexBase
                             if state.BuildMenu == nil then
                                 selectedMenu = PageDne
