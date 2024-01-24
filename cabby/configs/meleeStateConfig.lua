@@ -1,11 +1,24 @@
 local Debug = require("utils.Debug.Debug")
+local TableUtils = require("utils.TableUtils.TableUtils")
 
 ---@class CabbyConfig
 local MeleeStateConfig = {
     key = "MeleeState",
     _ = {
         isInit = false,
-        config = {}
+        config = {},
+        primaryCombatAbilities = {
+            bash = "bash",
+            flyingkick = "flyingkick",
+            roundkick = "roundkick",
+            kick = "kick",
+            none = "",
+        },
+        secondaryCombatAbilities = {
+            disarm = "disarm",
+            taunt = "taunt",
+            none = "",
+        }
     }
 }
 
@@ -40,6 +53,11 @@ local function initAndValidate()
 
     if configRoot.engage_distance == nil then
         configRoot.engage_distance = 50
+        taint = true
+    end
+
+    if configRoot.primary_combat_ability == nil then
+        configRoot.primary_combat_ability = MeleeStateConfig._.primaryCombatAbilities.none
         taint = true
     end
 
@@ -114,6 +132,25 @@ end
 function MeleeStateConfig.SetEngageDistance(distance)
     getConfigSection().engage_distance = math.max(math.min(distance, 500), 0)
     MeleeStateConfig._.config:SaveConfig()
+end
+
+---@return string primary_combat_ability
+function MeleeStateConfig.GetPrimaryCombatAbility()
+    local currentAbility = getConfigSection().primary_combat_ability
+    if not TableUtils.ArrayContains(TableUtils.GetValues(MeleeStateConfig._.primaryCombatAbilities), currentAbility) then
+        currentAbility = MeleeStateConfig._.primaryCombatAbilities.none
+        getConfigSection().primary_combat_ability = currentAbility
+        MeleeStateConfig._.config:SaveConfig()
+    end
+    return currentAbility
+end
+
+---@param primary_combat_ability string
+function MeleeStateConfig.SetPrimaryCombatAbility(primary_combat_ability)
+    if TableUtils.ArrayContains(TableUtils.GetValues(MeleeStateConfig._.primaryCombatAbilities), primary_combat_ability) then
+        getConfigSection().primary_combat_ability = primary_combat_ability
+        MeleeStateConfig._.config:SaveConfig()
+    end
 end
 
 return MeleeStateConfig

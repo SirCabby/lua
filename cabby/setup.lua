@@ -3,6 +3,7 @@ local mq = require("mq")
 local Config = require("utils.Config.Config")
 local Debug = require("utils.Debug.Debug")
 
+local Character = require("cabby.character")
 local CommandConfig = require("cabby.configs.commandConfig")
 local DebugConfig = require("cabby.configs.debugConfig")
 local GeneralConfig = require("cabby.configs.generalConfig")
@@ -134,6 +135,8 @@ end
 ---@param stateMachine StateMachine
 function Setup:Init(configFilePath, stateMachine)
     DebugLog("Starting Cabby Setup...")
+
+    Character.Refresh()
 
     ConfigSetup(configFilePath)
     ClassSetup(stateMachine)

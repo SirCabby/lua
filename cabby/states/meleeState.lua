@@ -4,6 +4,7 @@ local Debug = require("utils.Debug.Debug")
 local Timer = require("utils.Time.Timer")
 local StringUtils = require("utils.StringUtils.StringUtils")
 
+local Character = require("cabby.character")
 local Command = require("cabby.commands.command")
 local Commands = require("cabby.commands.commands")
 local MeleeStateConfig = require("cabby.configs.meleeStateConfig")
@@ -31,6 +32,10 @@ local MeleeState = {
         },
         registrations = {
             abilities = {}
+        },
+        primaryAbilityChoices = {},
+        menu = {
+            selectedPrimaryAbility = 1
         }
     }
 }
@@ -81,6 +86,28 @@ local function EngageTargetId(id)
     MeleeState._.currentActionTimer = Timer.new(500)
 end
 
+local function DoPrimaryCombatAction()
+    local primaryAction = MeleeStateConfig.GetPrimaryCombatAbility()
+    if primaryAction == MeleeStateConfig._.primaryCombatAbilities.none then return end
+
+    if mq.TLO.Me.AbilityReady(primaryAction) and MeleeState.IsTargetInCombatAbilityRange() and MeleeState.IsFacingTarget() then
+        mq.cmd("/doability " .. primaryAction)
+    end
+end
+
+local function BuildPrimaryAbilityArray()
+    MeleeState._.primaryAbilityChoices = {}
+    for _, value in pairs(MeleeStateConfig._.primaryCombatAbilities) do
+        if Character.HasAbility(value) then
+            MeleeState._.primaryAbilityChoices[#MeleeState._.primaryAbilityChoices+1] = value
+
+            if MeleeStateConfig.GetPrimaryCombatAbility() == value then
+                MeleeState._.menu.selectedPrimaryAbility = #MeleeState._.primaryAbilityChoices
+            end
+        end
+    end
+end
+
 MeleeState._.meleeActions.checkForCombat = function()
     -- Am I under attack?
     if MeleeStateConfig:GetAutoEngage() and mq.TLO.Me.CombatState() == "COMBAT" then
@@ -127,6 +154,8 @@ MeleeState._.meleeActions.attackTarget = function()
             mq.cmd("/attack on")
         end
 
+        DoPrimaryCombatAction()
+
         for _, meleeFunc in ipairs(MeleeState._.registrations.abilities) do
             ---@type CabbyAction
             meleeFunc = meleeFunc
@@ -142,6 +171,9 @@ end
 ---@diagnostic disable-next-line: duplicate-set-field
 function MeleeState.Init()
     if not MeleeState._.isInit then
+        -- Build Menu Lists
+        BuildPrimaryAbilityArray()
+
         Menu.RegisterState(MeleeState)
 
         local function event_Attack(_, speaker, args)
@@ -191,6 +223,10 @@ MeleeState.IsFacingTarget = function()
 
     local calc = math.abs(mq.TLO.Target.HeadingTo.DegreesCCW() - mq.TLO.Me.Heading.DegreesCCW())
     return calc < 50 or calc > 310 -- requires heading difference < 56, so plan for < 50, or > 310 for the wrap-around
+end
+
+MeleeState.IsTargetInCombatAbilityRange = function()
+    return mq.TLO.Target.Distance() < 14
 end
 
 ---@return boolean isEnabled
@@ -272,6 +308,7 @@ function MeleeState.BuildMenu()
     if selected then
         MeleeStateConfig.SetEngageDistance(result)
     end
+    ImGui.PopItemWidth()
 
     ImGui.SameLine()
     if ImGui.Button("Reset Default", 100, 23) then
@@ -302,6 +339,7 @@ function MeleeState.BuildMenu()
     local width = ImGui.GetContentRegionAvail()
     ImGui.PushItemWidth(width)
     ImGui.LabelText("", attackLabel)
+    ImGui.PopItemWidth()
 
     if MeleeState._.currentAction ~= MeleeState._.meleeActions.attackTarget then
         ImGui.BeginDisabled(true)
@@ -313,6 +351,18 @@ function MeleeState.BuildMenu()
     if disabled then
         ImGui.EndDisabled()
     end
+
+    ImGui.PushItemWidth(100)
+    if ImGui.BeginCombo("Primary Combat Skill##foo1", MeleeStateConfig.GetPrimaryCombatAbility()) then
+        for index, value in ipairs(MeleeState._.primaryAbilityChoices) do
+            if ImGui.Selectable(value, MeleeState._.menu.selectedPrimaryAbility == index) then
+                MeleeState._.menu.selectedPrimaryAbility = index
+                MeleeStateConfig.SetPrimaryCombatAbility(value)
+            end
+        end
+        ImGui.EndCombo()
+    end
+    ImGui.PopItemWidth()
 end
 
 return MeleeState

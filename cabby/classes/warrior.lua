@@ -6,23 +6,7 @@ local MeleeState = require("cabby.states.meleeState")
 ---@type Class
 local Warrior = {}
 
----@param abilityName string
-local function GetCombatAbilityFunction(abilityName)
-    return function()
-        if mq.TLO.Me.AbilityReady(abilityName) then
-            mq.cmd("/doability " .. abilityName)
-        end
-    end
-end
-
 local function RegisterCombatAbilities()
-    MeleeState.RegisterAction(CabbyAction.new("Kick", true, function()
-        if mq.TLO.Me.AbilityReady("kick") and mq.TLO.Target.Distance() < 14 and MeleeState.IsFacingTarget() then
-            mq.cmd("/doability kick")
-        end
-    end,
-    "Kick"))
-
     MeleeState.RegisterAction(CabbyAction.new("Taunt", true, function()
         if mq.TLO.Me.AbilityReady("Taunt") and mq.TLO.Target.Distance() < 14 and MeleeState.IsFacingTarget() then
             mq.cmd("/doability Taunt")
@@ -38,7 +22,7 @@ local function RegisterCombatAbilities()
     "Disarm"))
 
     -- skill range
-    -- skip while stun / mez / etc...w
+    -- skip while stun / mez / etc...
 end
 
 ---@param stateMachine StateMachine
