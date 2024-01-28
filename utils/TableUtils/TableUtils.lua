@@ -23,7 +23,7 @@ function TableUtils.IsArray(tbl)
     return true
 end
 
----@param array table
+---@param array array
 ---@param obj any
 ---@return boolean
 function TableUtils.ArrayContains(array, obj)
@@ -171,9 +171,9 @@ function TableUtils.DeepClone(tbl)
     return result
 end
 
----@param minuend table The array to subtract from
----@param subtrahend table The subtracted array
----@return table difference Difference from the subtraction
+---@param minuend array The array to subtract from
+---@param subtrahend array The subtracted array
+---@return array difference Difference from the subtraction
 function TableUtils.ArraySubtract(minuend, subtrahend)
     local result = {}
     local matches = {}
@@ -190,6 +190,14 @@ function TableUtils.ArraySubtract(minuend, subtrahend)
     end
 
     return result
+end
+
+---@param arrayToAppendTo array
+---@param valuesToAppend array
+function TableUtils.ArrayAppend(arrayToAppendTo, valuesToAppend)
+    for _, value in ipairs(valuesToAppend) do
+        arrayToAppendTo[#arrayToAppendTo+1] = value
+    end
 end
 
 return TableUtils
