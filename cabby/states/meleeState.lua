@@ -285,85 +285,114 @@ function MeleeState.BuildMenu()
         ImGui.EndTable()
     end
 
-    ---@type boolean
-    local clicked, result
-    result, clicked = ImGui.Checkbox("Stick", MeleeStateConfig:GetStick())
-    if clicked then
-        MeleeStateConfig.SetStick(result)
-    end
+    ImGui.PushStyleVar(ImGuiStyleVar.CellPadding, ImVec2(7.0, 7.0))
+    local table2_flags = bit32.bor(ImGuiTableFlags.RowBg)
+    if ImGui.BeginTable("t2", 1, table2_flags) then
+        ImGui.TableNextRow()
+        ImGui.TableNextColumn()
 
-    ImGui.SameLine()
-    ---@type boolean
-    local clicked, result
-    result, clicked = ImGui.Checkbox("Auto-Engage", MeleeStateConfig:GetAutoEngage())
-    if clicked then
-        MeleeStateConfig.SetAutoEngage(result)
-    end
+        ImGui.Dummy(0, 0)
+        ImGui.SameLine()
 
-    ImGui.PushItemWidth(40)
-    ---@type integer
-    local result
-    ---@type boolean
-    local selected
-    result, selected = ImGui.DragInt("Engage Distance", MeleeStateConfig:GetEngageDistance(), 1, 0, 500)
-    if selected then
-        MeleeStateConfig.SetEngageDistance(result)
-    end
-    ImGui.PopItemWidth()
-
-    ImGui.SameLine()
-    if ImGui.Button("Reset Default", 100, 23) then
-        MeleeStateConfig.SetEngageDistance(50)
-    end
-
-    local disabled = false
-    if mq.TLO.Target() == nil then
-        ImGui.BeginDisabled(true)
-        disabled = true
-    end
-    if ImGui.Button("Attack", 60, 23) then
-        local targetId = mq.TLO.Target.ID()
-        EngageTargetId(targetId)
-        StickToCurrentTarget(GetSpawnMeleeRange(targetId))
-    end
-    if disabled then
-        ImGui.EndDisabled()
-    end
-
-    local attackLabel = "<No Target>"
-    if mq.TLO.Target() ~= nil then
-        ---@type string
----@diagnostic disable-next-line: assign-type-mismatch
-        attackLabel = mq.TLO.Target()
-    end
-    ImGui.SameLine()
-    local width = ImGui.GetContentRegionAvail()
-    ImGui.PushItemWidth(width)
-    ImGui.LabelText("", attackLabel)
-    ImGui.PopItemWidth()
-
-    if MeleeState._.currentAction ~= MeleeState._.meleeActions.attackTarget then
-        ImGui.BeginDisabled(true)
-        disabled = true
-    end
-    if ImGui.Button("Back Off", 70, 23) then
-        Reset()
-    end
-    if disabled then
-        ImGui.EndDisabled()
-    end
-
-    ImGui.PushItemWidth(100)
-    if ImGui.BeginCombo("Primary Combat Skill##foo1", MeleeStateConfig.GetPrimaryCombatAbility()) then
-        for index, value in ipairs(MeleeState._.primaryAbilityChoices) do
-            if ImGui.Selectable(value, MeleeState._.menu.selectedPrimaryAbility == index) then
-                MeleeState._.menu.selectedPrimaryAbility = index
-                MeleeStateConfig.SetPrimaryCombatAbility(value)
-            end
+        ---@type boolean
+        local clicked, result
+        result, clicked = ImGui.Checkbox("Stick", MeleeStateConfig:GetStick())
+        if clicked then
+            MeleeStateConfig.SetStick(result)
         end
-        ImGui.EndCombo()
+
+        ImGui.SameLine()
+        ---@type boolean
+        local clicked, result
+        result, clicked = ImGui.Checkbox("Auto-Engage", MeleeStateConfig:GetAutoEngage())
+        if clicked then
+            MeleeStateConfig.SetAutoEngage(result)
+        end
+
+        ImGui.Dummy(0, 0)
+        ImGui.SameLine()
+
+        ImGui.PushItemWidth(40)
+        ---@type integer
+        local result
+        ---@type boolean
+        local selected
+        result, selected = ImGui.DragInt("Engage Distance", MeleeStateConfig:GetEngageDistance(), 1, 0, 500)
+        if selected then
+            MeleeStateConfig.SetEngageDistance(result)
+        end
+        ImGui.PopItemWidth()
+
+        ImGui.SameLine()
+        if ImGui.Button("Reset Default", 100, 23) then
+            MeleeStateConfig.SetEngageDistance(50)
+        end
+
+        ImGui.TableNextRow()
+        ImGui.TableNextColumn()
+
+        ImGui.Dummy(0, 0)
+        ImGui.SameLine()
+
+        local disabled = false
+        if mq.TLO.Target() == nil then
+            ImGui.BeginDisabled(true)
+            disabled = true
+        end
+        if ImGui.Button("Attack", 60, 23) then
+            local targetId = mq.TLO.Target.ID()
+            EngageTargetId(targetId)
+            StickToCurrentTarget(GetSpawnMeleeRange(targetId))
+        end
+        if disabled then
+            ImGui.EndDisabled()
+        end
+
+        ImGui.SameLine()
+        if MeleeState._.currentAction ~= MeleeState._.meleeActions.attackTarget then
+            ImGui.BeginDisabled(true)
+            disabled = true
+        end
+        if ImGui.Button("Back Off", 70, 23) then
+            Reset()
+        end
+        if disabled then
+            ImGui.EndDisabled()
+        end
+
+        local attackLabel = "<No Target>"
+        if mq.TLO.Target() ~= nil then
+            ---@type string
+            ---@diagnostic disable-next-line: assign-type-mismatch
+            attackLabel = mq.TLO.Target()
+        end
+        ImGui.SameLine()
+        local width = ImGui.GetContentRegionAvail()
+        ImGui.PushItemWidth(width)
+        ImGui.LabelText("##f006", attackLabel)
+        ImGui.PopItemWidth()
+
+        ImGui.TableNextRow()
+        ImGui.TableNextColumn()
+
+        ImGui.Dummy(0, 0)
+        ImGui.SameLine()
+        
+        ImGui.PushItemWidth(100)
+        if ImGui.BeginCombo("Primary Combat Skill##foo1", MeleeStateConfig.GetPrimaryCombatAbility()) then
+            for index, value in ipairs(MeleeState._.primaryAbilityChoices) do
+                if ImGui.Selectable(value, MeleeState._.menu.selectedPrimaryAbility == index) then
+                    MeleeState._.menu.selectedPrimaryAbility = index
+                    MeleeStateConfig.SetPrimaryCombatAbility(value)
+                end
+            end
+            ImGui.EndCombo()
+        end
+        ImGui.PopItemWidth()
+
+        ImGui.EndTable()
     end
-    ImGui.PopItemWidth()
+    ImGui.PopStyleVar()
 end
 
 return MeleeState
