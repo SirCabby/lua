@@ -4,7 +4,7 @@ local TableUtils = require("utils.TableUtils.TableUtils")
 
 local ChelpDocs = require("cabby.commands.chelpDocs")
 local Commands = require("cabby.commands.commands")
-local Menu = require("cabby.menu")
+local Menu = require("cabby.ui.menu")
 local Owners = require("cabby.commands.owners")
 local SlashCmd = require("cabby.commands.slashcmd")
 local Speak = require("cabby.commands.speak")

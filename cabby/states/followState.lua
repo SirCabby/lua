@@ -8,7 +8,7 @@ local Timer = require("utils.Time.Timer")
 local ChelpDocs = require("cabby.commands.chelpDocs")
 local Command = require("cabby.commands.command")
 local Commands = require("cabby.commands.commands")
-local Menu = require("cabby.menu")
+local Menu = require("cabby.ui.menu")
 local UserInput = require("cabby.utils.userinput")
 
 local function passive()

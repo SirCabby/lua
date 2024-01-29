@@ -8,7 +8,7 @@ local ChelpDocs = require("cabby.commands.chelpDocs")
 local Command = require("cabby.commands.command")
 local Commands = require("cabby.commands.commands")
 local Event = require("cabby.commands.event")
-local Menu = require("cabby.menu")
+local Menu = require("cabby.ui.menu")
 local SlashCmd = require("cabby.commands.slashcmd")
 local Speak = require("cabby.commands.speak")
 

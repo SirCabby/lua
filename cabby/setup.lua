@@ -8,7 +8,7 @@ local CommandConfig = require("cabby.configs.commandConfig")
 local DebugConfig = require("cabby.configs.debugConfig")
 local GeneralConfig = require("cabby.configs.generalConfig")
 local MeleeStateConfig = require("cabby.configs.meleeStateConfig")
-local Menu = require("cabby.menu")
+local Menu = require("cabby.ui.menu")
 
 local Setup = {
     key = "Setup"
