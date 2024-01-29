@@ -1267,6 +1267,7 @@ local helpDocsSelected
 ---@param docs ChelpDocs
 local function buildCommandList(i, docs)
     if ImGui.Selectable(StringUtils.Join(i.command, " "), helpCommandSelected == i.value) then
+        helpCommandSelected = i.value
         helpDocsSelected = docs
     end
     i.value = i.value + 1
