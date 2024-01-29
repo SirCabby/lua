@@ -4,6 +4,7 @@ local TableUtils = require("utils.TableUtils.TableUtils")
 
 local ChelpDocs = require("cabby.commands.chelpDocs")
 local Commands = require("cabby.commands.commands")
+local CommonUI = require("cabby.ui.commonUI")
 local Menu = require("cabby.ui.menu")
 local Owners = require("cabby.commands.owners")
 local SlashCmd = require("cabby.commands.slashcmd")
@@ -1002,7 +1003,7 @@ local function buildCommandEventEditor(commandOrEvent, overrideHelpText, allComm
                 owners:Open(isOpen.value)
             end
             ImGui.SameLine()
-            Menu.HelpMarker("When Open, the list is ignored and all speakers are allowed to issue this command.")
+            CommonUI.HelpMarker("When Open, the list is ignored and all speakers are allowed to issue this command.")
         end
     ImGui.EndGroup()
 
@@ -1092,7 +1093,7 @@ local function buildCommandEventEditor(commandOrEvent, overrideHelpText, allComm
     ImGui.Text("")
     ImGui.Text("Overridden " .. commandOrEvent .. "s")
     ImGui.SameLine()
-    Menu.HelpMarker(overrideHelpText)
+    CommonUI.HelpMarker(overrideHelpText)
     local childFlags = bit32.bor(ImGuiChildFlags.Border)
     ImGui.BeginChild("overrideCommands" .. overrideHelpText, 200, 210, childFlags)
         for thisCommand, overrides in pairs(CommandConfig._.configData[commandOrEventOverrideType]) do
