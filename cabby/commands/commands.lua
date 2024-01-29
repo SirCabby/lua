@@ -50,9 +50,10 @@ function Commands.Init(config, owners, speak)
         local chelpDocs = ChelpDocs.new(function() return {
             "(/chelp) Cabby Help menu",
             " -- Pick a help topic. Options: [CES, Comms, Events, SlashCmds]",
+            "To learn more about the differences between Communications, Events, and Slash Commands, use /chelp ces",
             "Additional options include any registered Comm, Event, or Slash Command listed in Comms, Events, or SlashCmds",
             " -- Example: /chelp activechannels",
-            "To learn more about the differences between Communications, Events, and Slash Commands, use /chelp ces"
+            "/cmenu to activate main menu"
         } end )
         chelpDocs:AddAdditionalLines("ces", function() return {
             "(/chelp ces) Explanation of Communications, Events, and Slash Commands:",
@@ -60,6 +61,9 @@ function Commands.Init(config, owners, speak)
             " -- /<channel> <command>, For example: /bc followme",
             " -- To manage active channels, use /activechannels",
             " -- To see all registered communication commands provided by this script, use /chelp comms",
+            "Events are triggered by certain message lines",
+            " -- For example: #1# has invited you to join a group",
+            " -- To see all registered events provided by this script, use /chelp events",
             "Slash Commands begin with a slash and are invoked by using the slash command on this char",
             " -- For example: /activechannels",
             " -- To see all registered slash commands provided by this script, use /chelp slashcmds"
