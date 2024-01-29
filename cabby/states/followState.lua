@@ -15,7 +15,7 @@ local function passive()
     return false
 end
 
----@class State
+---@class FollowState : State
 local FollowState = {
     key = "FollowState",
     eventIds = {

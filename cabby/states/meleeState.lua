@@ -16,7 +16,7 @@ local function passive()
     return false
 end
 
----@class State
+---@class MeleeState : State
 local MeleeState = {
     key = "MeleeState",
     eventIds = {
@@ -377,7 +377,7 @@ function MeleeState.BuildMenu()
 
         ImGui.Dummy(0, 0)
         ImGui.SameLine()
-        
+
         ImGui.PushItemWidth(100)
         if ImGui.BeginCombo("Primary Combat Skill##foo1", MeleeStateConfig.GetPrimaryCombatAbility()) then
             for index, value in ipairs(MeleeState._.primaryAbilityChoices) do
