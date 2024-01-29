@@ -1,9 +1,7 @@
----@class Command
----@field id string
----@field phrase string
+---@class Command : CommandType
 ---@field eventFunction function
----@field helpFunction function
----@field registeredEvents table
+---@field phrasePatternOverrides table?
+---@field registeredEvents table?
 local Command = {}
 
 Command.__index = Command
@@ -13,18 +11,17 @@ setmetatable(Command, {
     end
 })
 
----@param phrase string
+---@param command string
 ---@param eventFunction function
----@param helpFunction function
+---@param docs ChelpDocs
 ---@param phrasePatternOverrides table?
 ---@return Command
-function Command.new(phrase, eventFunction, helpFunction, phrasePatternOverrides)
+function Command.new(command, eventFunction, docs, phrasePatternOverrides)
     local self = setmetatable({}, Command)
 
-    self.phrase = phrase
+    self.command = command
     self.eventFunction = eventFunction
-    self.helpFunction = helpFunction
----@diagnostic disable-next-line: inject-field
+    self.docs = docs
     self.phrasePatternOverrides = phrasePatternOverrides
 
     return self

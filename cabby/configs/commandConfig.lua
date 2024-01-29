@@ -2,10 +2,12 @@ local Debug = require("utils.Debug.Debug")
 local StringUtils = require("utils.StringUtils.StringUtils")
 local TableUtils = require("utils.TableUtils.TableUtils")
 
-local Speak = require("cabby.commands.speak")
+local ChelpDocs = require("cabby.commands.chelpDocs")
 local Commands = require("cabby.commands.commands")
 local Menu = require("cabby.menu")
 local Owners = require("cabby.commands.owners")
+local SlashCmd = require("cabby.commands.slashcmd")
+local Speak = require("cabby.commands.speak")
 
 ---@class CabbyConfig
 local CommandConfig = {
@@ -185,6 +187,16 @@ function CommandConfig.Init()
 
         -- Binds
 
+        local activeChannelDocs = ChelpDocs.new(function() return {
+            "(/activechannels) Channels used for listening to commands",
+            "To toggle an active channel, use: /activechannels <channel type>",
+            " -- Valid Active Channel Types: [" .. StringUtils.Join(TableUtils.GetValues(Speak.GetAllChannelTypes()), ", ") .. "]",
+            " -- Currently active channels: [" .. StringUtils.Join(CommandConfig._.configData.activeChannels, ", ") .. "]",
+            "To override active channels for a specific communication command, use: /activechannels <command> <channel type>",
+            " -- Currently registered commands: [" .. StringUtils.Join(Commands.GetCommsPhrases(), ", ") .. "]",
+            " -- View command overrides with: /activechannels <command>",
+            " -- Reset command overrides with: /activechannels <command> reset"
+        } end )
         local function Bind_ActiveChannels(...)
             local args = {...} or {}
 
@@ -221,24 +233,31 @@ function CommandConfig.Init()
                 end
             end
 
-            print("(/activechannels) Channels used for listening to commands")
-            print("To toggle an active channel, use: /activechannels <channel type>")
-            print(" -- Valid Active Channel Types: [" .. StringUtils.Join(TableUtils.GetValues(Speak.GetAllChannelTypes()), ", ") .. "]")
-            print(" -- Currently active channels: [" .. StringUtils.Join(CommandConfig._.configData.activeChannels, ", ") .. "]")
-            print("To override active channels for a specific communication command, use: /activechannels <command> <channel type>")
-            print(" -- Currently registered commands: [" .. StringUtils.Join(Commands.GetCommsPhrases(), ", ") .. "]")
-            print(" -- View command overrides with: /activechannels <command>")
-            print(" -- Reset command overrides with: /activechannels <command> reset")
+            activeChannelDocs:Print()
         end
-        Commands.RegisterSlashCommand("activechannels", Bind_ActiveChannels)
+        Commands.RegisterSlashCommand(SlashCmd.new("activechannels", Bind_ActiveChannels, activeChannelDocs))
 
+        local speakDocs = ChelpDocs.new(function() return {
+            "(/speak) Manage which channels that commands/events respond in",
+            " -- To add/remove a speak channel, use: /speak <channel>",
+            " -- To override speaks for a specific communication command or event, use: /speak <command|event> <channel>",
+            " -- View command overrides with: /owners <command|event>",
+            " -- To remove overrides, use: /speak <command|event> reset",
+            " -- Currently registered commands: [" .. StringUtils.Join(Commands.GetCommsPhrases(), ", ") .. "]",
+            " -- Currently registered events: [" .. StringUtils.Join(Commands.GetEventIds(), ", ") .. "]",
+            " -- Currently active speak channels: [" .. StringUtils.Join(Commands.GetCommandSpeak("dne-global-owners"):GetActiveSpeakChannels(), ", ") .. "]"
+        } end )
+        -- /speak
+        -- /speak <channeltype> [tellTo]
+        -- /speak <command | event>
+        -- /speak <command | event> <channeltype | reset> [tellTo]
         local function Bind_Speak(...)
             local args = {...} or {}
 
             -- /speak
             if args == nil or #args < 1 then
                 print("(/speak):")
-                Commands.GetCommandSpeak("dne-global-speak"):Print()
+                print(" -- Currently active speak channels: [" .. StringUtils.Join(Commands.GetCommandSpeak("dne-global-owners"):GetActiveSpeakChannels(), ", ") .. "]")
                 return
             elseif #args == 1 then
                 -- /speak <channeltype>
@@ -293,22 +312,20 @@ function CommandConfig.Init()
                     CommandConfig.ToggleSpeakChannel(args[2]:lower(), args[3], args[1]:lower(), true)
                 end
             end
-
-            -- /speak
-            -- /speak <channeltype> [tellTo]
-            -- /speak <command | event>
-            -- /speak <command | event> <channeltype | reset> [tellTo]
-            print("(/speak) Manage which channels that commands/events respond in")
-            print(" -- To add/remove a speak channel, use: /speak <channel>")
-            print(" -- To override speaks for a specific communication command or event, use: /speak <command|event> <channel>")
-            print(" -- View command overrides with: /owners <command|event>")
-            print(" -- To remove overrides, use: /speak <command|event> reset")
-            print(" -- Currently registered commands: [" .. StringUtils.Join(Commands.GetCommsPhrases(), ", ") .. "]")
-            print(" -- Currently registered events: [" .. StringUtils.Join(Commands.GetEventIds(), ", ") .. "]")
-            Commands.GetCommandSpeak("dne-global-owners"):Print()
         end
-        Commands.RegisterSlashCommand("speak", Bind_Speak)
+        Commands.RegisterSlashCommand(SlashCmd.new("speak", Bind_Speak, speakDocs))
 
+        local ownersDocs = ChelpDocs.new(function() return {
+            "(/owners) Manage owners to take commands from",
+            "To add/remove owners, use: /owners <name>",
+            "To override owners for a specific communication command or event, use: /owners <command|event> <owner>",
+            " -- Currently registered commands: [" .. StringUtils.Join(Commands.GetCommsPhrases(), ", ") .. "]",
+            " -- Currently registered events: [" .. StringUtils.Join(Commands.GetEventIds(), ", ") .. "]",
+            " -- View command overrides with: /owners <command|event>",
+            " -- Reset command overrides with: /owners <command|event> reset",
+            " -- To toggle allowing of any owner: /owners [<command|event>] open",
+            " -- Current owners: [" .. StringUtils.Join(Commands.GetCommandOwners("dne-global-owners"):GetOwnersList(), ", ") .. "]"
+        } end )
         local function Bind_Owners(...)
             local args = {...} or {}
 
@@ -439,17 +456,9 @@ function CommandConfig.Init()
                 end
             end
 
-            print("(/owners) Manage owners to take commands from")
-            print("To add/remove owners, use: /owners <name>")
-            print("To override owners for a specific communication command or event, use: /owners <command|event> <owner>")
-            print(" -- Currently registered commands: [" .. StringUtils.Join(Commands.GetCommsPhrases(), ", ") .. "]")
-            print(" -- Currently registered events: [" .. StringUtils.Join(Commands.GetEventIds(), ", ") .. "]")
-            print(" -- View command overrides with: /owners <command|event>")
-            print(" -- Reset command overrides with: /owners <command|event> reset")
-            print(" -- To toggle allowing of any owner: /owners [<command|event>] open")
-            Commands.GetCommandOwners("dne-global-owners"):Print()
+            ownersDocs:Print()
         end
-        Commands.RegisterSlashCommand("owners", Bind_Owners)
+        Commands.RegisterSlashCommand(SlashCmd.new("owners", Bind_Owners, ownersDocs))
 
         CommandConfig.UpdateEventChannels()
         Menu.RegisterConfig(CommandConfig)
@@ -1243,12 +1252,103 @@ local function buildOwnerChannelTab()
     end
 end
 
+local helpTabTypeSelected = 1
+local helpTabTypeOptions = {
+    "<Select Type>",
+    "Communications",
+    "Slash Commands",
+    "Events"
+}
+local helpCommandSelected = 0
+---@type ChelpDocs?
+local helpDocsSelected
+
+---@param i table -- { command = { "command", "arg1" }, value = # }
+---@param docs ChelpDocs
+local function buildCommandList(i, docs)
+    if ImGui.Selectable(StringUtils.Join(i.command, " "), helpCommandSelected == i.value) then
+        helpDocsSelected = docs
+    end
+    i.value = i.value + 1
+
+    -- Recurse for submenus
+    for key, doc in pairs(docs.additionalLines) do
+        i.command[#i.command+1] = key
+        buildCommandList(i, doc)
+    end
+
+    -- Remove this command from command list
+    i.command[#i.command] = nil
+end
+
+local function buildCHelpTab()
+    if ImGui.BeginTabItem("Help") then
+        ImGui.Text("Display help pages for a selected command type")
+        ImGui.Text("")
+
+        -- Combo Selector
+        ImGui.PushItemWidth(160)
+        if ImGui.BeginCombo("Command Type##foo5", helpTabTypeOptions[helpTabTypeSelected]) then
+            for index, channel in ipairs(helpTabTypeOptions) do
+                if ImGui.Selectable(channel, helpTabTypeSelected == index) then
+                    helpTabTypeSelected = index
+                    helpCommandSelected = 0
+                    helpDocsSelected = nil
+                end
+            end
+            ImGui.EndCombo()
+        end
+        ImGui.PopItemWidth()
+
+        -- Left List Selector
+        local width, height = ImGui.GetContentRegionAvail()
+        local childWindowFlags = bit32.bor(ImGuiChildFlags.Border)
+        local windowFlags = bit32.bor(ImGuiWindowFlags.HorizontalScrollbar)
+        if ImGui.BeginChild("listItems", 170, height, childWindowFlags, windowFlags) then
+            local commands
+            if helpTabTypeSelected < 2 then
+                commands = {}
+            elseif helpTabTypeSelected == 2 then
+                commands = Commands._.registrations.commands.registeredCommands
+            elseif helpTabTypeSelected == 3 then
+                commands = Commands._.registrations.slashcommands.registeredSlashCommands
+            elseif helpTabTypeSelected > 3 then
+                commands = Commands._.registrations.events.registeredEvents
+            end
+
+            local i = { value = 1, command = {}}
+            for _, command in pairs(commands) do
+                ---@type CommandType
+                command = command
+                i.command = { command.command }
+                buildCommandList(i, command.docs)
+            end
+        end
+        ImGui.EndChild()
+
+        -- Right Docs Display
+        local childFlags = bit32.bor(ImGuiChildFlags.Border, ImGuiChildFlags.AutoResizeX)
+        ImGui.SameLine()
+        if ImGui.BeginChild("doc display", width - 178, height, childFlags) then
+            if helpDocsSelected ~= nil then
+                for _, line in ipairs(helpDocsSelected.lines()) do
+                    ImGui.TextWrapped(line)
+                end
+            end
+        end
+        ImGui.EndChild()
+
+        ImGui.EndTabItem()
+    end
+end
+
 ---@diagnostic disable-next-line: duplicate-set-field
 function CommandConfig.BuildMenu()
     if ImGui.BeginTabBar("Command Tabs") then
         buildActiveChannelTab()
         buildSpeakChannelTab()
         buildOwnerChannelTab()
+        buildCHelpTab()
         ImGui.EndTabBar()
     end
 end

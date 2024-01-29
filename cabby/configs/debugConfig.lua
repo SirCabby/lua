@@ -1,8 +1,10 @@
 local Debug = require("utils.Debug.Debug")
 local TableUtils = require("utils.TableUtils.TableUtils")
 
+local ChelpDocs = require("cabby.commands.chelpDocs")
 local Commands = require("cabby.commands.commands")
 local Menu = require("cabby.menu")
+local SlashCmd = require("cabby.commands.slashcmd")
 
 ---@class CabbyConfig
 local DebugConfig = {
@@ -49,13 +51,16 @@ function DebugConfig.Init()
         -- Sync Debug with DebugConfig on this ctor
         initAndValidate()
 
+        local debugDocs = ChelpDocs.new(function() return {
+            "(/debug) Toggle debug tracing by debug category key",
+            " -- Usage (toggle): /debug key",
+            " -- Usage (1 = on, 0 = off): /debug key <0|1>",
+            " -- To find a list of keys, use /debug list"
+        } end )
         local function Bind_Debug(...)
             local args = {...} or {}
             if args == nil or #args < 1 or #args > 2 or args[1]:lower() == "help" then
-                print("(/debug) Toggle debug tracing by debug category key")
-                print(" -- Usage (toggle): /debug key")
-                print(" -- Usage (1 = on, 0 = off): /debug key <0|1>")
-                print(" -- To find a list of keys, use /debug list")
+                debugDocs:Print()
             elseif args[1]:lower() == "list" then
                 print("Debug Toggles:")
                 DebugConfig:Print()
@@ -75,7 +80,7 @@ function DebugConfig.Init()
                 print("Toggled debug tracing for [" .. args[1] .. "]: " .. tostring(DebugConfig.GetDebugToggle(args[1])))
             end
         end
-        Commands.RegisterSlashCommand("debug", Bind_Debug)
+        Commands.RegisterSlashCommand(SlashCmd.new("debug", Bind_Debug, debugDocs))
 
         Menu.RegisterConfig(DebugConfig)
 

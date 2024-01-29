@@ -97,6 +97,11 @@ function Speak:Print()
     print("Currently speaking to: [" .. StringUtils.Join(self._.channels, ", ") .. "]")
 end
 
+---@return table speakChannels
+function Speak:GetActiveSpeakChannels()
+    return self._.channels
+end
+
 ---@param channelType string channel type to check
 ---@return boolean isChannelType
 function Speak.IsChannelType(channelType)

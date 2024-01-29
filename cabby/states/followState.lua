@@ -5,6 +5,7 @@ local StringUtils = require("utils.StringUtils.StringUtils")
 local TableUtils = require("utils.TableUtils.TableUtils")
 local Timer = require("utils.Time.Timer")
 
+local ChelpDocs = require("cabby.commands.chelpDocs")
 local Command = require("cabby.commands.command")
 local Commands = require("cabby.commands.commands")
 local Menu = require("cabby.menu")
@@ -281,6 +282,9 @@ end
 ---@diagnostic disable-next-line: duplicate-set-field
 function FollowState.Init()
     if not FollowState._.isInit then
+        local followMeDocs = ChelpDocs.new(function() return {
+            "(followme) Tells listener(s) to begin autofollow on speaker"
+        } end )
         local function event_FollowMe(_, speaker)
             if Commands.GetCommandOwners(FollowState.eventIds.followMe):HasPermission(speaker) then
                 DebugLog("Activating followme of speaker [" .. speaker .. "]")
@@ -291,11 +295,11 @@ function FollowState.Init()
                 DebugLog("Ignoring followme of speaker [" .. speaker .. "]")
             end
         end
-        local function followMeHelp()
-            print("(followme) Tells listener(s) to begin autofollow on speaker")
-        end
-        Commands.RegisterCommEvent(Command.new(FollowState.eventIds.followMe, event_FollowMe, followMeHelp))
+        Commands.RegisterCommEvent(Command.new(FollowState.eventIds.followMe, event_FollowMe, followMeDocs))
 
+        local stopFollowDocs = ChelpDocs.new(function() return {
+            "(stopfollow) Tells listener(s) to stop autofollow on speaker"
+        } end )
         local function event_StopFollow(_, speaker)
             if Commands.GetCommandOwners(FollowState.eventIds.stopFollow):HasPermission(speaker) then
                 DebugLog("Stopping follow of speaker [" .. speaker .. "]")
@@ -307,11 +311,11 @@ function FollowState.Init()
                 DebugLog("Ignoring stopfollow of speaker [" .. speaker .. "]")
             end
         end
-        local function stopfollowHelp()
-            print("(stopfollow) Tells listener(s) to stop autofollow on speaker")
-        end
-        Commands.RegisterCommEvent(Command.new(FollowState.eventIds.stopFollow, event_StopFollow, stopfollowHelp))
+        Commands.RegisterCommEvent(Command.new(FollowState.eventIds.stopFollow, event_StopFollow, stopFollowDocs))
 
+        local mtomDocs = ChelpDocs.new(function() return {
+            "(m2m) Tells listener(s) to move to speaker once"
+        } end )
         local function event_MoveToMe(_, speaker)
             if Commands.GetCommandOwners(FollowState.eventIds.moveToMe):HasPermission(speaker) then
                 DebugLog("Moving to speaker [" .. speaker .. "]")
@@ -329,11 +333,11 @@ function FollowState.Init()
                 DebugLog("Ignoring move to speaker [" .. speaker .. "]")
             end
         end
-        local function moveToMeHelp()
-            print("(m2m) Tells listener(s) to move to speaker once")
-        end
-        Commands.RegisterCommEvent(Command.new(FollowState.eventIds.moveToMe, event_MoveToMe, moveToMeHelp))
+        Commands.RegisterCommEvent(Command.new(FollowState.eventIds.moveToMe, event_MoveToMe, mtomDocs))
 
+        local clickZoneDocs = ChelpDocs.new(function() return {
+            "(clickzone) Tells listener(s) to click to zone"
+        } end )
         local function event_ClickZone(_, speaker)
             if Commands.GetCommandOwners(FollowState.eventIds.clickZone):HasPermission(speaker) then
                 DebugLog("Clickzone speaker [" .. speaker .. "]")
@@ -342,11 +346,12 @@ function FollowState.Init()
                 DebugLog("Ignoring clickzone speaker [" .. speaker .. "]")
             end
         end
-        local function clickZoneHelp()
-            print("(clickzone) Tells listener(s) to click to zone")
-        end
-        Commands.RegisterCommEvent(Command.new(FollowState.eventIds.clickZone, event_ClickZone, clickZoneHelp))
+        Commands.RegisterCommEvent(Command.new(FollowState.eventIds.clickZone, event_ClickZone, clickZoneDocs))
 
+        local anchorDocs = ChelpDocs.new(function() return {
+            "(anchor) Tells listener(s) to anchor to speaker's current location",
+            " -- to disable, use: anchor off"
+        } end )
         local function event_Anchor(_, speaker, args)
             args = StringUtils.Split(StringUtils.TrimFront(args))
 
@@ -381,11 +386,7 @@ function FollowState.Init()
                 DebugLog("Ignoring anchor speaker [" .. speaker .. "]")
             end
         end
-        local function anchorHelp()
-            print("(anchor) Tells listener(s) to anchor to speaker's current location")
-            print(" -- to disable, use: anchor off")
-        end
-        Commands.RegisterCommEvent(Command.new(FollowState.eventIds.anchor, event_Anchor, anchorHelp))
+        Commands.RegisterCommEvent(Command.new(FollowState.eventIds.anchor, event_Anchor, anchorDocs))
 
         if Global.configStore:GetConfigRoot()[FollowState.key] == nil then
             Global.configStore:GetConfigRoot()[FollowState.key] = {}

@@ -4,10 +4,12 @@ local Debug = require("utils.Debug.Debug")
 local StringUtils = require("utils.StringUtils.StringUtils")
 local TableUtils = require("utils.TableUtils.TableUtils")
 
+local ChelpDocs = require("cabby.commands.chelpDocs")
 local Command = require("cabby.commands.command")
 local Commands = require("cabby.commands.commands")
 local Event = require("cabby.commands.event")
 local Menu = require("cabby.menu")
+local SlashCmd = require("cabby.commands.slashcmd")
 local Speak = require("cabby.commands.speak")
 
 ---@type CabbyConfig
@@ -93,9 +95,9 @@ function GeneralConfig.Init()
 
         -- Events
 
-        local function groupInvitedHelp()
-            print("(event: "..GeneralConfig.eventIds.groupInvited..") Accepts or declines invitations to groups, depending on rights of asker")
-        end
+        local groupInviteDocs = ChelpDocs.new(function() return {
+            "(event: "..GeneralConfig.eventIds.groupInvited..") Accepts or declines invitations to groups, depending on rights of inviter"
+        } end )
         local function event_GroupInvited(_, speaker)
             if Commands.GetEventOwners(GeneralConfig.eventIds.groupInvited):HasPermission(speaker) then
                 DebugLog("Joining group of speaker [" .. speaker .. "]")
@@ -105,11 +107,11 @@ function GeneralConfig.Init()
                 mq.cmd("/disband")
             end
         end
-        Commands.RegisterEvent(Event.new(GeneralConfig.eventIds.groupInvited, "#1# invites you to join a group.", event_GroupInvited, groupInvitedHelp))
+        Commands.RegisterEvent(Event.new(GeneralConfig.eventIds.groupInvited, "#1# invites you to join a group.", event_GroupInvited, groupInviteDocs))
 
-        local function inspectHelp()
-            print("(inspect <slot>) Slot types: [" .. StringUtils.Join(GeneralConfig.equipmentSlots, ", ") .. "]")
-        end
+        local inspectDocs = ChelpDocs.new(function() return {
+            "(inspect <slot>) Slot types: [" .. StringUtils.Join(GeneralConfig.equipmentSlots, ", ") .. "]"
+        } end )
         local function event_InspectRequest(_, speaker, args)
             if Commands.GetCommandOwners(GeneralConfig.eventIds.inspectRequest):HasPermission(speaker) then
                 args = StringUtils.Split(StringUtils.TrimFront(args))
@@ -122,8 +124,11 @@ function GeneralConfig.Init()
                 Speak.Respond(_, speaker, "(inspect <slot>) Slot types: [" .. StringUtils.Join(GeneralConfig.equipmentSlots, ", ") .. "]")
             end
         end
-        Commands.RegisterCommEvent(Command.new(GeneralConfig.eventIds.inspectRequest, event_InspectRequest, inspectHelp))
+        Commands.RegisterCommEvent(Command.new(GeneralConfig.eventIds.inspectRequest, event_InspectRequest, inspectDocs))
 
+        local restartDocs = ChelpDocs.new(function() return {
+            "(restart) Tells listener(s) to restart cabby script"
+        } end )
         local function event_Restart(_, speaker)
             if Commands.GetCommandOwners(GeneralConfig.eventIds.restart):HasPermission(speaker) then
                 DebugLog("Restarting on request of speaker [" .. speaker .. "]")
@@ -132,32 +137,32 @@ function GeneralConfig.Init()
                 DebugLog("Ignoring restart request of speaker [" .. speaker .. "]")
             end
         end
-        local function restartHelp()
-            print("(restart) Tells listener(s) to restart cabby script")
-        end
-        Commands.RegisterCommEvent(Command.new(GeneralConfig.eventIds.restart, event_Restart, restartHelp))
+        Commands.RegisterCommEvent(Command.new(GeneralConfig.eventIds.restart, event_Restart, restartDocs))
 
         -- Binds
 
+        local slashRestartDocs = ChelpDocs.new(function() return {
+            "(/restart) Restart cabby script"
+        } end )
         local function Bind_Restart(...)
             local args = {...} or {}
             if #args < 1 then
                 mq.cmd("/luar cabby")
             else
-                print("(/restart) Restart cabby script")
+                slashRestartDocs:Print()
             end
         end
-        Commands.RegisterSlashCommand(GeneralConfig.eventIds.restart, Bind_Restart)
+        Commands.RegisterSlashCommand(SlashCmd.new(GeneralConfig.eventIds.restart, Bind_Restart, slashRestartDocs))
 
-        local function tellToMeHelp()
-            print("(event "..GeneralConfig.eventIds.tellToMe..") Forwards any received tells that were not part of an issued command to the speak channel")
-        end
+        local tellToMeDocs = ChelpDocs.new(function() return {
+            "(event "..GeneralConfig.eventIds.tellToMe..") Forwards any received tells that were not part of an issued command to the speak channel"
+        } end )
         local function event_TellToMe(_, speaker, message)
             if mq.TLO.SpawnCount("npc " .. speaker)() < 1 then
                 Commands.GetEventSpeak(GeneralConfig.eventIds.tellToMe):speak(speaker .. " told me: " .. message)
             end
         end
-        Commands.RegisterEvent(Event.new(GeneralConfig.eventIds.tellToMe, "#1# tells you, '#2#'", event_TellToMe, tellToMeHelp, true))
+        Commands.RegisterEvent(Event.new(GeneralConfig.eventIds.tellToMe, "#1# tells you, '#2#'", event_TellToMe, tellToMeDocs, true))
 
         Menu.RegisterConfig(GeneralConfig)
 

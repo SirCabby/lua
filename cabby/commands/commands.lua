@@ -4,6 +4,9 @@ local Debug = require("utils.Debug.Debug")
 local StringUtils = require("utils.StringUtils.StringUtils")
 local TableUtils = require("utils.TableUtils.TableUtils")
 
+local ChelpDocs = require("cabby.commands.chelpDocs")
+local SlashCmd = require("cabby.commands.slashcmd")
+
 ---@class Commands
 local Commands = {
     key = "Commands",
@@ -20,7 +23,7 @@ local Commands = {
                 speakOverrides = {} -- { <phrase> = { speak } }
             },
             slashcommands = {
-                registeredSlashCommands = {} -- { "/cmd1", "/cmd2" }
+                registeredSlashCommands = {} -- { <command> = { slashCmd } }
             },
             events = {
                 registeredEvents = {}, -- { <event id> = <event> }
@@ -44,61 +47,77 @@ function Commands.Init(config, owners, speak)
         Commands._.config = config
         Commands._.owners = owners
 
-        local function chelpPrint()
-            print("(/chelp) Cabby Help menu")
-            print(" -- Pick a help topic. Options: [CES, Comms, Events, SlashCmds]")
-            print("Additional options include any registered Comm, Event, or Slash Command listed in Comms, Events, or SlashCmds")
-            print(" -- Example: /chelp activechannels")
-            print("To learn more about the differences between Communications, Events, and Slash Commands, use /chelp ces")
-        end
+        local chelpDocs = ChelpDocs.new(function() return {
+            "(/chelp) Cabby Help menu",
+            " -- Pick a help topic. Options: [CES, Comms, Events, SlashCmds]",
+            "Additional options include any registered Comm, Event, or Slash Command listed in Comms, Events, or SlashCmds",
+            " -- Example: /chelp activechannels",
+            "To learn more about the differences between Communications, Events, and Slash Commands, use /chelp ces"
+        } end )
+        chelpDocs:AddAdditionalLines("ces", function() return {
+            "(/chelp ces) Explanation of Communications, Events, and Slash Commands:",
+            "Comms (Communications) are leveraged by speaking in active channels for other listeners to pick up",
+            " -- /<channel> <command>, For example: /bc followme",
+            " -- To manage active channels, use /activechannels",
+            " -- To see all registered communication commands provided by this script, use /chelp comms",
+            "Slash Commands begin with a slash and are invoked by using the slash command on this char",
+            " -- For example: /activechannels",
+            " -- To see all registered slash commands provided by this script, use /chelp slashcmds"
+        } end )
+        chelpDocs:AddAdditionalLines("comms", function() return {
+            "Available Communication Commands: [" .. StringUtils.Join(Commands.GetCommsPhrases(), ", ") .. "]",
+            "To learn more about a specific command, use /chelp <command>"
+        } end )
+        chelpDocs:AddAdditionalLines("events", function() return {
+            "Available Events: [" .. StringUtils.Join(Commands.GetEventIds(), ", ") .. "]",
+            "To learn more about a specific event, use /chelp <event>"
+        } end )
+        chelpDocs:AddAdditionalLines("slashcmds", function() return {
+            "Available Slash Commands: [" .. StringUtils.Join(TableUtils.GetKeys(Commands._.registrations.slashcommands.registeredSlashCommands), ", ") .. "]",
+            "To learn more about a specific command, use /chelp <command>"
+        } end )
         local function Bind_Chelp(...)
             local args = {...} or {}
             if args == nil or #args < 1 or args[1]:lower() == "help" then
-                chelpPrint()
+                chelpDocs:Print()
             else
                 arg = args[1]:lower()
                 if arg == "ces" then
-                    print("(/chelp ces) Explanation of Communications, Events, and Slash Commands:")
-                    print("Comms (Communications) are leveraged by speaking in active channels for other listeners to pick up")
-                    print(" -- /<channel> <command>, For example: /bc followme")
-                    print(" -- To manage active channels, use /activechannels")
-                    print(" -- To see all registered communication commands provided by this script, use /chelp comms")
-                    print("Slash Commands begin with a slash and are invoked by using the slash command on this char")
-                    print(" -- For example: /activechannels")
-                    print(" -- To see all registered slash commands provided by this script, use /chelp slashcmds")
+                    chelpDocs.additionalLines["ces"]:Print()
                 elseif arg == "comms" then
-                    local comms = Commands.GetCommsPhrases()
-                    print("Available Communication Commands: [" .. StringUtils.Join(comms, ", ") .. "]")
-                    print("To learn more about a specific command, use /chelp <command>")
+                    chelpDocs.additionalLines["comms"]:Print()
                 elseif arg == "events" then
-                    local events = Commands.GetEventIds()
-                    print("Available Events: [" .. StringUtils.Join(events, ", ") .. "]")
-                    print("To learn more about a specific event, use /chelp <event>")
+                    chelpDocs.additionalLines["events"]:Print()
                 elseif arg == "slashcmds" then
-                    print("Available Slash Commands: [" .. StringUtils.Join(Commands._.registrations.slashcommands.registeredSlashCommands, ", ") .. "]")
-                    print("To learn more about a specific command, use /chelp <command>")
-                elseif TableUtils.ArrayContains(Commands._.registrations.slashcommands.registeredSlashCommands, "/" .. arg) then
-                    mq.cmd("/" .. arg .. " help")
+                    chelpDocs.additionalLines["slashcmds"]:Print()
+                elseif TableUtils.ArrayContains(TableUtils.GetKeys(Commands._.registrations.slashcommands.registeredSlashCommands), arg) then
+                    ---@type SlashCmd
+                    local command = Commands._.registrations.slashcommands.registeredSlashCommands[arg]
+                    command.docs:Print()
                 elseif TableUtils.ArrayContains(Commands.GetCommsPhrases(), arg) then
                     for _, command in pairs(Commands._.registrations.commands.registeredCommands) do
-                        if StringUtils.Split(command.phrase)[1] == arg then
-                            command.helpFunction()
+                        ---@type Command
+                        command = command
+                        if StringUtils.Split(command.command)[1] == arg then
+                            command.docs:Print()
                             return
                         end
                     end
                 elseif TableUtils.ArrayContains(Commands.GetEventIds(), arg) then
                     for _, event in pairs(Commands._.registrations.events.registeredEvents) do
-                        if event.id:lower() == arg:lower() then
-                            event.helpFunction()
+                        ---@type Event
+                        event = event
+                        if event.command:lower() == arg:lower() then
+                            event.docs:Print()
                             return
                         end
                     end
                 else
-                    chelpPrint()
+                    chelpDocs:Print()
                 end
             end
         end
-        Commands.RegisterSlashCommand("chelp", Bind_Chelp)
+        Commands.RegisterSlashCommand(SlashCmd.new("chelp", Bind_Chelp, chelpDocs))
 
         Commands.SetSpeak(speak)
 
@@ -111,27 +130,26 @@ function Commands.SetSpeak(speak)
     Commands._.speak = speak
 end
 
----@param command string
----@param callback function
-function Commands.RegisterSlashCommand(command, callback)
-    command = command:lower()
-    if command:sub(1, 1) ~= "/" then
-        command = "/" .. command
+---@param command SlashCmd
+function Commands.RegisterSlashCommand(command)
+    command.command = command.command:lower()
+    if command.command:sub(1, 1) == "/" then
+        command.command = command.command:sub(2)
     end
 
-    if TableUtils.ArrayContains(Commands._.registrations.slashcommands.registeredSlashCommands, command) then
-        DebugLog("Slash command was already registered: [" .. command .. "]")
+    if TableUtils.ArrayContains(TableUtils.GetKeys(Commands._.registrations.slashcommands.registeredSlashCommands), command.command) then
+        DebugLog("Slash command was already registered: [" .. command.command .. "]")
         return
     end
 
-    mq.bind(command, callback)
-    table.insert(Commands._.registrations.slashcommands.registeredSlashCommands, command)
+    mq.bind("/" .. command.command, command.cmdFunction)
+    Commands._.registrations.slashcommands.registeredSlashCommands[command.command] = command
 end
 
 function Commands.GetCommsPhrases()
     local comms = {}
     for _, command in pairs(Commands._.registrations.commands.registeredCommands) do
-        table.insert(comms, StringUtils.Split(command.phrase)[1])
+        table.insert(comms, StringUtils.Split(command.command)[1])
     end
     return comms
 end
@@ -144,15 +162,15 @@ local function UpdateCommEvent(command)
     command.registeredEvents = {}
 
     local patternArray
-    if Commands._.registrations.commands.phrasePatternOverrides[StringUtils.Split(command.phrase)[1]] ~= nil then
-        patternArray = Commands._.registrations.commands.phrasePatternOverrides[StringUtils.Split(command.phrase)[1]]
+    if Commands._.registrations.commands.phrasePatternOverrides[StringUtils.Split(command.command)[1]] ~= nil then
+        patternArray = Commands._.registrations.commands.phrasePatternOverrides[StringUtils.Split(command.command)[1]]
     else
         patternArray = Commands._.registrations.commands.defaultChannelPatterns
     end
 
     for _, pattern in ipairs(patternArray) do
-        local thisPhrase = string.gsub(pattern, "<<phrase>>", command.phrase)
-        local newEventId = command.phrase .. tostring(#command.registeredEvents + 1)
+        local thisPhrase = string.gsub(pattern, "<<phrase>>", command.command)
+        local newEventId = command.command .. tostring(#command.registeredEvents + 1)
         table.insert(command.registeredEvents, newEventId)
         mq.event(newEventId, thisPhrase, command.eventFunction)
     end
@@ -160,12 +178,12 @@ end
 
 ---@param command Command
 function Commands.RegisterCommEvent(command)
-    if not TableUtils.ArrayContains(TableUtils.GetKeys(Commands._.registrations.commands.registeredCommands), command.phrase) then
-        Commands._.registrations.commands.registeredCommands[command.phrase] = command
+    if not TableUtils.ArrayContains(TableUtils.GetKeys(Commands._.registrations.commands.registeredCommands), command.command) then
+        Commands._.registrations.commands.registeredCommands[command.command] = command
         command.registeredEvents = {}
         UpdateCommEvent(command)
     else
-        print("Cannot re-register same command: ["..command.phrase.."]")
+        print("Cannot re-register same command: ["..command.command.."]")
     end
 end
 
@@ -181,7 +199,7 @@ local function UpdateCommChannels()
         event = event
         if event.reregister then
             mq.unevent(id)
-            mq.event(id, event.phrase, event.eventFunction)
+            mq.event(id, event.command, event.eventFunction)
         end
     end
 end
@@ -238,18 +256,18 @@ end
 
 ---@param event Event
 function Commands.RegisterEvent(event)
-    if not TableUtils.ArrayContains(TableUtils.GetKeys(Commands._.registrations.events.registeredEvents), event.id) then
-        Commands._.registrations.events.registeredEvents[event.id] = event
-        mq.event(event.id:lower(), event.phrase, event.eventFunction)
+    if not TableUtils.ArrayContains(TableUtils.GetKeys(Commands._.registrations.events.registeredEvents), event.command) then
+        Commands._.registrations.events.registeredEvents[event.command] = event
+        mq.event(event.command:lower(), event.command, event.eventFunction)
     else
-        print("Cannot re-register same event Id: ["..event.id:lower().."]")
+        print("Cannot re-register same event Id: ["..event.command:lower().."]")
     end
 end
 
 function Commands.GetEventIds()
     local events = {}
     for _, event in pairs(Commands._.registrations.events.registeredEvents) do
-        table.insert(events, event.id:lower())
+        table.insert(events, event.command:lower())
     end
     return events
 end

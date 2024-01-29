@@ -5,6 +5,7 @@ local Timer = require("utils.Time.Timer")
 local StringUtils = require("utils.StringUtils.StringUtils")
 
 local Character = require("cabby.character")
+local ChelpDocs = require("cabby.commands.chelpDocs")
 local Command = require("cabby.commands.command")
 local Commands = require("cabby.commands.commands")
 local MeleeStateConfig = require("cabby.configs.meleeStateConfig")
@@ -176,6 +177,10 @@ function MeleeState.Init()
 
         Menu.RegisterState(MeleeState)
 
+        local attackDocs = ChelpDocs.new(function() return {
+            "(attack <id>) Tells listener(s) to attack spawn with <id>",
+            "(attack off) Tells listener(s) to call off attacks"
+        } end )
         local function event_Attack(_, speaker, args)
             args = StringUtils.Split(StringUtils.TrimFront(args))
 
@@ -197,11 +202,7 @@ function MeleeState.Init()
                 DebugLog("Ignoring MeleeAttack speaker [" .. speaker .. "]")
             end
         end
-        local function meleeAttackHelp()
-            print("(attack <id>) Tells listener(s) to attack spawn with <id>")
-            print("(attack off) Tells listener(s) to call off attacks")
-        end
-        Commands.RegisterCommEvent(Command.new(MeleeState.eventIds.attack, event_Attack, meleeAttackHelp))
+        Commands.RegisterCommEvent(Command.new(MeleeState.eventIds.attack, event_Attack, attackDocs))
 
         Reset()
         MeleeState._.isInit = true

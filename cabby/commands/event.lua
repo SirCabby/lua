@@ -1,8 +1,5 @@
----@class Event
----@field id string
----@field phrase string
+---@class Event : CommandType
 ---@field eventFunction function
----@field helpFunction function
 ---@field reregister boolean reregister this event on event updates for last order preservation
 local Event = {}
 
@@ -14,18 +11,17 @@ setmetatable(Event, {
 })
 
 ---@param id string
----@param phrase string
+---@param command string
 ---@param eventFunction function
----@param helpFunction function
+---@param docs ChelpDocs
 ---@param reregister boolean? reregister this event on event updates for last order preservation
 ---@return Event
-function Event.new(id, phrase, eventFunction, helpFunction, reregister)
+function Event.new(id, command, eventFunction, docs, reregister)
     local self = setmetatable({}, Event)
 
-    self.id = id
-    self.phrase = phrase
+    self.command = command
     self.eventFunction = eventFunction
-    self.helpFunction = helpFunction
+    self.docs = docs
     self.reregister = reregister or false
 
     return self

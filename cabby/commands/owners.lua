@@ -83,4 +83,9 @@ function Owners:Print()
     print("My Owners: [" .. StringUtils.Join(self._.data.list, ", ") .. "]")
 end
 
+---@return table owners
+function Owners:GetOwnersList()
+    return self._.data.list
+end
+
 return Owners
