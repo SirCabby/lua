@@ -424,9 +424,12 @@ end
 
 ---@diagnostic disable-next-line: duplicate-set-field
 function FollowState.BuildMenu()
+    local width = ImGui.GetContentRegionMax()
+    local maxwidth = ImGui.GetWindowContentRegionMax()
+
     ImGui.Text("Follow State Status")
 
-    ImGui.SameLine(math.max(ImGui.GetContentRegionAvail() - 68, 200))
+    ImGui.SameLine(math.max(width - 68, 200))
     ---@type boolean
     local clicked, result
     result, clicked = ImGui.Checkbox("Enabled", FollowState.IsEnabled())
@@ -435,11 +438,10 @@ function FollowState.BuildMenu()
     end
 
     local tableSorting_flags = bit32.bor(ImGuiTableFlags.RowBg, ImGuiTableFlags.BordersOuter, ImGuiTableFlags.BordersInner, ImGuiTableFlags.NoHostExtendX)
-
+    ImGui.PushStyleVar(ImGuiStyleVar.CellPadding, ImVec2(4.0, 4.0))
     if ImGui.BeginTable("t1", 2, tableSorting_flags) then
-        local width = ImGui.GetContentRegionAvail()
         ImGui.TableSetupColumn("col1", ImGuiTableColumnFlags.WidthFixed, 140)
-        ImGui.TableSetupColumn("col2", ImGuiTableColumnFlags.WidthFixed, width - 160)
+        ImGui.TableSetupColumn("col2", ImGuiTableColumnFlags.WidthStretch)
 
         ImGui.TableNextRow()
         ImGui.TableNextColumn()
@@ -471,6 +473,7 @@ function FollowState.BuildMenu()
 
         ImGui.EndTable()
     end
+    ImGui.PopStyleVar()
 end
 
 return FollowState
