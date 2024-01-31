@@ -1,25 +1,25 @@
 ---@diagnostic disable: duplicate-set-field
 
----@class State
-local State = { key = "State" }
+---@class BaseState
+local BaseState = { key = "BaseState" }
 
-function State.Init() end
+function BaseState.Init() end
 
 ---@return boolean isBusy true if this state has more work to do before continuing to child states
-function State.Go() return false end
+function BaseState.Go() return false end
 
-function State.BuildMenu()
+function BaseState.BuildMenu()
     ImGui.Text("No menu exists yet for this page")
 end
 
 ---@return boolean isEnabled
-function State.IsEnabled()
+function BaseState.IsEnabled()
     print("warn: no IsEnabled override for this state")
     return false
 end
 
 ---@param isEnabled boolean
-function State.SetEnabled(isEnabled)
+function BaseState.SetEnabled(isEnabled)
     print("warn: no SetEnabled override for this state")
     return {}
 end

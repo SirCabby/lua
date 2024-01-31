@@ -1,4 +1,4 @@
----@class SlashCmd : CommandType
+---@class SlashCmd : CommandBase
 ---@field cmdFunction function
 local SlashCmd = {}
 

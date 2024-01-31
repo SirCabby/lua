@@ -1,4 +1,4 @@
----@class Command : CommandType
+---@class Command : CommandBase
 ---@field eventFunction function
 ---@field phrasePatternOverrides table?
 ---@field registeredEvents table?

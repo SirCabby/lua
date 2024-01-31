@@ -36,7 +36,7 @@ Menu.Init = function()
         local stateDocs = ChelpDocs.new(function()
             local result = { "(/state) Registered States:" }
             for i, state in ipairs(Menu._.registrations.states) do
-                ---@type State
+                ---@type BaseState
                 state = state
                 result[#result+1] = i .. ") " .. state.key:sub(1, -6) .. ": " .. tostring(state.IsEnabled())
             end
@@ -58,7 +58,7 @@ Menu.Init = function()
             end
 
             for _, state in ipairs(Menu._.registrations.states) do
-                ---@type State
+                ---@type BaseState
                 state = state
                 if state.key:sub(1, -6):lower() == arg1 then
                     if arg2 ~= "" then
@@ -135,7 +135,7 @@ Menu.OpenMainMenu = function()
             if ImGui.BeginChild("listItems", 170, height, childWindowFlags) then
                 if ImGui.TreeNode("Configs") then
                     for i, config in ipairs(Menu._.registrations.configs) do
-                        ---@type CabbyConfig
+                        ---@type BaseConfig
                         config = config
                         local isSelected = selectedIndex == i + indexBase
                         if ImGui.Selectable(config.key:sub(1, -7), isSelected) then
@@ -157,7 +157,7 @@ Menu.OpenMainMenu = function()
                 indexBase = indexBase + #Menu._.registrations.configs
                 if ImGui.TreeNode("States") then
                     for i, state in ipairs(Menu._.registrations.states) do
-                        ---@type State
+                        ---@type BaseState
                         state = state
                         local isSelected = selectedIndex == i + indexBase
                         if ImGui.Selectable(state.key:sub(1, -6), isSelected) then
@@ -191,12 +191,12 @@ Menu.OpenMainMenu = function()
     end)
 end
 
----@param config CabbyConfig
+---@param config BaseConfig
 Menu.RegisterConfig = function(config)
     table.insert(Menu._.registrations.configs, config)
 end
 
----@param state State
+---@param state BaseState
 Menu.RegisterState = function(state)
     table.insert(Menu._.registrations.states, state)
 end

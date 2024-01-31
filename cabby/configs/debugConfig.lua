@@ -6,7 +6,7 @@ local Commands = require("cabby.commands.commands")
 local Menu = require("cabby.ui.menu")
 local SlashCmd = require("cabby.commands.slashcmd")
 
----@class CabbyConfig
+---@class DebugConfig : BaseConfig
 local DebugConfig = {
     key = "DebugConfig",
     _ = {

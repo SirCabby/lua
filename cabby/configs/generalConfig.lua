@@ -12,7 +12,7 @@ local Menu = require("cabby.ui.menu")
 local SlashCmd = require("cabby.commands.slashcmd")
 local Speak = require("cabby.commands.speak")
 
----@type CabbyConfig
+---@class GeneralConfig : BaseConfig
 local GeneralConfig = {
     key = "GeneralConfig",
     keys = {

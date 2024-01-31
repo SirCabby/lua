@@ -1,4 +1,4 @@
----@class Event : CommandType
+---@class Event : CommandBase
 ---@field eventFunction function
 ---@field reregister boolean reregister this event on event updates for last order preservation
 local Event = {}

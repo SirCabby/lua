@@ -1,7 +1,7 @@
 local Debug = require("utils.Debug.Debug")
 local TableUtils = require("utils.TableUtils.TableUtils")
 
----@class CabbyConfig
+---@class MeleeStateConfig : BaseConfig
 local MeleeStateConfig = {
     key = "MeleeState",
     _ = {

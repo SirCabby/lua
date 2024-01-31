@@ -1,10 +1,9 @@
 local mq = require("mq")
 
-local Character = require("cabby.character")
 local FollowState = require("cabby.states.followState")
 local MeleeState = require("cabby.states.meleeState")
 
----@type Class
+---@class Monk : BaseClass
 local Monk = {}
 
 ---@param abilityName string
@@ -48,21 +47,9 @@ end
 ---@diagnostic disable-next-line: duplicate-set-field
 Monk.Init = function(stateMachine)
     MeleeState.Init()
-    RegisterCombatAbilities()
-
-
-
-
-
+    -- RegisterCombatAbilities()
 
     FollowState.Init()
-
-
-
-
-
-
-
 
     stateMachine:Register(MeleeState)
     stateMachine:Register(FollowState)

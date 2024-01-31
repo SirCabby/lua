@@ -10,7 +10,7 @@ local Owners = require("cabby.commands.owners")
 local SlashCmd = require("cabby.commands.slashcmd")
 local Speak = require("cabby.commands.speak")
 
----@class CabbyConfig
+---@class CommandConfig : BaseConfig
 local CommandConfig = {
     key = "CommandConfig",
     _ = {
@@ -1320,7 +1320,7 @@ local function buildCHelpTab()
 
             local i = { value = 1, command = {}}
             for _, command in pairs(commands) do
-                ---@type CommandType
+                ---@type CommandBase
                 command = command
                 i.command = { command.command }
                 buildCommandList(i, command.docs)

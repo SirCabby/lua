@@ -15,7 +15,7 @@ local function passive()
     return false
 end
 
----@class FollowState : State
+---@class FollowState : BaseState
 local FollowState = {
     key = "FollowState",
     eventIds = {
@@ -424,8 +424,7 @@ end
 
 ---@diagnostic disable-next-line: duplicate-set-field
 function FollowState.BuildMenu()
-    local width = ImGui.GetContentRegionMax()
-    local maxwidth = ImGui.GetWindowContentRegionMax()
+    local width = ImGui.GetContentRegionAvail()
 
     ImGui.Text("Follow State Status")
 

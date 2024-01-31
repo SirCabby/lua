@@ -89,7 +89,7 @@ local function ClassSetup(stateMachine)
     local ftkey = Global.tracing.open("State Setup")
 
     local className = mq.TLO.Me.Class.ShortName()
-    ---@type Class
+    ---@type BaseClass
     local class
     if className == "BRD" then
     elseif className == "BST" then

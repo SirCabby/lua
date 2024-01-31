@@ -2,11 +2,11 @@
 
 local ImGui = require("ImGui")
 
----@class CabbyConfig
-local CabbyConfig = { key = "CabbyConfig" }
+---@class BaseConfig
+local BaseConfig = { key = "BaseConfig" }
 
-function CabbyConfig.Init() end
+function BaseConfig.Init() end
 
-function CabbyConfig.BuildMenu()
+function BaseConfig.BuildMenu()
     ImGui.Text("No menu exists yet for this page")
 end

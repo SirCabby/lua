@@ -25,7 +25,7 @@ end
 
 local function runChecks(self)
     for _, state in ipairs(self._.registeredStates) do
-        ---@type State
+        ---@type BaseState
         state = state
 
         if state:IsEnabled() then
@@ -36,7 +36,7 @@ local function runChecks(self)
     end
 end
 
----@param state State
+---@param state BaseState
 function StateMachine:Register(state)
     table.insert(self._.registeredStates, state)
 end
