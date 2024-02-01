@@ -60,10 +60,15 @@ CommonUI.ActionControl = function(liveAction, actions)
     local baseAction = GetBaseAction(liveAction)
     local actionIndex = TableUtils.ArrayIndexOf(actions, liveAction)
 
+    local editMode = baseAction.editing
+    if editMode then
+        ImGui.PushStyleColor(ImGuiCol.ChildBg, 0.2, 0.13, 0, 1)
+    end
+
     local childFlags = bit32.bor(ImGuiChildFlags.Border, ImGuiChildFlags.AutoResizeX)
     if ImGui.BeginChild("actionChild" .. tostring(actionIndex), math.max(width, 532), 38, childFlags) then
         ImGui.BeginDisabled()
-        local enabled, pressed = ImGui.Checkbox("Enabled", baseAction.editing)
+        local enabled, pressed = ImGui.Checkbox("Enabled", baseAction.enabled)
         if pressed then
             baseAction.editing = enabled
         end
@@ -126,6 +131,10 @@ CommonUI.ActionControl = function(liveAction, actions)
         end
     end
     ImGui.EndChild()
+
+    if editMode then
+        ImGui.PopStyleColor()
+    end
 end
 
 return CommonUI
