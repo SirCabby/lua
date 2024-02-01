@@ -200,4 +200,17 @@ function TableUtils.ArrayAppend(arrayToAppendTo, valuesToAppend)
     end
 end
 
+---@param array array
+---@param obj any
+---@return integer index in array or -1 if not in the array
+function TableUtils.ArrayIndexOf(array, obj)
+    for index, value in ipairs(array) do
+        if obj == value then
+            return index
+        end
+    end
+
+    return -1
+end
+
 return TableUtils
