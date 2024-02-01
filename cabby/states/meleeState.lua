@@ -4,10 +4,12 @@ local Debug = require("utils.Debug.Debug")
 local Timer = require("utils.Time.Timer")
 local StringUtils = require("utils.StringUtils.StringUtils")
 
+local BaseAction = require("cabby.actions.baseAction")
 local Character = require("cabby.character")
 local ChelpDocs = require("cabby.commands.chelpDocs")
 local Command = require("cabby.commands.command")
 local Commands = require("cabby.commands.commands")
+local CommonUI = require("cabby.ui.commonUI")
 local MeleeStateConfig = require("cabby.configs.meleeStateConfig")
 local Menu = require("cabby.ui.menu")
 local UserInput = require("cabby.utils.userinput")
@@ -16,7 +18,7 @@ local function passive()
     return false
 end
 
----@class MeleeState : State
+---@class MeleeState : BaseState
 local MeleeState = {
     key = "MeleeState",
     eventIds = {
@@ -30,9 +32,6 @@ local MeleeState = {
         meleeActions = {
             checkForCombat = passive,
             attackTarget = passive
-        },
-        registrations = {
-            abilities = {}
         },
         primaryAbilityChoices = {},
         menu = {
@@ -50,7 +49,9 @@ local function Reset()
     MeleeState._.currentAction = MeleeState._.meleeActions.checkForCombat
     MeleeState._.currentTargetID = 0
     MeleeState._.currentActionTimer = Timer.new(0)
-    mq.cmd("/stick off")
+    if mq.TLO.Stick.Active() or mq.TLO.Stick.Paused() then
+        mq.cmd("/stick off")
+    end
 end
 
 ---@return boolean isIncapacitated
@@ -99,7 +100,7 @@ end
 local function BuildPrimaryAbilityArray()
     MeleeState._.primaryAbilityChoices = {}
     for _, value in pairs(MeleeStateConfig._.primaryCombatAbilities) do
-        if Character.HasAbility(value) then
+        if Character.HasAbility(value) or value == MeleeStateConfig._.primaryCombatAbilities.none then
             MeleeState._.primaryAbilityChoices[#MeleeState._.primaryAbilityChoices+1] = value
 
             if MeleeStateConfig.GetPrimaryCombatAbility() == value then
@@ -158,11 +159,11 @@ MeleeState._.meleeActions.attackTarget = function()
         DoPrimaryCombatAction()
 
         for _, meleeFunc in ipairs(MeleeState._.registrations.abilities) do
-            ---@type CabbyAction
-            meleeFunc = meleeFunc
-            if meleeFunc.enabled then
-                meleeFunc.actionFunction()
-            end
+            -- ---@type CabbyAction
+            -- meleeFunc = meleeFunc
+            -- if meleeFunc.enabled then
+            --     meleeFunc.actionFunction()
+            -- end
         end
     end
 
@@ -214,9 +215,9 @@ function MeleeState.Go()
     return MeleeState._.currentAction()
 end
 
----@param meleeAction CabbyAction
+---@param meleeAction BaseAction
 MeleeState.RegisterAction = function(meleeAction)
-    table.insert(MeleeState._.registrations.abilities, meleeAction)
+    --table.insert(MeleeState._.registrations.abilities, meleeAction)
 end
 
 MeleeState.IsFacingTarget = function()
@@ -253,10 +254,11 @@ function MeleeState.BuildMenu()
         MeleeState.SetEnabled(result)
     end
 
-    local tableSorting_flags = bit32.bor(ImGuiTableFlags.RowBg, ImGuiTableFlags.BordersOuter, ImGuiTableFlags.BordersInner)
+    ImGui.PushStyleVar(ImGuiStyleVar.CellPadding, ImVec2(4.0, 4.0))
+    local tableSorting_flags = bit32.bor(ImGuiTableFlags.RowBg, ImGuiTableFlags.BordersOuter, ImGuiTableFlags.BordersInner, ImGuiTableFlags.NoHostExtendX)
     if ImGui.BeginTable("t1", 2, tableSorting_flags) then
         ImGui.TableSetupColumn("col1", ImGuiTableColumnFlags.WidthFixed, 140)
-        ImGui.TableSetupColumn("col2", ImGuiTableColumnFlags.WidthFixed, 800)
+        ImGui.TableSetupColumn("col2", ImGuiTableColumnFlags.WidthStretch)
 
         ImGui.TableNextRow()
         ImGui.TableNextColumn()
@@ -284,6 +286,8 @@ function MeleeState.BuildMenu()
 
         ImGui.EndTable()
     end
+    ImGui.PopStyleVar()
+
 
     ImGui.PushStyleVar(ImGuiStyleVar.CellPadding, ImVec2(7.0, 7.0))
     local table2_flags = bit32.bor(ImGuiTableFlags.RowBg)
@@ -393,6 +397,25 @@ function MeleeState.BuildMenu()
         ImGui.EndTable()
     end
     ImGui.PopStyleVar()
+
+    ImGui.SeparatorText("Melee Actions");
+
+    local actions = MeleeStateConfig.GetActions()
+    if ImGui.Button("Add", 50, 23) then
+        local newAction = {}
+        actions[#actions+1] = newAction
+        Global.configStore:SaveConfig()
+    end
+
+    for i, action in ipairs(actions) do
+        if i % 2 == 0 then
+            ImGui.PushStyleColor(ImGuiCol.ChildBg, 0.1, 0.1, 0.1, 1)
+        else
+            ImGui.PushStyleColor(ImGuiCol.ChildBg, 0.15, 0.15, 0.15, 1)
+        end
+        CommonUI.ActionControl(action, actions)
+        ImGui.PopStyleColor()
+    end
 end
 
 return MeleeState

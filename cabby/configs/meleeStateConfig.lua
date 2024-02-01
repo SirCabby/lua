@@ -12,12 +12,12 @@ local MeleeStateConfig = {
             flyingkick = "flyingkick",
             roundkick = "roundkick",
             kick = "kick",
-            none = "",
+            none = "none",
         },
         secondaryCombatAbilities = {
             disarm = "disarm",
             taunt = "taunt",
-            none = "",
+            none = "none",
         }
     }
 }
@@ -151,6 +151,11 @@ function MeleeStateConfig.SetPrimaryCombatAbility(primary_combat_ability)
         getConfigSection().primary_combat_ability = primary_combat_ability
         MeleeStateConfig._.config:SaveConfig()
     end
+end
+
+---@return array actions
+function MeleeStateConfig.GetActions()
+    return getConfigSection().actions
 end
 
 return MeleeStateConfig
