@@ -129,6 +129,16 @@ CommonUI.ActionControl = function(liveAction, actions)
             table.remove(actions, actionIndex)
             Global.configStore:SaveConfig()
         end
+
+        ---- EDITING ----
+        if baseAction.editing then
+            ImGui.Text("") -- TODO Remove
+
+            ImGui.SameLine(math.max(width - 89, 443))
+            if ImGui.Button("Save", 50, 22) then
+                baseAction:SaveEdit()
+            end
+        end
     end
     ImGui.EndChild()
 
