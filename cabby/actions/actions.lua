@@ -1,3 +1,5 @@
+local StringUtils = require("utils.StringUtils.StringUtils")
+
 local Skills = require("cabby.actions.skills")
 
 local Actions = {}
@@ -9,7 +11,8 @@ Actions.ability = "ability"
 ---@return Action? action
 Actions.Get = function(type, name)
     if type:lower() == Actions.ability then
-        return Skills[name:lower()]
+        local skillname = StringUtils.Join(StringUtils.Split(name:lower())) -- this removes spaces and lowercases it
+        return Skills[skillname]
     end
 end
 
