@@ -1,24 +1,14 @@
 local Debug = require("utils.Debug.Debug")
 local TableUtils = require("utils.TableUtils.TableUtils")
 
+local Character = require("cabby.character")
+local Skills = require("cabby.actions.skills")
+
 ---@class MeleeStateConfig : BaseConfig
 local MeleeStateConfig = {
     key = "MeleeState",
     _ = {
-        isInit = false,
-        config = {},
-        primaryCombatAbilities = {
-            bash = "bash",
-            flyingkick = "flyingkick",
-            roundkick = "roundkick",
-            kick = "kick",
-            none = "none",
-        },
-        secondaryCombatAbilities = {
-            disarm = "disarm",
-            taunt = "taunt",
-            none = "none",
-        }
+        isInit = false
     }
 }
 
@@ -28,14 +18,14 @@ local function DebugLog(str)
 end
 
 local function getConfigSection()
-    return MeleeStateConfig._.config:GetConfigRoot()[MeleeStateConfig.key]
+    return Global.configStore:GetConfigRoot()[MeleeStateConfig.key]
 end
 
 local function initAndValidate()
     local taint = false
     if getConfigSection() == nil then
         DebugLog("MeleeStateConfig Section was not set, updating...")
-        MeleeStateConfig._.config:GetConfigRoot()[MeleeStateConfig.key] = {}
+        Global.configStore:GetConfigRoot()[MeleeStateConfig.key] = {}
         taint = true
     end
 
@@ -57,7 +47,8 @@ local function initAndValidate()
     end
 
     if configRoot.primary_combat_ability == nil then
-        configRoot.primary_combat_ability = MeleeStateConfig._.primaryCombatAbilities.none
+        print("hi")
+        configRoot.primary_combat_ability = Skills.none:Name()
         taint = true
     end
 
@@ -67,8 +58,16 @@ local function initAndValidate()
     end
 
     if taint then
-        MeleeStateConfig._.config:SaveConfig()
+        Global.configStore:SaveConfig()
     end
+end
+
+local function IsValidActiontype(actions, actionName)
+    local actionNames = {}
+    for _, action in ipairs(actions) do
+        actionNames[#actionNames+1] = action:Name()
+    end
+    return TableUtils.ArrayContains(actionNames, actionName)
 end
 
 ---Initialize the static object, only done once
@@ -76,7 +75,6 @@ end
 function MeleeStateConfig.Init()
     if not MeleeStateConfig._.isInit then
         local ftkey = Global.tracing.open("MeleeStateConfig Setup")
-        MeleeStateConfig._.config = Global.configStore
 
         initAndValidate()
 
@@ -95,7 +93,7 @@ end
 ---@param enable boolean
 function MeleeStateConfig.SetEnabled(enable)
     getConfigSection().enabled = enable == true
-    MeleeStateConfig._.config:SaveConfig()
+    Global.configStore:SaveConfig()
     print("MeleeState is Enabled: [" .. tostring(enable) .. "]")
 end
 
@@ -107,7 +105,7 @@ end
 ---@param enable boolean
 function MeleeStateConfig.SetAutoEngage(enable)
     getConfigSection().auto_engage = enable == true
-    MeleeStateConfig._.config:SaveConfig()
+    Global.configStore:SaveConfig()
     print("MeleeState Auto-Engage is Enabled: [" .. tostring(enable) .. "]")
 end
 
@@ -119,7 +117,7 @@ end
 ---@param enable boolean
 function MeleeStateConfig.SetStick(enable)
     getConfigSection().stick = enable == true
-    MeleeStateConfig._.config:SaveConfig()
+    Global.configStore:SaveConfig()
     print("MeleeState stick: [" .. tostring(enable) .. "]")
 end
 
@@ -131,25 +129,25 @@ end
 ---@param distance number
 function MeleeStateConfig.SetEngageDistance(distance)
     getConfigSection().engage_distance = math.max(math.min(distance, 500), 0)
-    MeleeStateConfig._.config:SaveConfig()
+    Global.configStore:SaveConfig()
 end
 
 ---@return string primary_combat_ability
 function MeleeStateConfig.GetPrimaryCombatAbility()
     local currentAbility = getConfigSection().primary_combat_ability
-    if not TableUtils.ArrayContains(TableUtils.GetValues(MeleeStateConfig._.primaryCombatAbilities), currentAbility) then
-        currentAbility = MeleeStateConfig._.primaryCombatAbilities.none
+    if not IsValidActiontype(Character.primaryMeleeAbilities, currentAbility) then
+        currentAbility = Skills.none:Name()
         getConfigSection().primary_combat_ability = currentAbility
-        MeleeStateConfig._.config:SaveConfig()
+        Global.configStore:SaveConfig()
     end
     return currentAbility
 end
 
 ---@param primary_combat_ability string
 function MeleeStateConfig.SetPrimaryCombatAbility(primary_combat_ability)
-    if TableUtils.ArrayContains(TableUtils.GetValues(MeleeStateConfig._.primaryCombatAbilities), primary_combat_ability) then
+    if IsValidActiontype(Character.primaryMeleeAbilities, primary_combat_ability) then
         getConfigSection().primary_combat_ability = primary_combat_ability
-        MeleeStateConfig._.config:SaveConfig()
+        Global.configStore:SaveConfig()
     end
 end
 

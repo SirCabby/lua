@@ -1,34 +1,41 @@
-local mq = require("mq")
-
-local Debug = require("utils.Debug.Debug")
-local TableUtils = require("utils.TableUtils.TableUtils")
+local Skills = require("cabby.actions.skills")
 
 ---@class Character
 local Character = {
     key = "Character",
+    primaryMeleeAbilities = {},
+    secondaryMeleeAbilities = {},
+    meleeAbilities = {},
     _ = {
-        isInit = false,
-        config = {},
-        character = {
-            abilities = {}
-        }
+        primaryOrder = { Skills.slam, Skills.bash, Skills.backstab, Skills.flyingkick, Skills.roundkick, Skills.kick },
+        secondaryOrder = { Skills.dragonpunch, Skills.tailrake, Skills.eaglestrike, Skills.tigerclaw },
     }
 }
 
----@param str string
-local function DebugLog(str)
-    Debug.Log(Character.key, str)
-end
-
 local function loadAbilities()
-    for i = 0, 250 do
-        local ability = mq.TLO.Me.Ability(i)
-        if ability ~= nil then
-            ability = ability()
-            local skill = mq.TLO.Me.Skill(ability)()
-            if ability ~= "" and skill ~= nil and skill > 0 then
-                table.insert(Character._.character.abilities, ability)
-            end
+    -- Primary Melee Abilities
+    Character.primaryMeleeAbilities = {}
+    for _, skill in ipairs(Character._.primaryOrder) do
+        if skill:HasSkill() then
+            Character.primaryMeleeAbilities[#Character.primaryMeleeAbilities+1] = skill
+        end
+    end
+    Character.primaryMeleeAbilities[#Character.primaryMeleeAbilities+1] = Skills.none
+
+    -- Secondary Melee Abilities (Monk)
+    Character.secondaryMeleeAbilities = {}
+    for _, skill in ipairs(Character._.secondaryOrder) do
+        if skill:HasSkill() then
+            Character.secondaryMeleeAbilities[#Character.secondaryMeleeAbilities+1] = skill
+        end
+    end
+    Character.secondaryMeleeAbilities[#Character.secondaryMeleeAbilities+1] = Skills.none
+
+    -- Melee Abilities
+    Character.meleeAbilities = {}
+    for _, skill in ipairs(Skills.melee) do
+        if skill:HasSkill() then
+            Character.meleeAbilities[#Character.meleeAbilities+1] = skill
         end
     end
 end
@@ -39,12 +46,6 @@ Character.Refresh = function()
     -- aa
     -- combatabilities (discs?) auras?
     -- songs
-end
-
----@param ability string
----@return boolean hasAbility
-Character.HasAbility = function(ability)
-    return TableUtils.ArrayContains(Character._.character.abilities, ability)
 end
 
 return Character

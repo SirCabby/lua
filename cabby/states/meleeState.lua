@@ -3,13 +3,14 @@ local mq = require("mq")
 local Debug = require("utils.Debug.Debug")
 local Timer = require("utils.Time.Timer")
 local StringUtils = require("utils.StringUtils.StringUtils")
+local TableUtils = require("utils.TableUtils.TableUtils")
 
-local BaseAction = require("cabby.actions.baseAction")
+local ActionUI = require("cabby.ui.actions.actionUI")
+local AvailableActions = require("cabby.actions.availableActions")
 local Character = require("cabby.character")
 local ChelpDocs = require("cabby.commands.chelpDocs")
 local Command = require("cabby.commands.command")
 local Commands = require("cabby.commands.commands")
-local CommonUI = require("cabby.ui.commonUI")
 local MeleeStateConfig = require("cabby.configs.meleeStateConfig")
 local Menu = require("cabby.ui.menu")
 local UserInput = require("cabby.utils.userinput")
@@ -98,16 +99,8 @@ local function DoPrimaryCombatAction()
 end
 
 local function BuildPrimaryAbilityArray()
-    MeleeState._.primaryAbilityChoices = {}
-    for _, value in pairs(MeleeStateConfig._.primaryCombatAbilities) do
-        if Character.HasAbility(value) or value == MeleeStateConfig._.primaryCombatAbilities.none then
-            MeleeState._.primaryAbilityChoices[#MeleeState._.primaryAbilityChoices+1] = value
-
-            if MeleeStateConfig.GetPrimaryCombatAbility() == value then
-                MeleeState._.menu.selectedPrimaryAbility = #MeleeState._.primaryAbilityChoices
-            end
-        end
-    end
+    MeleeState._.primaryAbilityChoices = TableUtils.GetValues(Character.primaryMeleeAbilities)
+    MeleeState._.menu.selectedPrimaryAbility = TableUtils.ArrayIndexOf(MeleeState._.primaryAbilityChoices, MeleeStateConfig.GetPrimaryCombatAbility())
 end
 
 MeleeState._.meleeActions.checkForCombat = function()
@@ -158,13 +151,13 @@ MeleeState._.meleeActions.attackTarget = function()
 
         DoPrimaryCombatAction()
 
-        for _, meleeFunc in ipairs(MeleeState._.registrations.abilities) do
+        -- for _, meleeFunc in ipairs(MeleeState._.registrations.abilities) do
             -- ---@type CabbyAction
             -- meleeFunc = meleeFunc
             -- if meleeFunc.enabled then
             --     meleeFunc.actionFunction()
             -- end
-        end
+        -- end
     end
 
     return true
@@ -213,11 +206,6 @@ end
 ---@diagnostic disable-next-line: duplicate-set-field
 function MeleeState.Go()
     return MeleeState._.currentAction()
-end
-
----@param meleeAction BaseAction
-MeleeState.RegisterAction = function(meleeAction)
-    --table.insert(MeleeState._.registrations.abilities, meleeAction)
 end
 
 MeleeState.IsFacingTarget = function()
@@ -383,11 +371,14 @@ function MeleeState.BuildMenu()
         ImGui.SameLine()
 
         ImGui.PushItemWidth(100)
-        if ImGui.BeginCombo("Primary Combat Skill##foo1", MeleeStateConfig.GetPrimaryCombatAbility()) then
+        if ImGui.BeginCombo("Primary Melee Skill##foo1", MeleeStateConfig.GetPrimaryCombatAbility()) then
             for index, value in ipairs(MeleeState._.primaryAbilityChoices) do
-                if ImGui.Selectable(value, MeleeState._.menu.selectedPrimaryAbility == index) then
+                ---@type Skill
+                value = value
+                local _, pressed = ImGui.Selectable(value:Name(), MeleeState._.menu.selectedPrimaryAbility == index)
+                if pressed then
                     MeleeState._.menu.selectedPrimaryAbility = index
-                    MeleeStateConfig.SetPrimaryCombatAbility(value)
+                    MeleeStateConfig.SetPrimaryCombatAbility(value:Name())
                 end
             end
             ImGui.EndCombo()
@@ -404,8 +395,10 @@ function MeleeState.BuildMenu()
     if ImGui.Button("Add", 50, 23) then
         local newAction = {}
         actions[#actions+1] = newAction
-        Global.configStore:SaveConfig()
     end
+
+    local availableActions = AvailableActions.new()
+    availableActions.abilities = Character.meleeAbilities
 
     for i, action in ipairs(actions) do
         if i % 2 == 0 then
@@ -413,7 +406,7 @@ function MeleeState.BuildMenu()
         else
             ImGui.PushStyleColor(ImGuiCol.ChildBg, 0.15, 0.15, 0.15, 1)
         end
-        CommonUI.ActionControl(action, actions)
+        ActionUI.ActionControl(action, actions, availableActions)
         ImGui.PopStyleColor()
     end
 end

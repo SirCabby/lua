@@ -1,12 +1,12 @@
 local TableUtils = require("utils.TableUtils.TableUtils")
 
-local BaseAction = require("cabby.actions.baseAction")
+local EditAction = require("cabby.ui.actions.editAction")
 
----@class AbilityAction : BaseAction
+---@class AbilityAction : EditAction
 local AbilityAction = {
     actionType = "ability"
 }
-AbilityAction.__index = BaseAction
+AbilityAction.__index = EditAction
 
 setmetatable(AbilityAction, {
     __call = function (cls, ...)
@@ -17,11 +17,9 @@ setmetatable(AbilityAction, {
 AbilityAction.new = function(liveAction)
     local self = setmetatable(TableUtils.DeepClone(liveAction) or {}, AbilityAction)
 
+    self.enabled = true
     self.actionType = "ability"
-    self.range = 14
-    self.requiresTarget = true
-    self.facingTarget = true
-    self.LoS = true
+    self.lua = ""
     self.liveAction = liveAction
 
     return self
