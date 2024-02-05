@@ -35,8 +35,10 @@ local MeleeState = {
             attackTarget = passive
         },
         primaryAbilityChoices = {},
+        secondaryAbilityChoices = {},
         menu = {
-            selectedPrimaryAbility = 1
+            selectedPrimaryAbility = 1,
+            selectedSecondaryAbility = 1
         }
     }
 }
@@ -100,6 +102,7 @@ end
 
 local function BuildPrimaryAbilityArray()
     MeleeState._.primaryAbilityChoices = TableUtils.GetValues(Character.primaryMeleeAbilities)
+    MeleeState._.secondaryAbilityChoices = TableUtils.GetValues(Character.secondaryMeleeAbilities)
     MeleeState._.menu.selectedPrimaryAbility = TableUtils.ArrayIndexOf(MeleeState._.primaryAbilityChoices, MeleeStateConfig.GetPrimaryCombatAbility())
 end
 
@@ -371,7 +374,7 @@ function MeleeState.BuildMenu()
         ImGui.SameLine()
 
         ImGui.PushItemWidth(100)
-        if ImGui.BeginCombo("Primary Melee Skill##foo1", MeleeStateConfig.GetPrimaryCombatAbility()) then
+        if ImGui.BeginCombo("Primary Melee Skill##foo7", MeleeStateConfig.GetPrimaryCombatAbility()) then
             for index, value in ipairs(MeleeState._.primaryAbilityChoices) do
                 ---@type Skill
                 value = value
@@ -383,6 +386,23 @@ function MeleeState.BuildMenu()
             end
             ImGui.EndCombo()
         end
+
+        if mq.TLO.Me.Class.ShortName() == "MNK" then
+            ImGui.SameLine()
+            if ImGui.BeginCombo("Secondary Melee Skill##foo8", MeleeStateConfig.GetSecondaryCombatAbility()) then
+                for index, value in ipairs(MeleeState._.secondaryAbilityChoices) do
+                    ---@type Skill
+                    value = value
+                    local _, pressed = ImGui.Selectable(value:Name(), MeleeState._.menu.selectedSecondaryAbility == index)
+                    if pressed then
+                        MeleeState._.menu.selectedSecondaryAbility = index
+                        MeleeStateConfig.SetSecondaryCombatAbility(value:Name())
+                    end
+                end
+                ImGui.EndCombo()
+            end
+        end
+
         ImGui.PopItemWidth()
 
         ImGui.EndTable()
@@ -393,7 +413,7 @@ function MeleeState.BuildMenu()
 
     local actions = MeleeStateConfig.GetActions()
     if ImGui.Button("Add", 50, 23) then
-        local newAction = { editing = true }
+        local newAction = {}
         actions[#actions+1] = newAction
     end
 

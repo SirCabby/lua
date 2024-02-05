@@ -41,6 +41,7 @@ local function GetUpdatedActionType(expectedActionType, action)
             updatedAction = action:SwitchType(EditAbilityAction)
         else
             updatedAction = action:SwitchType(EditAction)
+            updatedAction.editing = true
         end
     end
 

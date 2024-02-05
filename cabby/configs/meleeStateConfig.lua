@@ -48,8 +48,12 @@ local function initAndValidate()
     end
 
     if configRoot.primary_combat_ability == nil then
-        print("hi")
         configRoot.primary_combat_ability = Skills.none:Name()
+        taint = true
+    end
+
+    if configRoot.secondary_combat_ability == nil then
+        configRoot.secondary_combat_ability = Skills.none:Name()
         taint = true
     end
 
@@ -156,6 +160,25 @@ end
 function MeleeStateConfig.SetPrimaryCombatAbility(primary_combat_ability)
     if IsValidActiontype(Character.primaryMeleeAbilities, primary_combat_ability) then
         getConfigSection().primary_combat_ability = primary_combat_ability
+        Global.configStore:SaveConfig()
+    end
+end
+
+---@return string secondary_combat_ability
+function MeleeStateConfig.GetSecondaryCombatAbility()
+    local currentAbility = getConfigSection().secondary_combat_ability
+    if not IsValidActiontype(Character.secondaryMeleeAbilities, currentAbility) then
+        currentAbility = Skills.none:Name()
+        getConfigSection().secondary_combat_ability = currentAbility
+        Global.configStore:SaveConfig()
+    end
+    return currentAbility
+end
+
+---@param secondary_combat_ability string
+function MeleeStateConfig.SetSecondaryCombatAbility(secondary_combat_ability)
+    if IsValidActiontype(Character.secondaryMeleeAbilities, secondary_combat_ability) then
+        getConfigSection().secondary_combat_ability = secondary_combat_ability
         Global.configStore:SaveConfig()
     end
 end
