@@ -16,7 +16,7 @@ local function loadAbilities()
     -- Primary Melee Abilities
     Character.primaryMeleeAbilities = {}
     for _, skill in ipairs(Character._.primaryOrder) do
-        if skill:HasSkill() then
+        if skill:HasAction() then
             Character.primaryMeleeAbilities[#Character.primaryMeleeAbilities+1] = skill
         end
     end
@@ -25,7 +25,7 @@ local function loadAbilities()
     -- Secondary Melee Abilities (Monk)
     Character.secondaryMeleeAbilities = {}
     for _, skill in ipairs(Character._.secondaryOrder) do
-        if skill:HasSkill() then
+        if skill:HasAction() then
             Character.secondaryMeleeAbilities[#Character.secondaryMeleeAbilities+1] = skill
         end
     end
@@ -34,7 +34,7 @@ local function loadAbilities()
     -- Melee Abilities
     Character.meleeAbilities = {}
     for _, skill in ipairs(Skills.melee) do
-        if skill:HasSkill() then
+        if skill:HasAction() then
             Character.meleeAbilities[#Character.meleeAbilities+1] = skill
         end
     end

@@ -1,7 +1,7 @@
 ---@diagnostic disable: undefined-field
 local mq = require("mq")
 
----@class Skill
+---@class Skill : Action
 local Skill = {}
 Skill.__index = Skill
 
@@ -70,7 +70,7 @@ function Skill:Hate()
 end
 
 ---@return boolean
-function Skill:HasSkill()
+function Skill:HasAction()
     if self:Name() == "none" then return true end
     local skillValue = mq.TLO.Me.Skill(self:Name())()
     return type(skillValue) == "number" and skillValue > 0

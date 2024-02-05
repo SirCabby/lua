@@ -20,6 +20,7 @@ AbilityAction.new = function(liveAction)
     self.enabled = true
     self.actionType = "ability"
     self.lua = ""
+    self.name = liveAction.name
     self.liveAction = liveAction
 
     return self

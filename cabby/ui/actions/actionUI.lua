@@ -107,6 +107,7 @@ ActionUI.ActionControl = function(liveAction, actions, availableActions)
                         if editAction.actionType ~= actionType then
                             editAction = GetUpdatedActionType(actionType, editAction)
                             editAction.editing = true
+                            editAction.name = nil
                             ActionUI._.actions[editAction.liveAction] = editAction
                         end
                     end
@@ -127,6 +128,20 @@ ActionUI.ActionControl = function(liveAction, actions, availableActions)
         ImGui.SameLine()
         ImGui.PushItemWidth(200)
         if ImGui.BeginCombo("##name" .. actionIndex, editAction.name) then
+            local actionChoices = {}
+            if editAction.actionType == EditAbilityAction.actionType then
+                actionChoices = availableActions.abilities
+            end
+
+            for _, action in ipairs(actionChoices) do
+                ---@type Action
+                action = action
+                local _, pressed = ImGui.Selectable(action:Name(), editAction.name == action:Name())
+                if pressed then
+                    editAction.name = action:Name()
+                end
+            end
+
             ImGui.EndCombo()
         end
         ImGui.PopItemWidth()
