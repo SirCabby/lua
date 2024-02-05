@@ -23,7 +23,7 @@ Skills.disarm =      Skill.new("Disarm")
 Skills.dragonpunch = Skill.new("Dragon Punch")
 Skills.eaglestrike = Skill.new("Eagle Strike")
 Skills.flyingkick =  Skill.new("Flying Kick")
-Skills.intimidate =  Skill.new("Intimidate")
+Skills.intimidation =  Skill.new("Intimidation")
 Skills.kick =        Skill.new("Kick")
 Skills.roundkick =   Skill.new("Round Kick")
 Skills.slam =        Skill.new("Slam")
@@ -50,17 +50,17 @@ local setAttribute = function(attr, ...)
 end
 
 setAttribute("damage",
-Skills.backstab, Skills.bash, Skills.dragonpunch, Skills.eaglestrike, Skills.flyingkick, Skills.intimidate,
+Skills.backstab, Skills.bash, Skills.dragonpunch, Skills.eaglestrike, Skills.flyingkick, Skills.intimidation,
 Skills.kick, Skills.roundkick, Skills.slam, Skills.tailrake, Skills.tigerclaw)
 
 setAttribute("fear",
-Skills.intimidate)
+Skills.intimidation)
 
 setAttribute("hate",
 Skills.taunt)
 
 setAttribute("melee",
-Skills.begging, Skills.disarm, Skills.intimidate, Skills.taunt)
+Skills.begging, Skills.disarm, Skills.intimidation, Skills.taunt)
 
 setAttribute("primary",
 Skills.backstab, Skills.bash, Skills.flyingkick, Skills.kick, Skills.roundkick, Skills.slam)
@@ -76,7 +76,7 @@ Skills.bash, Skills.slam)
 
 setAttribute("targeted",
 Skills.backstab, Skills.bash, Skills.begging, Skills.disarm, Skills.dragonpunch, Skills.eaglestrike,
-Skills.flyingkick, Skills.intimidate, Skills.kick, Skills.roundkick, Skills.slam, Skills.taunt,
+Skills.flyingkick, Skills.intimidation, Skills.kick, Skills.roundkick, Skills.slam, Skills.taunt,
 Skills.tailrake, Skills.tigerclaw)
 
 return Skills
