@@ -18,7 +18,8 @@ Skill.new = function(name)
 
 ---@diagnostic disable-next-line: inject-field
     self._ = {
-        name = name
+        name = name,
+        actionType = "ability"
     }
 
     return self
@@ -67,6 +68,11 @@ end
 ---@return boolean
 function Skill:Hate()
     return self._.hate
+end
+
+---@return string
+function Skill:ActionType()
+    return self._.actionType
 end
 
 ---@return boolean

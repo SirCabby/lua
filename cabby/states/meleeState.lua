@@ -393,7 +393,7 @@ function MeleeState.BuildMenu()
 
     local actions = MeleeStateConfig.GetActions()
     if ImGui.Button("Add", 50, 23) then
-        local newAction = {}
+        local newAction = { editing = true }
         actions[#actions+1] = newAction
     end
 

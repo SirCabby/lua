@@ -2,6 +2,7 @@ local Debug = require("utils.Debug.Debug")
 local TableUtils = require("utils.TableUtils.TableUtils")
 
 local Character = require("cabby.character")
+local EditAction = require("cabby.ui.actions.editAction")
 local Skills = require("cabby.actions.skills")
 
 ---@class MeleeStateConfig : BaseConfig
@@ -55,6 +56,14 @@ local function initAndValidate()
     if configRoot.actions == nil then
         configRoot.actions = {}
         taint = true
+    end
+
+    for i = #configRoot.actions, 1, -1 do
+        local action = configRoot.actions[i]
+        if action.actionType == nil or action.actionType == EditAction.actionType then
+            table.remove(configRoot.actions, i)
+            taint = true
+        end
     end
 
     if taint then

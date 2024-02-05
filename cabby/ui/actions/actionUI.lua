@@ -153,6 +153,11 @@ ActionUI.ActionControl = function(liveAction, actions, availableActions)
             ImGui.SameLine(math.max(width - 89, 443))
             if ImGui.Button("Cancel", 50, 22) then
                 editAction:CancelEdit()
+                if editAction.actionType == EditAction.actionType then
+                    ActionUI._.actions[editAction] = nil
+                    table.remove(actions, actionIndex)
+                    Global.configStore:SaveConfig()
+                end
             end
         else
             ImGui.SameLine(math.max(width - 89, 443))
@@ -172,8 +177,16 @@ ActionUI.ActionControl = function(liveAction, actions, availableActions)
         if editAction.editing then
             ImGui.Text("")
             ImGui.SameLine(math.max(width - 89, 443))
+            local cannotSave = false
+            if editAction.name == nil or editAction.name == "" then
+                ImGui.BeginDisabled()
+                cannotSave = true
+            end
             if ImGui.Button("Save", 50, 22) then
                 editAction:SaveEdit()
+            end
+            if cannotSave then
+                ImGui.EndDisabled()
             end
         end
     end
