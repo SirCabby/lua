@@ -5,6 +5,7 @@ local Timer = require("utils.Time.Timer")
 local StringUtils = require("utils.StringUtils.StringUtils")
 local TableUtils = require("utils.TableUtils.TableUtils")
 
+local Actions = require("cabby.actions.actions")
 local ActionUI = require("cabby.ui.actions.actionUI")
 local AvailableActions = require("cabby.actions.availableActions")
 local Character = require("cabby.character")
@@ -13,6 +14,7 @@ local Command = require("cabby.commands.command")
 local Commands = require("cabby.commands.commands")
 local MeleeStateConfig = require("cabby.configs.meleeStateConfig")
 local Menu = require("cabby.ui.menu")
+local Skills = require("cabby.actions.skills")
 local UserInput = require("cabby.utils.userinput")
 
 local function passive()
@@ -93,17 +95,18 @@ end
 
 local function DoPrimaryCombatAction()
     local primaryAction = MeleeStateConfig.GetPrimaryCombatAbility()
-    if primaryAction == MeleeStateConfig._.primaryCombatAbilities.none then return end
+    if primaryAction == Skills.none then return end
 
-    if mq.TLO.Me.AbilityReady(primaryAction) and MeleeState.IsTargetInCombatAbilityRange() and MeleeState.IsFacingTarget() then
-        mq.cmd("/doability " .. primaryAction)
+    if primaryAction:IsReady() then
+        primaryAction:DoAction()
     end
 end
 
 local function BuildPrimaryAbilityArray()
     MeleeState._.primaryAbilityChoices = TableUtils.GetValues(Character.primaryMeleeAbilities)
     MeleeState._.secondaryAbilityChoices = TableUtils.GetValues(Character.secondaryMeleeAbilities)
-    MeleeState._.menu.selectedPrimaryAbility = TableUtils.ArrayIndexOf(MeleeState._.primaryAbilityChoices, MeleeStateConfig.GetPrimaryCombatAbility())
+    MeleeState._.menu.selectedPrimaryAbility = TableUtils.ArrayIndexOf(MeleeState._.primaryAbilityChoices,
+        Actions.Get(Actions.ability, MeleeStateConfig.GetPrimaryCombatAbility():Name()))
 end
 
 MeleeState._.meleeActions.checkForCombat = function()
@@ -209,13 +212,6 @@ end
 ---@diagnostic disable-next-line: duplicate-set-field
 function MeleeState.Go()
     return MeleeState._.currentAction()
-end
-
-MeleeState.IsFacingTarget = function()
-    if mq.TLO.Target == nil then return false end
-
-    local calc = math.abs(mq.TLO.Target.HeadingTo.DegreesCCW() - mq.TLO.Me.Heading.DegreesCCW())
-    return calc < 50 or calc > 310 -- requires heading difference < 56, so plan for < 50, or > 310 for the wrap-around
 end
 
 MeleeState.IsTargetInCombatAbilityRange = function()
@@ -374,14 +370,15 @@ function MeleeState.BuildMenu()
         ImGui.SameLine()
 
         ImGui.PushItemWidth(100)
-        if ImGui.BeginCombo("Primary Melee Skill##foo7", MeleeStateConfig.GetPrimaryCombatAbility()) then
+        local primaryMeleeAbility = MeleeStateConfig.GetPrimaryCombatAbility()
+        if ImGui.BeginCombo("Primary Melee Skill##foo7", primaryMeleeAbility:Name()) then
             for index, value in ipairs(MeleeState._.primaryAbilityChoices) do
                 ---@type Skill
                 value = value
                 local _, pressed = ImGui.Selectable(value:Name(), MeleeState._.menu.selectedPrimaryAbility == index)
                 if pressed then
                     MeleeState._.menu.selectedPrimaryAbility = index
-                    MeleeStateConfig.SetPrimaryCombatAbility(value:Name())
+                    MeleeStateConfig.SetPrimaryCombatAbility(value)
                 end
             end
             ImGui.EndCombo()
@@ -389,14 +386,15 @@ function MeleeState.BuildMenu()
 
         if mq.TLO.Me.Class.ShortName() == "MNK" then
             ImGui.SameLine()
-            if ImGui.BeginCombo("Secondary Melee Skill##foo8", MeleeStateConfig.GetSecondaryCombatAbility()) then
+            local secondaryMeleeAbility = MeleeStateConfig.GetSecondaryCombatAbility()
+            if ImGui.BeginCombo("Secondary Melee Skill##foo8", secondaryMeleeAbility:Name()) then
                 for index, value in ipairs(MeleeState._.secondaryAbilityChoices) do
                     ---@type Skill
                     value = value
                     local _, pressed = ImGui.Selectable(value:Name(), MeleeState._.menu.selectedSecondaryAbility == index)
                     if pressed then
                         MeleeState._.menu.selectedSecondaryAbility = index
-                        MeleeStateConfig.SetSecondaryCombatAbility(value:Name())
+                        MeleeStateConfig.SetSecondaryCombatAbility(value)
                     end
                 end
                 ImGui.EndCombo()

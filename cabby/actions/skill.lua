@@ -1,6 +1,8 @@
 ---@diagnostic disable: undefined-field
 local mq = require("mq")
 
+local Status = require("cabby.status")
+
 ---@class Skill : Action
 local Skill = {}
 Skill.__index = Skill
@@ -33,6 +35,11 @@ end
 ---@return boolean
 function Skill:Damage()
     return self._.damage
+end
+
+---@return boolean
+function Skill:Facing()
+    return self._.facing
 end
 
 ---@return boolean
@@ -87,6 +94,7 @@ function Skill:IsReady()
     if self:Name() == "none" then return true end
     if self:Targeted() and mq.TLO.Target.ID() < 1 then return false end
     if mq.TLO.Target.Distance() > 14 then return false end
+    if self:Facing() and not Status.IsFacingTarget() then return false end
 
     return mq.TLO.Me.AbilityReady(self:Name())()
 end

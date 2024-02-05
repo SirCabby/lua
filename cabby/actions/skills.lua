@@ -4,6 +4,7 @@ local Skill = require("cabby.actions.skill")
 
 ---@class Skills
 ---@field damage array -- Inflict some amount of damage
+---@field facing array -- Must be facing the target to use
 ---@field fear array -- Inflicts fear
 ---@field hate array -- Increases aggro / hate against target
 ---@field melee array -- Actions to perform while in melee combat (non-primary)
@@ -16,21 +17,21 @@ local Skills = {
     all = {}
 }
 
-Skills.bash =        Skill.new("Bash")
-Skills.backstab =    Skill.new("Backstab")
-Skills.begging =     Skill.new("Begging")
-Skills.disarm =      Skill.new("Disarm")
-Skills.dragonpunch = Skill.new("Dragon Punch")
-Skills.eaglestrike = Skill.new("Eagle Strike")
-Skills.flyingkick =  Skill.new("Flying Kick")
-Skills.intimidation =  Skill.new("Intimidation")
-Skills.kick =        Skill.new("Kick")
-Skills.roundkick =   Skill.new("Round Kick")
-Skills.slam =        Skill.new("Slam")
-Skills.tailrake =    Skill.new("Tail Rake")
-Skills.taunt =       Skill.new("Taunt")
-Skills.tigerclaw =   Skill.new("Tiger Claw")
-Skills.none =        Skill.new("None")
+Skills.bash =           Skill.new("Bash")
+Skills.backstab =       Skill.new("Backstab")
+Skills.begging =        Skill.new("Begging")
+Skills.disarm =         Skill.new("Disarm")
+Skills.dragonpunch =    Skill.new("Dragon Punch")
+Skills.eaglestrike =    Skill.new("Eagle Strike")
+Skills.flyingkick =     Skill.new("Flying Kick")
+Skills.intimidation =   Skill.new("Intimidation")
+Skills.kick =           Skill.new("Kick")
+Skills.roundkick =      Skill.new("Round Kick")
+Skills.slam =           Skill.new("Slam")
+Skills.tailrake =       Skill.new("Tail Rake")
+Skills.taunt =          Skill.new("Taunt")
+Skills.tigerclaw =      Skill.new("Tiger Claw")
+Skills.none =           Skill.new("None")
 -- Bind Wound, Feign Death, Fishing, Foraging, Hide, Mend, Sense Heading, Sneak
 
 local setAttribute = function(attr, ...)
@@ -52,6 +53,11 @@ end
 setAttribute("damage",
 Skills.backstab, Skills.bash, Skills.dragonpunch, Skills.eaglestrike, Skills.flyingkick, Skills.intimidation,
 Skills.kick, Skills.roundkick, Skills.slam, Skills.tailrake, Skills.tigerclaw)
+
+setAttribute("facing",
+Skills.backstab, Skills.bash, Skills.begging, Skills.disarm, Skills.dragonpunch, Skills.eaglestrike,
+Skills.flyingkick, Skills.intimidation, Skills.kick, Skills.roundkick, Skills.slam, Skills.taunt,
+Skills.tailrake, Skills.tigerclaw)
 
 setAttribute("fear",
 Skills.intimidation)

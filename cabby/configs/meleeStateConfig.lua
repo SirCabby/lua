@@ -1,6 +1,7 @@
 local Debug = require("utils.Debug.Debug")
 local TableUtils = require("utils.TableUtils.TableUtils")
 
+local Actions = require("cabby.actions.actions")
 local Character = require("cabby.character")
 local EditAction = require("cabby.ui.actions.editAction")
 local Skills = require("cabby.actions.skills")
@@ -145,40 +146,46 @@ function MeleeStateConfig.SetEngageDistance(distance)
     Global.configStore:SaveConfig()
 end
 
----@return string primary_combat_ability
+---@return Action primary_combat_ability
 function MeleeStateConfig.GetPrimaryCombatAbility()
-    local currentAbility = getConfigSection().primary_combat_ability
-    if not IsValidActiontype(Character.primaryMeleeAbilities, currentAbility) then
-        currentAbility = Skills.none:Name()
-        getConfigSection().primary_combat_ability = currentAbility
+    local currentAbilityName = getConfigSection().primary_combat_ability
+    ---@type Action
+    local result = Skills.none
+    if not IsValidActiontype(Character.primaryMeleeAbilities, currentAbilityName) then
+        currentAbilityName = result:Name()
+        getConfigSection().primary_combat_ability = currentAbilityName
         Global.configStore:SaveConfig()
     end
-    return currentAbility
+    result = Actions.Get(Actions.ability, currentAbilityName) or result
+    return result
 end
 
----@param primary_combat_ability string
+---@param primary_combat_ability Action
 function MeleeStateConfig.SetPrimaryCombatAbility(primary_combat_ability)
-    if IsValidActiontype(Character.primaryMeleeAbilities, primary_combat_ability) then
-        getConfigSection().primary_combat_ability = primary_combat_ability
+    if IsValidActiontype(Character.primaryMeleeAbilities, primary_combat_ability:Name()) then
+        getConfigSection().primary_combat_ability = primary_combat_ability:Name()
         Global.configStore:SaveConfig()
     end
 end
 
----@return string secondary_combat_ability
+---@return Action secondary_combat_ability
 function MeleeStateConfig.GetSecondaryCombatAbility()
-    local currentAbility = getConfigSection().secondary_combat_ability
-    if not IsValidActiontype(Character.secondaryMeleeAbilities, currentAbility) then
-        currentAbility = Skills.none:Name()
-        getConfigSection().secondary_combat_ability = currentAbility
+    local currentAbilityName = getConfigSection().secondary_combat_ability
+    ---@type Action
+    local result = Skills.none
+    if not IsValidActiontype(Character.secondaryMeleeAbilities, currentAbilityName) then
+        currentAbilityName = result:Name()
+        getConfigSection().secondary_combat_ability = currentAbilityName
         Global.configStore:SaveConfig()
     end
-    return currentAbility
+    result = Actions.Get(Actions.ability, currentAbilityName) or result
+    return result
 end
 
----@param secondary_combat_ability string
+---@param secondary_combat_ability Action
 function MeleeStateConfig.SetSecondaryCombatAbility(secondary_combat_ability)
-    if IsValidActiontype(Character.secondaryMeleeAbilities, secondary_combat_ability) then
-        getConfigSection().secondary_combat_ability = secondary_combat_ability
+    if IsValidActiontype(Character.secondaryMeleeAbilities, secondary_combat_ability:Name()) then
+        getConfigSection().secondary_combat_ability = secondary_combat_ability:Name()
         Global.configStore:SaveConfig()
     end
 end
