@@ -151,7 +151,7 @@ ActionUI.ActionControl = function(liveAction, actions, availableActions)
         end
 
         if editAction.editing then
-            ImGui.SameLine(math.max(width - 89, 443))
+            ImGui.SameLine()
             if ImGui.Button("Cancel", 50, 22) then
                 editAction:CancelEdit()
                 if editAction.actionType == EditAction.actionType then
@@ -161,13 +161,45 @@ ActionUI.ActionControl = function(liveAction, actions, availableActions)
                 end
             end
         else
-            ImGui.SameLine(math.max(width - 89, 443))
+            ImGui.SameLine()
             if ImGui.Button("Edit", 50, 22) then
                 editAction.editing = true
             end
         end
 
-        ImGui.SameLine(math.max(width - 32, 500))
+        local atTop = false
+        if actionIndex == 1 then
+            atTop = true
+            ImGui.BeginDisabled()
+        end
+        ImGui.SameLine()
+        if ImGui.Button("Up", 30, 22) then
+            ActionUI._.actions[editAction] = nil
+            table.remove(actions, actionIndex)
+            table.insert(actions, actionIndex-1, liveAction)
+            Global.configStore:SaveConfig()
+        end
+        if atTop then
+            ImGui.EndDisabled()
+        end
+
+        local atBottom = false
+        if actionIndex == #actions then
+            atBottom = true
+            ImGui.BeginDisabled()
+        end
+        ImGui.SameLine()
+        if ImGui.Button("Down", 50, 22) then
+            ActionUI._.actions[editAction] = nil
+            table.remove(actions, actionIndex)
+            table.insert(actions, actionIndex+1, liveAction)
+            Global.configStore:SaveConfig()
+        end
+        if atBottom then
+            ImGui.EndDisabled()
+        end
+
+        ImGui.SameLine()
         if ImGui.Button("X", 24, 22) then
             ActionUI._.actions[editAction] = nil
             table.remove(actions, actionIndex)
@@ -176,8 +208,8 @@ ActionUI.ActionControl = function(liveAction, actions, availableActions)
 
         ---- EDITING ----
         if editAction.editing then
-            ImGui.Text("")
-            ImGui.SameLine(math.max(width - 89, 443))
+            ImGui.Dummy(0, 0)
+            ImGui.SameLine(438)
             local cannotSave = false
             if editAction.name == nil or editAction.name == "" then
                 ImGui.BeginDisabled()
