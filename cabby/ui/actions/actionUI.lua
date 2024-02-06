@@ -15,10 +15,9 @@ local actionTypes = {
     [EditAction.actionType] =           "<Select Type>",
     [EditAction.actionType.."1"] =      "AA",
     [EditAbilityAction.actionType] =    "Ability",
-    [EditAction.actionType.."2"] =      "Combat Ability",
-    [EditAction.actionType.."3"] =      "Discipline",
-    [EditAction.actionType.."4"] =      "Item Click",
-    [EditAction.actionType.."5"] =      "Spell"
+    [EditAction.actionType.."2"] =      "Discipline",
+    [EditAction.actionType.."3"] =      "Item Click",
+    [EditAction.actionType.."4"] =      "Spell"
 }
 
 local orderedActionTypes = {
@@ -27,8 +26,7 @@ local orderedActionTypes = {
     EditAbilityAction.actionType,
     EditAction.actionType.."2",
     EditAction.actionType.."3",
-    EditAction.actionType.."4",
-    EditAction.actionType.."5"
+    EditAction.actionType.."4"
 }
 
 ---@param expectedActionType string
@@ -99,7 +97,7 @@ ActionUI.ActionControl = function(liveAction, actions, availableActions)
             ImGui.BeginDisabled()
         end
         ImGui.SameLine()
-        ImGui.PushItemWidth(130)
+        ImGui.PushItemWidth(120)
         if ImGui.BeginCombo("##type" .. actionIndex, actionTypes[editAction.actionType]) then
             for _, actionType in ipairs(orderedActionTypes) do
                 local typeActions = {}
@@ -220,7 +218,7 @@ ActionUI.ActionControl = function(liveAction, actions, availableActions)
             ImGui.SameLine()
             CommonUI.HelpMarker("Provide a lua expression that results in 'true'. This is evaluated when deciding if an action should be run.")
 
-            ImGui.SameLine(438)
+            ImGui.SameLine(428)
             local cannotSave = false
             if editAction.name == nil or editAction.name == "" then
                 ImGui.BeginDisabled()
