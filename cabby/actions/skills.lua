@@ -69,7 +69,7 @@ setAttribute("melee",
 Skills.disarm, Skills.intimidation, Skills.taunt)
 
 setAttribute("primary",
-Skills.backstab, Skills.bash, Skills.flyingkick, Skills.kick, Skills.roundkick, Skills.slam)
+Skills.backstab, Skills.flyingkick, Skills.kick, Skills.roundkick, Skills.slam)
 
 setAttribute("push",
 Skills.dragonpunch, Skills.tailrake)

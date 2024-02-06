@@ -7,7 +7,7 @@ local Character = {
     secondaryMeleeAbilities = {},
     meleeAbilities = {},
     _ = {
-        primaryOrder = { Skills.slam, Skills.bash, Skills.backstab, Skills.flyingkick, Skills.roundkick, Skills.kick },
+        primaryOrder = { Skills.slam, Skills.backstab, Skills.flyingkick, Skills.roundkick, Skills.kick },
         secondaryOrder = { Skills.dragonpunch, Skills.tailrake, Skills.eaglestrike, Skills.tigerclaw },
     }
 }
