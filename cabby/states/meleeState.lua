@@ -95,10 +95,19 @@ end
 
 local function DoPrimaryCombatAction()
     local primaryAction = MeleeStateConfig.GetPrimaryCombatAbility()
-    if primaryAction == Skills.none then return end
+    if primaryAction ~= Skills.none then
+        if primaryAction:IsReady() then
+            primaryAction:DoAction()
+        end
+    end
 
-    if primaryAction:IsReady() then
-        primaryAction:DoAction()
+    if mq.TLO.Me.Class.ShortName() ~= "MNK" then return end
+
+    local secondaryAction = MeleeStateConfig.GetSecondaryCombatAbility()
+    if secondaryAction ~= Skills.none then
+        if secondaryAction:IsReady() then
+            secondaryAction:DoAction()
+        end
     end
 end
 
@@ -157,13 +166,13 @@ MeleeState._.meleeActions.attackTarget = function()
 
         DoPrimaryCombatAction()
 
-        -- for _, meleeFunc in ipairs(MeleeState._.registrations.abilities) do
-            -- ---@type CabbyAction
-            -- meleeFunc = meleeFunc
-            -- if meleeFunc.enabled then
-            --     meleeFunc.actionFunction()
-            -- end
-        -- end
+        for _, actionCfg in ipairs(MeleeStateConfig.GetActions()) do
+            local action = Actions.Get(actionCfg.actionType, actionCfg.name)
+
+            if action ~= nil and action:IsReady() then
+                action:DoAction()
+            end
+        end
     end
 
     return true

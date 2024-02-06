@@ -66,7 +66,7 @@ setAttribute("hate",
 Skills.taunt)
 
 setAttribute("melee",
-Skills.begging, Skills.disarm, Skills.intimidation, Skills.taunt)
+Skills.disarm, Skills.intimidation, Skills.taunt)
 
 setAttribute("primary",
 Skills.backstab, Skills.bash, Skills.flyingkick, Skills.kick, Skills.roundkick, Skills.slam)
