@@ -78,7 +78,7 @@ ActionUI.ActionControl = function(liveAction, actions, availableActions)
     end
 
     local childFlags = bit32.bor(ImGuiChildFlags.Border, ImGuiChildFlags.AutoResizeX)
-    if ImGui.BeginChild("actionChild" .. tostring(actionIndex), math.max(width, 532), height, childFlags) then
+    if ImGui.BeginChild("actionChild" .. tostring(actionIndex), math.max(width, 613), height, childFlags) then
         local isValid = true
         if editAction.editing or editAction.actionType == EditAction.actionType or editAction.name == "" or editAction.name == "none" then
             isValid = false
