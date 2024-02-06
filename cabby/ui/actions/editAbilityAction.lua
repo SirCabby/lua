@@ -14,6 +14,8 @@ setmetatable(AbilityAction, {
     end
 })
 
+---@param liveAction ActionBlueprint
+---@return AbilityAction
 AbilityAction.new = function(liveAction)
     local self = setmetatable(TableUtils.DeepClone(liveAction) or {}, AbilityAction)
 
@@ -23,6 +25,7 @@ AbilityAction.new = function(liveAction)
     self.name = liveAction.name
     self.liveAction = liveAction
 
+---@diagnostic disable-next-line: return-type-mismatch
     return self
 end
 

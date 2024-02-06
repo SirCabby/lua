@@ -428,6 +428,8 @@ function MeleeState.BuildMenu()
     availableActions.abilities = Character.meleeAbilities
 
     for i, action in ipairs(actions) do
+        ---@type ActionBlueprint
+        action = action
         if i % 2 == 0 then
             ImGui.PushStyleColor(ImGuiCol.ChildBg, 0.1, 0.1, 0.1, 1)
         else

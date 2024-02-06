@@ -1,13 +1,7 @@
 local TableUtils = require("utils.TableUtils.TableUtils")
 
----@class EditAction
------ Saved to config
----@field name string
----@field enabled boolean
----@field actionType string
----@field lua string Raw lua to evaluate
------ not saved to config
----@field liveAction table Table reference of unedited action
+---@class EditAction : ActionBlueprint
+---@field liveAction ActionBlueprint Table reference of unedited action
 ---@field editing boolean
 local EditAction = {
     actionType = "none"
@@ -20,7 +14,7 @@ setmetatable(EditAction, {
     end
 })
 
----@param liveAction table Table reference of unedited action
+---@param liveAction ActionBlueprint Table reference of unedited action
 ---@return EditAction
 EditAction.new = function(liveAction)
     local self = setmetatable(TableUtils.DeepClone(liveAction) or {}, EditAction)

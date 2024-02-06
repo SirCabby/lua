@@ -48,7 +48,7 @@ local function GetUpdatedActionType(expectedActionType, action)
     return updatedAction
 end
 
----@param liveAction table
+---@param liveAction ActionBlueprint
 ---@return EditAction editAction
 local function GetEditAction(liveAction)
     local result = ActionUI._.actions[liveAction]
@@ -59,7 +59,7 @@ local function GetEditAction(liveAction)
     return result
 end
 
----@param liveAction EditAction
+---@param liveAction ActionBlueprint
 ---@param actions table
 ---@param availableActions AvailableActions
 ActionUI.ActionControl = function(liveAction, actions, availableActions)
