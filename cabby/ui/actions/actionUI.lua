@@ -1,5 +1,6 @@
 local TableUtils = require("utils.TableUtils.TableUtils")
 
+local CommonUI = require("cabby.ui.commonUI")
 local EditAbilityAction = require("cabby.ui.actions.editAbilityAction")
 local EditAction = require("cabby.ui.actions.editAction")
 
@@ -48,7 +49,7 @@ local function GetUpdatedActionType(expectedActionType, action)
     return updatedAction
 end
 
----@param liveAction ActionBlueprint
+---@param liveAction Action
 ---@return EditAction editAction
 local function GetEditAction(liveAction)
     local result = ActionUI._.actions[liveAction]
@@ -59,7 +60,7 @@ local function GetEditAction(liveAction)
     return result
 end
 
----@param liveAction ActionBlueprint
+---@param liveAction Action
 ---@param actions table
 ---@param availableActions AvailableActions
 ActionUI.ActionControl = function(liveAction, actions, availableActions)
@@ -71,7 +72,11 @@ ActionUI.ActionControl = function(liveAction, actions, availableActions)
     local editMode = editAction.editing
     if editMode then
         ImGui.PushStyleColor(ImGuiCol.ChildBg, 0.2, 0.13, 0, 1)
-        height = 64
+        if editAction.luaEnabled then
+            height = 324
+        else
+            height = 64
+        end
     end
 
     local childFlags = bit32.bor(ImGuiChildFlags.Border, ImGuiChildFlags.AutoResizeX)
@@ -135,7 +140,7 @@ ActionUI.ActionControl = function(liveAction, actions, availableActions)
             end
 
             for _, action in ipairs(actionChoices) do
-                ---@type Action
+                ---@type ActionType
                 action = action
                 local _, pressed = ImGui.Selectable(action:Name(), editAction.name == action:Name())
                 if pressed then
@@ -208,7 +213,13 @@ ActionUI.ActionControl = function(liveAction, actions, availableActions)
 
         ---- EDITING ----
         if editAction.editing then
-            ImGui.Dummy(0, 0)
+            local _, pressed = ImGui.Checkbox("LUA Enabled", editAction.luaEnabled)
+            if pressed then
+                editAction.luaEnabled = not editAction.luaEnabled
+            end
+            ImGui.SameLine()
+            CommonUI.HelpMarker("Provide a lua expression that results in 'true'. This is evaluated when deciding if an action should be run.")
+
             ImGui.SameLine(438)
             local cannotSave = false
             if editAction.name == nil or editAction.name == "" then
@@ -220,6 +231,18 @@ ActionUI.ActionControl = function(liveAction, actions, availableActions)
             end
             if cannotSave then
                 ImGui.EndDisabled()
+            end
+
+            if editAction.luaEnabled then
+                local inputFlags = bit32.bor(ImGuiInputTextFlags.AllowTabInput)
+                local displayText = ""
+                if editAction.lua ~= nil and editAction.lua:len() > 0 then
+                    displayText = editAction.lua:sub(3, -3)
+                end
+                local luaText, changed = ImGui.InputTextMultiline("##luaArea" .. actionIndex, displayText, width-16, ImGui.GetTextLineHeight() * 16, inputFlags)
+                if changed then
+                    editAction.lua = "[[" .. luaText .. "]]"
+                end
             end
         end
     end

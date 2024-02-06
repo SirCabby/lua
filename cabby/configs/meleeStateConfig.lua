@@ -53,16 +53,6 @@ local function initAndValidate()
         taint = true
     end
 
-    if configRoot.secondary_combat_ability == nil then
-        configRoot.secondary_combat_ability = Skills.none:Name()
-        taint = true
-    end
-
-    if configRoot.bash_override == nil then
-        configRoot.bash_override = false
-        taint = true
-    end
-
     if configRoot.actions == nil then
         configRoot.actions = {}
         taint = true
@@ -151,10 +141,10 @@ function MeleeStateConfig.SetEngageDistance(distance)
     Global.configStore:SaveConfig()
 end
 
----@return Action primary_combat_ability
+---@return ActionType primary_combat_ability
 function MeleeStateConfig.GetPrimaryCombatAbility()
     local currentAbilityName = getConfigSection().primary_combat_ability
-    ---@type Action
+    ---@type ActionType
     local result = Skills.none
     if not IsValidActiontype(Character.primaryMeleeAbilities, currentAbilityName) then
         currentAbilityName = result:Name()
@@ -165,7 +155,7 @@ function MeleeStateConfig.GetPrimaryCombatAbility()
     return result
 end
 
----@param primary_combat_ability Action
+---@param primary_combat_ability ActionType
 function MeleeStateConfig.SetPrimaryCombatAbility(primary_combat_ability)
     if IsValidActiontype(Character.primaryMeleeAbilities, primary_combat_ability:Name()) then
         getConfigSection().primary_combat_ability = primary_combat_ability:Name()
@@ -173,10 +163,10 @@ function MeleeStateConfig.SetPrimaryCombatAbility(primary_combat_ability)
     end
 end
 
----@return Action secondary_combat_ability
+---@return ActionType secondary_combat_ability
 function MeleeStateConfig.GetSecondaryCombatAbility()
     local currentAbilityName = getConfigSection().secondary_combat_ability
-    ---@type Action
+    ---@type ActionType
     local result = Skills.none
     if not IsValidActiontype(Character.secondaryMeleeAbilities, currentAbilityName) then
         currentAbilityName = result:Name()
@@ -187,7 +177,7 @@ function MeleeStateConfig.GetSecondaryCombatAbility()
     return result
 end
 
----@param secondary_combat_ability Action
+---@param secondary_combat_ability ActionType
 function MeleeStateConfig.SetSecondaryCombatAbility(secondary_combat_ability)
     if IsValidActiontype(Character.secondaryMeleeAbilities, secondary_combat_ability:Name()) then
         getConfigSection().secondary_combat_ability = secondary_combat_ability:Name()

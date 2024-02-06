@@ -5,6 +5,7 @@ local Timer = require("utils.Time.Timer")
 local StringUtils = require("utils.StringUtils.StringUtils")
 local TableUtils = require("utils.TableUtils.TableUtils")
 
+local Action = require('cabby.actions.action')
 local Actions = require("cabby.actions.actions")
 local ActionUI = require("cabby.ui.actions.actionUI")
 local AvailableActions = require("cabby.actions.availableActions")
@@ -95,7 +96,7 @@ local function EngageTargetId(id)
 end
 
 local function DoPrimaryCombatAction()
-    ---@type Action
+    ---@type ActionType
     local primaryAction
     if MeleeStateConfig:GetBashOverride() and mq.TLO.Me.Inventory("offhand").Type() == "Shield" then
         primaryAction = Skills.bash
@@ -170,11 +171,13 @@ MeleeState._.meleeActions.attackTarget = function()
 
         DoPrimaryCombatAction()
 
-        for _, actionCfg in ipairs(MeleeStateConfig.GetActions()) do
-            local action = Actions.Get(actionCfg.actionType, actionCfg.name)
+        for _, action in ipairs(MeleeStateConfig.GetActions()) do
+            ---@type Action
+            action = action
+            local actionType = Action.GetActionType(action)
 
-            if action ~= nil and action:IsReady() then
-                action:DoAction()
+            if actionType ~= nil and actionType:IsReady() and Action.GetLuaResult(action) then
+                actionType:DoAction()
             end
         end
     end
@@ -446,7 +449,7 @@ function MeleeState.BuildMenu()
     availableActions.abilities = Character.meleeAbilities
 
     for i, action in ipairs(actions) do
-        ---@type ActionBlueprint
+        ---@type Action
         action = action
         if i % 2 == 0 then
             ImGui.PushStyleColor(ImGuiCol.ChildBg, 0.1, 0.1, 0.1, 1)

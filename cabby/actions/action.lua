@@ -1,28 +1,29 @@
+local Actions = require("cabby.actions.actions")
+
 ---@class Action
+---@field name string
+---@field actionType string
+---@field enabled boolean
+---@field luaEnabled boolean
+---@field lua string
 local Action = {}
 
----@return string
-function Action:Name()
-    error("Action:Name() not implemented")
+---@param action Action
+---@return boolean isLuaReady Returns true to continue executing action, false to abort action
+function Action.GetLuaResult(action)
+    if not action.luaEnabled then return true end
+    local succeeded, result = pcall(function() return loadstring(action.lua:sub(3, -3))() end) -- Unescape [[]]
+    if not succeeded then
+        print("Failed to read lua on action [" .. action.actionType .. ": " .. action.name .. "]")
+        result = false
+    end
+    return result
 end
 
----@return string
-function Action:ActionType()
-    error("Action:ActionType() not implemented")
-end
-
----@return boolean
-function Action:HasAction()
-    error("Action:HasAction() not implemented")
-end
-
----@return boolean
-function Action:IsReady()
-    error("Action:IsReady() not implemented")
-end
-
-function Action:DoAction()
-    error("Action:DoAction() not implemented")
+---@param action Action
+---@return ActionType? actionType
+function Action.GetActionType(action)
+    return Actions.Get(action.actionType, action.name)
 end
 
 return Action

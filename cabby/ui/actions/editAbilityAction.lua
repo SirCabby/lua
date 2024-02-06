@@ -14,16 +14,19 @@ setmetatable(AbilityAction, {
     end
 })
 
----@param liveAction ActionBlueprint
+---@param liveAction Action
 ---@return AbilityAction
 AbilityAction.new = function(liveAction)
     local self = setmetatable(TableUtils.DeepClone(liveAction) or {}, AbilityAction)
 
+    if liveAction.luaEnabled == nil then liveAction.luaEnabled = false end
+
     self.enabled = true
     self.actionType = "ability"
-    self.lua = ""
+    self.lua = liveAction.lua
     self.name = liveAction.name
     self.liveAction = liveAction
+    self.luaEnabled = liveAction.luaEnabled
 
 ---@diagnostic disable-next-line: return-type-mismatch
     return self

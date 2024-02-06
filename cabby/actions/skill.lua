@@ -3,7 +3,7 @@ local mq = require("mq")
 
 local Status = require("cabby.status")
 
----@class Skill : Action
+---@class Skill : ActionType
 local Skill = {}
 Skill.__index = Skill
 
