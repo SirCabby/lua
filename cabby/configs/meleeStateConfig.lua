@@ -58,6 +58,11 @@ local function initAndValidate()
         taint = true
     end
 
+    if configRoot.bash_override == nil then
+        configRoot.bash_override = false
+        taint = true
+    end
+
     if configRoot.actions == nil then
         configRoot.actions = {}
         taint = true
@@ -188,6 +193,17 @@ function MeleeStateConfig.SetSecondaryCombatAbility(secondary_combat_ability)
         getConfigSection().secondary_combat_ability = secondary_combat_ability:Name()
         Global.configStore:SaveConfig()
     end
+end
+
+---@return boolean enable
+function MeleeStateConfig.GetBashOverride()
+    return getConfigSection().bash_override
+end
+
+---@param enable boolean
+function MeleeStateConfig.SetBashOverride(enable)
+    getConfigSection().bash_override = enable == true
+    Global.configStore:SaveConfig()
 end
 
 ---@return array actions

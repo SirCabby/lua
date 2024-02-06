@@ -12,6 +12,7 @@ local Character = require("cabby.character")
 local ChelpDocs = require("cabby.commands.chelpDocs")
 local Command = require("cabby.commands.command")
 local Commands = require("cabby.commands.commands")
+local CommonUI = require("cabby.ui.commonUI")
 local MeleeStateConfig = require("cabby.configs.meleeStateConfig")
 local Menu = require("cabby.ui.menu")
 local Skills = require("cabby.actions.skills")
@@ -94,20 +95,23 @@ local function EngageTargetId(id)
 end
 
 local function DoPrimaryCombatAction()
-    local primaryAction = MeleeStateConfig.GetPrimaryCombatAbility()
-    if primaryAction ~= Skills.none then
-        if primaryAction:IsReady() then
-            primaryAction:DoAction()
-        end
+    ---@type Action
+    local primaryAction
+    if MeleeStateConfig:GetBashOverride() and mq.TLO.Me.Inventory("offhand").Type() == "Shield" then
+        primaryAction = Skills.bash
+    else
+        primaryAction = MeleeStateConfig.GetPrimaryCombatAbility()
+    end
+
+    if primaryAction:IsReady() then
+        primaryAction:DoAction()
     end
 
     if mq.TLO.Me.Class.ShortName() ~= "MNK" then return end
 
     local secondaryAction = MeleeStateConfig.GetSecondaryCombatAbility()
-    if secondaryAction ~= Skills.none then
-        if secondaryAction:IsReady() then
-            secondaryAction:DoAction()
-        end
+    if secondaryAction:IsReady() then
+        secondaryAction:DoAction()
     end
 end
 
@@ -409,8 +413,22 @@ function MeleeState.BuildMenu()
                 ImGui.EndCombo()
             end
         end
-
         ImGui.PopItemWidth()
+
+        if Skills.bash:HasAction() then
+            ImGui.Dummy(0, 0)
+            ImGui.SameLine()
+
+            ---@type boolean
+            local clicked, result
+            result, clicked = ImGui.Checkbox("Bash when shield equipped", MeleeStateConfig:GetBashOverride())
+            if clicked then
+                MeleeStateConfig.SetBashOverride(result)
+            end
+
+            ImGui.SameLine()
+            CommonUI.HelpMarker("When enabled, bash will be used instead of the selected Primary Melee Skill only when a shield is presently equipped.")
+        end
 
         ImGui.EndTable()
     end
