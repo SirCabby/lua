@@ -1,6 +1,7 @@
 local Debug = require("utils.Debug.Debug")
 local TableUtils = require("utils.TableUtils.TableUtils")
 
+local ActionType = require("cabby.actions.actionType")
 local Actions = require("cabby.actions.actions")
 local Character = require("cabby.character")
 local EditAction = require("cabby.ui.actions.editAction")
@@ -151,7 +152,7 @@ function MeleeStateConfig.GetPrimaryCombatAbility()
         getConfigSection().primary_combat_ability = currentAbilityName
         Global.configStore:SaveConfig()
     end
-    result = Actions.Get(Actions.ability, currentAbilityName) or result
+    result = Actions.Get(ActionType.Ability, currentAbilityName) or result
     return result
 end
 
@@ -173,7 +174,7 @@ function MeleeStateConfig.GetSecondaryCombatAbility()
         getConfigSection().secondary_combat_ability = currentAbilityName
         Global.configStore:SaveConfig()
     end
-    result = Actions.Get(Actions.ability, currentAbilityName) or result
+    result = Actions.Get(ActionType.Ability, currentAbilityName) or result
     return result
 end
 

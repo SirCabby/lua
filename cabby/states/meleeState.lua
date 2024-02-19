@@ -7,6 +7,7 @@ local TableUtils = require("utils.TableUtils.TableUtils")
 
 local Action = require('cabby.actions.action')
 local Actions = require("cabby.actions.actions")
+local ActionType = require("cabby.actions.actionType")
 local ActionUI = require("cabby.ui.actions.actionUI")
 local AvailableActions = require("cabby.actions.availableActions")
 local Character = require("cabby.character")
@@ -14,6 +15,7 @@ local ChelpDocs = require("cabby.commands.chelpDocs")
 local Command = require("cabby.commands.command")
 local Commands = require("cabby.commands.commands")
 local CommonUI = require("cabby.ui.commonUI")
+local Disciplines = require("cabby.actions.disciplines")
 local MeleeStateConfig = require("cabby.configs.meleeStateConfig")
 local Menu = require("cabby.ui.menu")
 local Skills = require("cabby.actions.skills")
@@ -120,7 +122,7 @@ local function BuildPrimaryAbilityArray()
     MeleeState._.primaryAbilityChoices = TableUtils.GetValues(Character.primaryMeleeAbilities)
     MeleeState._.secondaryAbilityChoices = TableUtils.GetValues(Character.secondaryMeleeAbilities)
     MeleeState._.menu.selectedPrimaryAbility = TableUtils.ArrayIndexOf(MeleeState._.primaryAbilityChoices,
-        Actions.Get(Actions.ability, MeleeStateConfig.GetPrimaryCombatAbility():Name()))
+        Actions.Get(ActionType.Ability, MeleeStateConfig.GetPrimaryCombatAbility():Name()))
 end
 
 MeleeState._.meleeActions.checkForCombat = function()
@@ -447,6 +449,7 @@ function MeleeState.BuildMenu()
 
     local availableActions = AvailableActions.new()
     availableActions.abilities = Character.meleeAbilities
+    availableActions.discs = Disciplines.melee
 
     for i, action in ipairs(actions) do
         ---@type Action

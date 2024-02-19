@@ -1,5 +1,6 @@
 local Actions = require("cabby.actions.actions")
 
+--- Pretends to be what is stored in action config stores
 ---@class Action
 ---@field name string
 ---@field actionType string

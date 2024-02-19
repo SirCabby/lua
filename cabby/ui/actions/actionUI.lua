@@ -1,7 +1,7 @@
 local TableUtils = require("utils.TableUtils.TableUtils")
 
+local ActionType = require("cabby.actions.actionType")
 local CommonUI = require("cabby.ui.commonUI")
-local EditAbilityAction = require("cabby.ui.actions.editAbilityAction")
 local EditAction = require("cabby.ui.actions.editAction")
 
 ---@class ActionUI
@@ -12,47 +12,29 @@ local ActionUI = {
 }
 
 local actionTypes = {
-    [EditAction.actionType] =           "<Select Type>",
-    [EditAction.actionType.."1"] =      "AA",
-    [EditAbilityAction.actionType] =    "Ability",
-    [EditAction.actionType.."2"] =      "Discipline",
-    [EditAction.actionType.."3"] =      "Item Click",
-    [EditAction.actionType.."4"] =      "Spell"
+    [ActionType.Edit] =           "<Select Type>",
+    [ActionType.Edit.."1"] =      "AA",
+    [ActionType.Ability] =        "Ability",
+    [ActionType.Discipline] =     "Discipline",
+    [ActionType.Edit.."3"] =      "Item Click",
+    [ActionType.Edit.."4"] =      "Spell"
 }
 
 local orderedActionTypes = {
-    EditAction.actionType,
-    EditAction.actionType.."1",
-    EditAbilityAction.actionType,
-    EditAction.actionType.."2",
-    EditAction.actionType.."3",
-    EditAction.actionType.."4"
+    ActionType.Edit,
+    ActionType.Edit.."1",
+    ActionType.Ability,
+    ActionType.Discipline,
+    ActionType.Edit.."3",
+    ActionType.Edit.."4"
 }
-
----@param expectedActionType string
----@param action EditAction
----@return EditAction
-local function GetUpdatedActionType(expectedActionType, action)
-    local updatedAction = action
-
-    if action.actionType ~= expectedActionType then
-        if expectedActionType == EditAbilityAction.actionType then
-            updatedAction = action:SwitchType(EditAbilityAction)
-        else
-            updatedAction = action:SwitchType(EditAction)
-            updatedAction.editing = true
-        end
-    end
-
-    return updatedAction
-end
 
 ---@param liveAction Action
 ---@return EditAction editAction
 local function GetEditAction(liveAction)
     local result = ActionUI._.actions[liveAction]
     if result == nil then
-        result = GetUpdatedActionType(liveAction.actionType, EditAction.new(liveAction))
+        result = EditAction.new(liveAction)
         ActionUI._.actions[liveAction] = result
     end
     return result
@@ -80,7 +62,7 @@ ActionUI.ActionControl = function(liveAction, actions, availableActions)
     local childFlags = bit32.bor(ImGuiChildFlags.Border, ImGuiChildFlags.AutoResizeX)
     if ImGui.BeginChild("actionChild" .. tostring(actionIndex), math.max(width, 613), height, childFlags) then
         local isValid = true
-        if editAction.editing or editAction.actionType == EditAction.actionType or editAction.name == "" or editAction.name == "none" then
+        if editAction.editing or editAction.actionType == ActionType.Edit or editAction.name == "" or editAction.name == "none" then
             isValid = false
             ImGui.BeginDisabled()
         end
@@ -101,15 +83,17 @@ ActionUI.ActionControl = function(liveAction, actions, availableActions)
         if ImGui.BeginCombo("##type" .. actionIndex, actionTypes[editAction.actionType]) then
             for _, actionType in ipairs(orderedActionTypes) do
                 local typeActions = {}
-                if actionType == EditAbilityAction.actionType then
-                    typeActions = availableActions.abilities
+                if actionType == ActionType.Ability then
+                    typeActions = availableActions.abilities or typeActions
+                elseif actionType == ActionType.Discipline then
+                    typeActions = availableActions.discs or typeActions
                 end
 
-                if #typeActions > 0 or actionType == EditAction.actionType then
+                if #typeActions > 0 or actionType == ActionType.Edit then
                     local _, pressed = ImGui.Selectable(actionTypes[actionType], editAction.actionType == actionType)
                     if pressed then
                         if editAction.actionType ~= actionType then
-                            editAction = GetUpdatedActionType(actionType, editAction)
+                            editAction:SwitchType(actionType)
                             editAction.editing = true
                             editAction.name = nil
                             ActionUI._.actions[editAction.liveAction] = editAction
@@ -133,8 +117,10 @@ ActionUI.ActionControl = function(liveAction, actions, availableActions)
         ImGui.PushItemWidth(200)
         if ImGui.BeginCombo("##name" .. actionIndex, editAction.name) then
             local actionChoices = {}
-            if editAction.actionType == EditAbilityAction.actionType then
+            if editAction.actionType == ActionType.Ability then
                 actionChoices = availableActions.abilities
+            elseif editAction.actionType == ActionType.Discipline then
+                actionChoices = availableActions.discs
             end
 
             for _, action in ipairs(actionChoices) do

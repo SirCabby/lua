@@ -1,6 +1,10 @@
 ---@class ActionType
 local ActionType = {}
 
+ActionType.Edit = "none"
+ActionType.Ability = "ability"
+ActionType.Discipline = "discipline"
+
 ---@return string
 function ActionType:Name()
     error("Action:Name() not implemented")

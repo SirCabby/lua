@@ -1,3 +1,5 @@
+local mq = require("mq")
+
 local Skills = require("cabby.actions.skills")
 
 ---@class Character
@@ -9,7 +11,7 @@ local Character = {
     _ = {
         primaryOrder = { Skills.slam, Skills.backstab, Skills.flyingkick, Skills.roundkick, Skills.kick },
         secondaryOrder = { Skills.dragonpunch, Skills.tailrake, Skills.eaglestrike, Skills.tigerclaw },
-    }
+    },
 }
 
 local function loadAbilities()
@@ -38,6 +40,8 @@ local function loadAbilities()
             Character.meleeAbilities[#Character.meleeAbilities+1] = skill
         end
     end
+
+    
 end
 
 Character.Refresh = function()

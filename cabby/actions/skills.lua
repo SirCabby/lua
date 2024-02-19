@@ -3,18 +3,18 @@ local TableUtils = require("utils.TableUtils.TableUtils")
 local Skill = require("cabby.actions.skill")
 
 ---@class Skills
----@field damage array -- Inflict some amount of damage
----@field facing array -- Must be facing the target to use
----@field fear array -- Inflicts fear
----@field hate array -- Increases aggro / hate against target
----@field melee array -- Actions to perform while in melee combat (non-primary)
----@field primary array -- Primary Melee actions
----@field push array -- Pushes target
----@field secondary array -- Secondary Melee actions
----@field stun array -- Stuns target
----@field targeted array -- Action requires target
 local Skills = {
-    all = {}
+    all = {},
+    damage = {},        -- Inflict some amount of damage
+    facing = {},        -- Must be facing the target to use
+    fear = {},          -- Inflicts fear
+    hate = {},          -- Increases aggro / hate against target
+    melee = {},         -- Actions to perform while in melee combat (non-primary)
+    primary = {},       -- Primary Melee actions
+    push = {},          -- Pushes target
+    secondary = {},     -- Secondary Melee actions
+    stun = {},          -- Stuns target
+    targeted = {}       -- Action requires target
 }
 
 Skills.bash =           Skill.new("Bash")

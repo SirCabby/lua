@@ -1,11 +1,11 @@
 local TableUtils = require("utils.TableUtils.TableUtils")
 
+local ActionType = require("cabby.actions.actionType")
+
 ---@class EditAction : Action
 ---@field liveAction Action Table reference of unedited action
 ---@field editing boolean
-local EditAction = {
-    actionType = "none"
-}
+local EditAction = {}
 EditAction.__index = EditAction
 
 setmetatable(EditAction, {
@@ -20,8 +20,9 @@ EditAction.new = function(liveAction)
     local self = setmetatable(TableUtils.DeepClone(liveAction) or {}, EditAction)
 
     if liveAction.enabled == nil then liveAction.enabled = true end
+    if liveAction.luaEnabled == nil then liveAction.luaEnabled = false end
 
-    self.actionType = "none"
+    self.actionType = ActionType.Edit
     self.liveAction = liveAction
     self.name = liveAction.name
     self.enabled = liveAction.enabled
@@ -31,11 +32,15 @@ EditAction.new = function(liveAction)
     return self
 end
 
----@param actionType EditAction
+---@param actionType string
 function EditAction:SwitchType(actionType)
-    local result = actionType.new(self.liveAction)
-    result.editing = self.editing
-    return result
+    self.actionType = actionType
+end
+
+function EditAction:ResetMetaFields()
+    self.name = nil
+    self.lua = nil
+    self.luaEnabled = false
 end
 
 function EditAction:CancelEdit()
