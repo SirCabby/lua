@@ -4,20 +4,15 @@ local Skills = require("cabby.actions.skills")
 
 ---@class Character
 local Character = {
-    key = "Character",
     primaryMeleeAbilities = {},
     secondaryMeleeAbilities = {},
     meleeAbilities = {},
-    _ = {
-        primaryOrder = { Skills.slam, Skills.backstab, Skills.flyingkick, Skills.roundkick, Skills.kick },
-        secondaryOrder = { Skills.dragonpunch, Skills.tailrake, Skills.eaglestrike, Skills.tigerclaw },
-    },
 }
 
 local function loadAbilities()
     -- Primary Melee Abilities
     Character.primaryMeleeAbilities = {}
-    for _, skill in ipairs(Character._.primaryOrder) do
+    for _, skill in ipairs(Skills.primary) do
         if skill:HasAction() then
             Character.primaryMeleeAbilities[#Character.primaryMeleeAbilities+1] = skill
         end
@@ -26,7 +21,7 @@ local function loadAbilities()
 
     -- Secondary Melee Abilities (Monk)
     Character.secondaryMeleeAbilities = {}
-    for _, skill in ipairs(Character._.secondaryOrder) do
+    for _, skill in ipairs(Skills.secondary) do
         if skill:HasAction() then
             Character.secondaryMeleeAbilities[#Character.secondaryMeleeAbilities+1] = skill
         end
