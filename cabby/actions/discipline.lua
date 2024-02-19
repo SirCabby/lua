@@ -1,6 +1,8 @@
 ---@diagnostic disable: undefined-field
 local mq = require("mq")
 
+local Timer = require("utils.Time.Timer")
+
 ---@class Discipline : ActionType
 local Discipline = {}
 Discipline.__index = Discipline
@@ -18,7 +20,8 @@ Discipline.new = function(name)
 
 ---@diagnostic disable-next-line: inject-field
     self._ = {
-        name = name
+        name = name,
+        timer = Timer.new(500)
     }
 
     return self
@@ -41,11 +44,17 @@ end
 
 ---@return boolean
 function Discipline:IsReady()
-    return mq.TLO.Me.CombatAbilityReady(self:Name())
+    ---@type Timer
+    self._.timer = self._.timer
+    return mq.TLO.Me.CombatAbilityReady(self:Name())() and self._.timer:timer_expired()
 end
 
 function Discipline:DoAction()
+    ---@type Timer
+    self._.timer = self._.timer
+
     mq.cmd("/disc " .. self:Name())
+    self._.timer:reset()
 end
 
 return Discipline

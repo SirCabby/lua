@@ -1,6 +1,8 @@
 ---@diagnostic disable: undefined-field
 local mq = require("mq")
 
+local Timer = require("utils.Time.Timer")
+
 local Status = require("cabby.status")
 
 ---@class Skill : ActionType
@@ -20,7 +22,8 @@ Skill.new = function(name)
 
 ---@diagnostic disable-next-line: inject-field
     self._ = {
-        name = name
+        name = name,
+        timer = Timer.new(500)
     }
 
     return self
@@ -95,12 +98,17 @@ function Skill:IsReady()
     if mq.TLO.Target.Distance() > 14 then return false end
     if self:Facing() and not Status.IsFacingTarget() then return false end
 
-    return mq.TLO.Me.AbilityReady(self:Name())()
+    return mq.TLO.Me.AbilityReady(self:Name())() and self._.timer:timer_expired()
 end
 
 function Skill:DoAction()
     if self:Name() == "none" then return end
+
+    ---@type Timer
+    self._.timer = self._.timer
+
     mq.cmd('/doability "' .. self:Name() .. '"')
+    self._.timer:reset()
 end
 
 return Skill
