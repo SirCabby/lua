@@ -22,7 +22,13 @@ EditAction.new = function(liveAction)
     if liveAction.enabled == nil then liveAction.enabled = true end
     if liveAction.luaEnabled == nil then liveAction.luaEnabled = false end
 
-    self.actionType = ActionType.Edit
+    if liveAction.actionType == nil then
+        self.actionType = ActionType.Edit
+        self.editing = true
+    else
+        self.actionType = liveAction.actionType
+    end
+    
     self.liveAction = liveAction
     self.name = liveAction.name
     self.enabled = liveAction.enabled

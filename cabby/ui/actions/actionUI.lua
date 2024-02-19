@@ -109,7 +109,7 @@ ActionUI.ActionControl = function(liveAction, actions, availableActions)
         end
 
         local hasNoActions = false
-        if not editAction.editing or editAction.actionType == EditAction.actionType then
+        if not editAction.editing or editAction.actionType == ActionType.Edit then
             ImGui.BeginDisabled()
             hasNoActions = true
         end
