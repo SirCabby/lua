@@ -160,7 +160,13 @@ Menu.OpenMainMenu = function()
                         ---@type BaseState
                         state = state
                         local isSelected = selectedIndex == i + indexBase
-                        if ImGui.Selectable(state.key:sub(1, -6), isSelected) then
+
+                        local stateLabel = state.key:sub(1, -6)
+                        if not state:IsEnabled() then
+                            stateLabel = "(" .. stateLabel .. ")"
+                        end
+
+                        if ImGui.Selectable(stateLabel, isSelected) then
                             selectedIndex = i + indexBase
                             if state.BuildMenu == nil then
                                 selectedMenu = PageDne
