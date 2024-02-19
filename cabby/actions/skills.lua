@@ -50,35 +50,35 @@ local setAttribute = function(attr, ...)
     end
 end
 
-setAttribute("damage",
-Skills.backstab, Skills.bash, Skills.dragonpunch, Skills.eaglestrike, Skills.flyingkick, Skills.intimidation,
-Skills.kick, Skills.roundkick, Skills.slam, Skills.tailrake, Skills.tigerclaw)
+-- setAttribute("damage",
+-- Skills.backstab, Skills.bash, Skills.dragonpunch, Skills.eaglestrike, Skills.flyingkick, Skills.intimidation,
+-- Skills.kick, Skills.roundkick, Skills.slam, Skills.tailrake, Skills.tigerclaw)
 
 setAttribute("facing",
 Skills.backstab, Skills.bash, Skills.begging, Skills.disarm, Skills.dragonpunch, Skills.eaglestrike,
 Skills.flyingkick, Skills.intimidation, Skills.kick, Skills.roundkick, Skills.slam, Skills.taunt,
 Skills.tailrake, Skills.tigerclaw)
 
-setAttribute("fear",
-Skills.intimidation)
+-- setAttribute("fear",
+-- Skills.intimidation)
 
-setAttribute("hate",
-Skills.taunt)
+-- setAttribute("hate",
+-- Skills.taunt)
 
 setAttribute("melee",
-Skills.disarm, Skills.intimidation, Skills.taunt)
+Skills.disarm, Skills.intimidation)
 
 setAttribute("primary",
-Skills.backstab, Skills.flyingkick, Skills.kick, Skills.roundkick, Skills.slam)
+Skills.slam, Skills.backstab, Skills.flyingkick, Skills.roundkick, Skills.kick) -- Ordered by priority
 
-setAttribute("push",
-Skills.dragonpunch, Skills.tailrake)
+-- setAttribute("push",
+-- Skills.dragonpunch, Skills.tailrake)
 
 setAttribute("secondary",
-Skills.dragonpunch, Skills.eaglestrike, Skills.tailrake, Skills.tigerclaw)
+Skills.dragonpunch, Skills.tailrake, Skills.eaglestrike, Skills.tigerclaw) -- Ordered by priority
 
-setAttribute("stun",
-Skills.bash, Skills.slam)
+-- setAttribute("stun",
+-- Skills.bash, Skills.slam)
 
 setAttribute("targeted",
 Skills.backstab, Skills.bash, Skills.begging, Skills.disarm, Skills.dragonpunch, Skills.eaglestrike,
