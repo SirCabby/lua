@@ -44,7 +44,9 @@ Disciplines.Refresh = function()
             Disciplines.melee[#Disciplines.melee+1] = Discipline.new(disc.Name())
         end
 
-        -- print(disc.Name())
+        print(disc.Name())
+        -- print(disc.CategoryID())
+        -- print(disc.SubcategoryID())
         -- print(" -- " .. disc.EnduranceCost())
         -- print(" -- " .. disc.TargetType())
         -- print(" -- " .. disc.SpellType())

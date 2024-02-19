@@ -126,7 +126,10 @@ ActionUI.ActionControl = function(liveAction, actions, availableActions)
             for _, action in ipairs(actionChoices) do
                 ---@type ActionType
                 action = action
-                local _, pressed = ImGui.Selectable(action:Name(), editAction.name == action:Name())
+
+                local name = action:Name()
+
+                local _, pressed = ImGui.Selectable(name, editAction.name == action:Name())
                 if pressed then
                     editAction.name = action:Name()
                 end
