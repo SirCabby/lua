@@ -79,7 +79,7 @@ ActionUI.ActionControl = function(liveAction, actions, availableActions)
             ImGui.BeginDisabled()
         end
         ImGui.SameLine()
-        ImGui.PushItemWidth(120)
+        ImGui.SetNextItemWidth(120)
         if ImGui.BeginCombo("##type" .. actionIndex, actionTypes[editAction.actionType]) then
             for _, actionType in ipairs(orderedActionTypes) do
                 local typeActions = {}
@@ -103,7 +103,6 @@ ActionUI.ActionControl = function(liveAction, actions, availableActions)
             end
             ImGui.EndCombo()
         end
-        ImGui.PopItemWidth()
         if not editAction.editing then
             ImGui.EndDisabled()
         end
@@ -114,7 +113,7 @@ ActionUI.ActionControl = function(liveAction, actions, availableActions)
             hasNoActions = true
         end
         ImGui.SameLine()
-        ImGui.PushItemWidth(200)
+        ImGui.SetNextItemWidth(200)
         if ImGui.BeginCombo("##name" .. actionIndex, editAction.name) then
             local actionChoices = {}
             if editAction.actionType == ActionType.Ability then
@@ -137,7 +136,6 @@ ActionUI.ActionControl = function(liveAction, actions, availableActions)
 
             ImGui.EndCombo()
         end
-        ImGui.PopItemWidth()
         if hasNoActions then
             ImGui.EndDisabled()
         end

@@ -863,7 +863,7 @@ local function buildCommandEventEditor(commandOrEvent, overrideHelpText, allComm
     if commandOrEvent:lower() == "event" then
         width = 154
     end
-    ImGui.PushItemWidth(width)
+    ImGui.SetNextItemWidth(width)
     if ImGui.BeginCombo("##foo1", selectedCommandEvent) then
         if ImGui.Selectable("Default", selectedCommandEventIndex.value == 0) then
             selectedCommandEventIndex.value = 0
@@ -879,7 +879,6 @@ local function buildCommandEventEditor(commandOrEvent, overrideHelpText, allComm
         if tellName ~= nil then tellName.value = "" end
         ImGui.EndCombo()
     end
-    ImGui.PopItemWidth()
 
     -- Update subtype list for selected command/event
     if selectedCommandEventIndex.value <= 0 then
@@ -1020,7 +1019,7 @@ local function buildCommandEventEditor(commandOrEvent, overrideHelpText, allComm
         if selectedAddSubtypeIndex.value > 0 then
             comboDisplay = availableSubtypes[selectedAddSubtypeIndex.value]
         end
-        ImGui.PushItemWidth(122)
+        ImGui.SetNextItemWidth(122)
         if ImGui.BeginCombo("##foo2", comboDisplay) then
             for index, channel in ipairs(availableSubtypes) do
                 if ImGui.Selectable(channel, selectedAddSubtypeIndex.value == index) then
@@ -1029,7 +1028,6 @@ local function buildCommandEventEditor(commandOrEvent, overrideHelpText, allComm
             end
             ImGui.EndCombo()
         end
-        ImGui.PopItemWidth()
         ImGui.SameLine()
 
         -- Build Add Button
@@ -1052,7 +1050,7 @@ local function buildCommandEventEditor(commandOrEvent, overrideHelpText, allComm
         ImGui.TextUnformatted("Name:")
 
         ImGui.SameLine()
-        ImGui.PushItemWidth(152)
+        ImGui.SetNextItemWidth(152)
         if allSubtypeList ~= nil and not Speak.IsTellType(comboDisplay) then
             ImGui.BeginDisabled()
             ImGui.InputTextWithHint("##foo3", "(disabled)", "")
@@ -1069,7 +1067,6 @@ local function buildCommandEventEditor(commandOrEvent, overrideHelpText, allComm
                 end
             end
         end
-        ImGui.PopItemWidth()
     end
 
     -- Add Button here if no subType list
@@ -1289,7 +1286,7 @@ local function buildCHelpTab()
         ImGui.Text("")
 
         -- Combo Selector
-        ImGui.PushItemWidth(160)
+        ImGui.SetNextItemWidth(160)
         if ImGui.BeginCombo("Command Type##foo5", helpTabTypeOptions[helpTabTypeSelected]) then
             for index, channel in ipairs(helpTabTypeOptions) do
                 if ImGui.Selectable(channel, helpTabTypeSelected == index) then
@@ -1300,7 +1297,6 @@ local function buildCHelpTab()
             end
             ImGui.EndCombo()
         end
-        ImGui.PopItemWidth()
 
         -- Left List Selector
         local width, height = ImGui.GetContentRegionAvail()
