@@ -19,6 +19,7 @@ local Disciplines = require("cabby.actions.disciplines")
 local MeleeStateConfig = require("cabby.configs.meleeStateConfig")
 local Menu = require("cabby.ui.menu")
 local Skills = require("cabby.actions.skills")
+local Status = require('cabby.status')
 local UserInput = require("cabby.utils.userinput")
 
 local function passive()
@@ -167,7 +168,7 @@ MeleeState._.meleeActions.attackTarget = function()
     end
 
     if mq.TLO.Target.Distance() < range then
-        if not mq.TLO.Me.Combat() then
+        if not mq.TLO.Me.Combat() and Status:IsFacingTarget() then
             mq.cmd("/attack on")
         end
 
