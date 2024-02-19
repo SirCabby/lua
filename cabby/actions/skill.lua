@@ -94,8 +94,7 @@ end
 ---@return boolean
 function Skill:IsReady()
     if self:Name() == "none" then return true end
-    if self:Targeted() and mq.TLO.Target.ID() < 1 then return false end
-    if mq.TLO.Target.Distance() > 14 then return false end
+    if self:Targeted() and (mq.TLO.Target.ID() < 1 or mq.TLO.Target.Distance() > 14) then return false end
     if self:Facing() and not Status.IsFacingTarget() then return false end
 
     return mq.TLO.Me.AbilityReady(self:Name())() and self._.timer:timer_expired()
