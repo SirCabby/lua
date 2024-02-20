@@ -150,9 +150,8 @@ ActionUI.ActionControl = function(liveAction, actions, availableActions)
             ImGui.SameLine()
             if ImGui.Button("Cancel", 50, 22) then
                 editAction:CancelEdit()
-                if editAction.actionType == ActionType.Edit then
+                if editAction.actionType == ActionType.Edit or editAction.actionType == nil then
                     ActionUI._.actions[liveAction] = nil
-                    TableUtils.RemoveByValue(actions, liveAction)
                     table.remove(actions, actionIndex)
                     Global.configStore:SaveConfig()
                 end
