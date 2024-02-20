@@ -1,5 +1,6 @@
 local mq = require("mq")
 
+local Disciplines = require("cabby.actions.disciplines")
 local Skills = require("cabby.actions.skills")
 
 ---@class Character
@@ -35,8 +36,6 @@ local function loadAbilities()
             Character.meleeAbilities[#Character.meleeAbilities+1] = skill
         end
     end
-
-    
 end
 
 Character.Refresh = function()
@@ -45,6 +44,19 @@ Character.Refresh = function()
     -- aa
     -- combatabilities (discs?) auras?
     -- songs
+end
+Character.Refresh()
+
+Character.HasTaunts = function()
+    return Skills.taunt:HasAction() or #Disciplines.taunt > 0
+end
+
+Character.HasHates = function()
+    return #Disciplines.hate > 0
+end
+
+Character.HasSecondaryAbilities = function()
+    return #Skills.secondary > 0
 end
 
 return Character

@@ -2,8 +2,11 @@
 local ActionType = {}
 
 ActionType.Edit = "none"
+ActionType.AA = "aa"
 ActionType.Ability = "ability"
 ActionType.Discipline = "discipline"
+ActionType.Item = "item"
+ActionType.Spell = "spell"
 
 ---@return string
 function ActionType:Name()

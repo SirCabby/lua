@@ -39,12 +39,20 @@ Disciplines.Refresh = function()
         Disciplines.all[#Disciplines.all+1] = Discipline.new(disc.Name())
 
         if disc.HasSPA(92)() or disc.HasSPA(192)() then
-            Disciplines.taunt[#Disciplines.taunt+1] = Discipline.new(disc.Name())
+            Disciplines.hate[#Disciplines.hate+1] = Discipline.new(disc.Name())
         elseif disc.TargetType() == "Single" then
             Disciplines.melee[#Disciplines.melee+1] = Discipline.new(disc.Name())
         end
 
-        print(disc.Name())
+        -- if disc.Name() == "Provoke" then
+        --     print(disc.Name() .. " " .. disc.TargetType())
+        --     for j = 1, 800 do
+        --         if disc.HasSPA(j)() then
+        --             print(" -- HasSPA: " .. tostring(j))
+        --         end
+        --     end
+        -- end
+        -- print(disc.Name())
         -- print(disc.CategoryID())
         -- print(disc.SubcategoryID())
         -- print(" -- " .. disc.EnduranceCost())

@@ -13,20 +13,20 @@ local ActionUI = {
 
 local actionTypes = {
     [ActionType.Edit] =           "<Select Type>",
-    [ActionType.Edit.."1"] =      "AA",
+    [ActionType.AA] =             "AA",
     [ActionType.Ability] =        "Ability",
     [ActionType.Discipline] =     "Discipline",
-    [ActionType.Edit.."3"] =      "Item Click",
-    [ActionType.Edit.."4"] =      "Spell"
+    [ActionType.Item] =           "Item Click",
+    [ActionType.Spell] =          "Spell"
 }
 
 local orderedActionTypes = {
     ActionType.Edit,
-    ActionType.Edit.."1",
+    ActionType.AA,
     ActionType.Ability,
     ActionType.Discipline,
-    ActionType.Edit.."3",
-    ActionType.Edit.."4"
+    ActionType.Item,
+    ActionType.Spell
 }
 
 ---@param liveAction Action
@@ -60,7 +60,7 @@ ActionUI.ActionControl = function(liveAction, actions, availableActions)
     end
 
     local childFlags = bit32.bor(ImGuiChildFlags.Border, ImGuiChildFlags.AutoResizeX)
-    if ImGui.BeginChild("actionChild" .. tostring(actionIndex), math.max(width, 613), height, childFlags) then
+    if ImGui.BeginChild("actionChild" .. tostring(actionIndex), 613, height, childFlags) then
         local isValid = true
         if editAction.editing or editAction.actionType == ActionType.Edit or editAction.name == "" or editAction.name == "none" then
             isValid = false
@@ -83,10 +83,16 @@ ActionUI.ActionControl = function(liveAction, actions, availableActions)
         if ImGui.BeginCombo("##type" .. actionIndex, actionTypes[editAction.actionType]) then
             for _, actionType in ipairs(orderedActionTypes) do
                 local typeActions = {}
-                if actionType == ActionType.Ability then
+                if actionType == ActionType.AA then
+                    typeActions = availableActions.aas or typeActions
+                elseif actionType == ActionType.Ability then
                     typeActions = availableActions.abilities or typeActions
                 elseif actionType == ActionType.Discipline then
                     typeActions = availableActions.discs or typeActions
+                elseif actionType == ActionType.Item then
+                    typeActions = availableActions.items or typeActions
+                elseif actionType == ActionType.Spell then
+                    typeActions = availableActions.spells or typeActions
                 end
 
                 if #typeActions > 0 or actionType == ActionType.Edit then
@@ -96,7 +102,7 @@ ActionUI.ActionControl = function(liveAction, actions, availableActions)
                             editAction:SwitchType(actionType)
                             editAction.editing = true
                             editAction.name = nil
-                            ActionUI._.actions[editAction.liveAction] = editAction
+                            ActionUI._.actions[liveAction] = editAction
                         end
                     end
                 end
@@ -144,8 +150,9 @@ ActionUI.ActionControl = function(liveAction, actions, availableActions)
             ImGui.SameLine()
             if ImGui.Button("Cancel", 50, 22) then
                 editAction:CancelEdit()
-                if editAction.actionType == EditAction.actionType then
-                    ActionUI._.actions[editAction] = nil
+                if editAction.actionType == ActionType.Edit then
+                    ActionUI._.actions[liveAction] = nil
+                    TableUtils.RemoveByValue(actions, liveAction)
                     table.remove(actions, actionIndex)
                     Global.configStore:SaveConfig()
                 end
@@ -164,7 +171,7 @@ ActionUI.ActionControl = function(liveAction, actions, availableActions)
         end
         ImGui.SameLine()
         if ImGui.Button("Up", 30, 22) then
-            ActionUI._.actions[editAction] = nil
+            ActionUI._.actions[liveAction] = nil
             table.remove(actions, actionIndex)
             table.insert(actions, actionIndex-1, liveAction)
             Global.configStore:SaveConfig()
@@ -180,7 +187,7 @@ ActionUI.ActionControl = function(liveAction, actions, availableActions)
         end
         ImGui.SameLine()
         if ImGui.Button("Down", 50, 22) then
-            ActionUI._.actions[editAction] = nil
+            ActionUI._.actions[liveAction] = nil
             table.remove(actions, actionIndex)
             table.insert(actions, actionIndex+1, liveAction)
             Global.configStore:SaveConfig()
@@ -191,7 +198,7 @@ ActionUI.ActionControl = function(liveAction, actions, availableActions)
 
         ImGui.SameLine()
         if ImGui.Button("X", 24, 22) then
-            ActionUI._.actions[editAction] = nil
+            ActionUI._.actions[liveAction] = nil
             table.remove(actions, actionIndex)
             Global.configStore:SaveConfig()
         end
