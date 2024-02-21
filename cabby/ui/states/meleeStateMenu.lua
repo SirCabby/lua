@@ -226,15 +226,29 @@ function MeleeStateMenu.BuildMenu(meleeState)
             ImGui.SameLine()
             CommonUI.HelpMarker("When enabled, bash will be used instead of the selected Primary Melee Skill only when a shield is presently equipped.")
         end
+        ImGui.EndTable()
+    end
+    ImGui.PopStyleVar()
+
+    if ImGui.BeginTabBar("Melee Tabs") then
+        if ImGui.BeginTabItem("Melee") then
+            local actions = MeleeStateConfig.GetActions()
+            local availableActions = AvailableActions.new()
+            availableActions.abilities = Character.meleeAbilities
+            availableActions.discs = Disciplines.melee
+
+            if ImGui.Button("Add##" .. tostring(actions), 50, 23) then
+                local newAction = {}
+                actions[#actions+1] = newAction
+            end
+
+            BuildActions(actions, availableActions)
+
+            ImGui.EndTabItem()
+        end
 
         if Character.HasHates() or Character.HasTaunts() then
-            ImGui.SeparatorText("Tanking")
-
-            ImGui.Dummy(0, 0)
-            ImGui.SameLine()
-
-            local childFlags = bit32.bor(ImGuiChildFlags.AutoResizeX, ImGuiChildFlags.AutoResizeY)
-            if ImGui.BeginChild("tanking", 613, 0, childFlags) then
+            if ImGui.BeginTabItem("Tanking") then
                 ---@type boolean
                 local clicked, result
                 result, clicked = ImGui.Checkbox("Tanking", MeleeStateConfig:GetTanking())
@@ -306,26 +320,13 @@ function MeleeStateMenu.BuildMenu(meleeState)
                         BuildActions(actions, availableActions)
                     end
                 end
+
+                ImGui.EndTabItem()
             end
-            ImGui.EndChild()
         end
 
-        ImGui.EndTable()
+        ImGui.EndTabBar()
     end
-    ImGui.PopStyleVar()
-
-    ImGui.SeparatorText("Melee Actions");
-    local actions = MeleeStateConfig.GetActions()
-    local availableActions = AvailableActions.new()
-    availableActions.abilities = Character.meleeAbilities
-    availableActions.discs = Disciplines.melee
-
-    if ImGui.Button("Add##" .. tostring(actions), 50, 23) then
-        local newAction = {}
-        actions[#actions+1] = newAction
-    end
-
-    BuildActions(actions, availableActions)
 end
 
 return MeleeStateMenu
