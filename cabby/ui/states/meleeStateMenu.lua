@@ -231,23 +231,14 @@ function MeleeStateMenu.BuildMenu(meleeState)
     ImGui.PopStyleVar()
 
     if ImGui.BeginTabBar("Melee Tabs") then
-        if ImGui.BeginTabItem("Melee") then
-            local actions = MeleeStateConfig.GetActions()
-            local availableActions = AvailableActions.new()
-            availableActions.abilities = Character.meleeAbilities
-            availableActions.discs = Disciplines.melee
-
-            if ImGui.Button("Add##" .. tostring(actions), 50, 23) then
-                local newAction = {}
-                actions[#actions+1] = newAction
+        if Character.HasHates() or Character.HasTaunts() then
+            local tabActive = true
+            if not MeleeStateConfig:GetTanking() then
+                tabActive = false
+                ImGui.PushStyleColor(ImGuiCol.Tab, .2, .2, .2, 1)
+                ImGui.PushStyleColor(ImGuiCol.TabActive, .2, .2, .2, 1)
             end
 
-            BuildActions(actions, availableActions)
-
-            ImGui.EndTabItem()
-        end
-
-        if Character.HasHates() or Character.HasTaunts() then
             if ImGui.BeginTabItem("Tanking") then
                 ---@type boolean
                 local clicked, result
@@ -323,6 +314,26 @@ function MeleeStateMenu.BuildMenu(meleeState)
 
                 ImGui.EndTabItem()
             end
+
+            if not tabActive then
+                ImGui.PopStyleColor(2)
+            end
+        end
+
+        if ImGui.BeginTabItem("Melee") then
+            local actions = MeleeStateConfig.GetActions()
+            local availableActions = AvailableActions.new()
+            availableActions.abilities = Character.meleeAbilities
+            availableActions.discs = Disciplines.melee
+
+            if ImGui.Button("Add##" .. tostring(actions), 50, 23) then
+                local newAction = {}
+                actions[#actions+1] = newAction
+            end
+
+            BuildActions(actions, availableActions)
+
+            ImGui.EndTabItem()
         end
 
         ImGui.EndTabBar()
