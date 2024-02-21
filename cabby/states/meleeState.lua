@@ -8,15 +8,12 @@ local TableUtils = require("utils.TableUtils.TableUtils")
 local Action = require('cabby.actions.action')
 local Actions = require("cabby.actions.actions")
 local ActionType = require("cabby.actions.actionType")
-local ActionUI = require("cabby.ui.actions.actionUI")
-local AvailableActions = require("cabby.actions.availableActions")
 local Character = require("cabby.character")
 local ChelpDocs = require("cabby.commands.chelpDocs")
 local Command = require("cabby.commands.command")
 local Commands = require("cabby.commands.commands")
-local CommonUI = require("cabby.ui.commonUI")
-local Disciplines = require("cabby.actions.disciplines")
 local MeleeStateConfig = require("cabby.configs.meleeStateConfig")
+local MeleeStateMenu = require("cabby.ui.states.meleeStateMenu")
 local Menu = require("cabby.ui.menu")
 local Skills = require("cabby.actions.skills")
 local Status = require('cabby.status')
@@ -40,12 +37,6 @@ local MeleeState = {
         meleeActions = {
             checkForCombat = passive,
             attackTarget = passive
-        },
-        primaryAbilityChoices = {},
-        secondaryAbilityChoices = {},
-        menu = {
-            selectedPrimaryAbility = 1,
-            selectedSecondaryAbility = 1
         }
     }
 }
@@ -53,15 +44,6 @@ local MeleeState = {
 ---@param str string
 local function DebugLog(str)
     Debug.Log(MeleeState.key, str)
-end
-
-local function Reset()
-    MeleeState._.currentAction = MeleeState._.meleeActions.checkForCombat
-    MeleeState._.currentTargetID = 0
-    MeleeState._.currentActionTimer = Timer.new(0)
-    if mq.TLO.Stick.Active() or mq.TLO.Stick.Paused() then
-        mq.cmd("/stick off")
-    end
 end
 
 ---@return boolean isIncapacitated
@@ -79,19 +61,19 @@ local function FixCombatState()
     end
 end
 
-local function GetSpawnMeleeRange(id)
+function MeleeState.GetSpawnMeleeRange(id)
     return math.min(14, mq.TLO.Spawn(id).MaxRangeTo() - 3)
 end
 
 ---@param range number
-local function StickToCurrentTarget(range)
+function MeleeState.StickToCurrentTarget(range)
     if MeleeStateConfig.GetStick() then
         mq.cmd("/stick id " .. tostring(MeleeState._.currentTargetID) .. " loose " .. range)
     end
 end
 
 ---@param id number
-local function EngageTargetId(id)
+function MeleeState.EngageTargetId(id)
     mq.cmd("/mqtarget npc id " .. tostring(id))
     MeleeState._.currentTargetID = id
     MeleeState._.currentAction = MeleeState._.meleeActions.attackTarget
@@ -111,19 +93,12 @@ local function DoPrimaryCombatAction()
         primaryAction:DoAction()
     end
 
-    if mq.TLO.Me.Class.ShortName() ~= "MNK" then return end
-
-    local secondaryAction = MeleeStateConfig.GetSecondaryCombatAbility()
-    if secondaryAction:IsReady() then
-        secondaryAction:DoAction()
+    if mq.TLO.Me.Class.ShortName() == "MNK" then
+        local secondaryAction = MeleeStateConfig.GetSecondaryCombatAbility()
+        if secondaryAction:IsReady() then
+            secondaryAction:DoAction()
+        end
     end
-end
-
-local function BuildPrimaryAbilityArray()
-    MeleeState._.primaryAbilityChoices = TableUtils.GetValues(Character.primaryMeleeAbilities)
-    MeleeState._.secondaryAbilityChoices = TableUtils.GetValues(Character.secondaryMeleeAbilities)
-    MeleeState._.menu.selectedPrimaryAbility = TableUtils.ArrayIndexOf(MeleeState._.primaryAbilityChoices,
-        Actions.Get(ActionType.Ability, MeleeStateConfig.GetPrimaryCombatAbility():Name()))
 end
 
 MeleeState._.meleeActions.checkForCombat = function()
@@ -132,7 +107,7 @@ MeleeState._.meleeActions.checkForCombat = function()
         for i = 1, 20 do
             local xtarget = mq.TLO.Me.XTarget(i)
             if xtarget.TargetType() == "Auto Hater" and xtarget.ID() > 0 then
-                EngageTargetId(xtarget.ID())
+                MeleeState.EngageTargetId(xtarget.ID())
                 return true
             end
         end
@@ -145,13 +120,13 @@ MeleeState._.meleeActions.attackTarget = function()
     -- Not on target? If timed out re-aquire target
     if mq.TLO.Target.ID() ~= MeleeState._.currentTargetID then
         if MeleeState._.currentActionTimer:timer_expired() then
-            Reset()
+            MeleeState.Reset()
         end
         return true
     end
 
     if mq.TLO.Target.Dead() then
-        Reset()
+        MeleeState.Reset()
         return true
     end
 
@@ -161,10 +136,10 @@ MeleeState._.meleeActions.attackTarget = function()
 
     FixCombatState()
 
-    local range = GetSpawnMeleeRange(MeleeState._.currentTargetID)
+    local range = MeleeState.GetSpawnMeleeRange(MeleeState._.currentTargetID)
 
     if MeleeStateConfig.GetStick() and not mq.TLO.Stick.Active() and mq.TLO.Target.Distance() < MeleeStateConfig.GetEngageDistance() and mq.TLO.Target.LineOfSight() then
-        StickToCurrentTarget(range)
+        MeleeState.StickToCurrentTarget(range)
     end
 
     if mq.TLO.Target.Distance() < range then
@@ -188,12 +163,18 @@ MeleeState._.meleeActions.attackTarget = function()
     return true
 end
 
+function MeleeState.Reset()
+    MeleeState._.currentAction = MeleeState._.meleeActions.checkForCombat
+    MeleeState._.currentTargetID = 0
+    MeleeState._.currentActionTimer = Timer.new(0)
+    if mq.TLO.Stick.Active() or mq.TLO.Stick.Paused() then
+        mq.cmd("/stick off")
+    end
+end
+
 ---@diagnostic disable-next-line: duplicate-set-field
 function MeleeState.Init()
     if not MeleeState._.isInit then
-        -- Build Menu Lists
-        BuildPrimaryAbilityArray()
-
         Menu.RegisterState(MeleeState)
 
         local attackDocs = ChelpDocs.new(function() return {
@@ -206,7 +187,7 @@ function MeleeState.Init()
             if #args < 1 then return end
 
             if UserInput.IsFalse(args[1]:lower()) then
-                Reset()
+                MeleeState.Reset()
                 return
             end
 
@@ -215,15 +196,15 @@ function MeleeState.Init()
 
             if Commands.GetCommandOwners(MeleeState.eventIds.attack):HasPermission(speaker) then
                 DebugLog("MeleeAttack speaker [" .. speaker .. "] targetId: [ " .. targetId .. "]")
-                EngageTargetId(targetId)
-                StickToCurrentTarget(GetSpawnMeleeRange(targetId))
+                MeleeState.EngageTargetId(targetId)
+                MeleeState.StickToCurrentTarget(MeleeState.GetSpawnMeleeRange(targetId))
             else
                 DebugLog("Ignoring MeleeAttack speaker [" .. speaker .. "]")
             end
         end
         Commands.RegisterCommEvent(Command.new(MeleeState.eventIds.attack, event_Attack, attackDocs))
 
-        Reset()
+        MeleeState.Reset()
         MeleeState._.isInit = true
     end
 end
@@ -248,221 +229,8 @@ MeleeState.SetEnabled = function(isEnabled)
     MeleeStateConfig.SetEnabled(isEnabled)
 end
 
----@diagnostic disable-next-line: duplicate-set-field
 function MeleeState.BuildMenu()
-    ImGui.Text("Melee State Status")
-
-    ImGui.SameLine(math.max(ImGui.GetContentRegionAvail() - 68, 200))
-    ---@type boolean
-    local clicked, result
-    result, clicked = ImGui.Checkbox("Enabled", MeleeState.IsEnabled())
-    if clicked then
-        MeleeState.SetEnabled(result)
-    end
-
-    ImGui.PushStyleVar(ImGuiStyleVar.CellPadding, ImVec2(4.0, 4.0))
-    local tableSorting_flags = bit32.bor(ImGuiTableFlags.RowBg, ImGuiTableFlags.BordersOuter, ImGuiTableFlags.BordersInner, ImGuiTableFlags.NoHostExtendX)
-    if ImGui.BeginTable("t1", 2, tableSorting_flags) then
-        ImGui.TableSetupColumn("col1", ImGuiTableColumnFlags.WidthFixed, 140)
-        ImGui.TableSetupColumn("col2", ImGuiTableColumnFlags.WidthStretch)
-
-        ImGui.TableNextRow()
-        ImGui.TableNextColumn()
-        ImGui.Text("Current Action")
-
-        ImGui.TableNextColumn()
-        local currentTask = "Standby"
-        local attacking = false
-        if MeleeState._.currentAction == MeleeState._.meleeActions.attackTarget then
-            currentTask = "Attacking: " .. tostring(MeleeState._.currentTargetID)
-            attacking = true
-        end
-        ImGui.Text(currentTask)
-
-        ImGui.TableNextRow()
-        ImGui.TableNextColumn()
-        ImGui.Text("Attack Target")
-
-        ImGui.TableNextColumn()
-        local targetName = "<NONE>"
-        if attacking then
-            targetName = mq.TLO.Spawn(MeleeState._.currentTargetID).Name()
-        end
-        ImGui.Text(targetName)
-
-        ImGui.EndTable()
-    end
-    ImGui.PopStyleVar()
-
-
-    ImGui.PushStyleVar(ImGuiStyleVar.CellPadding, ImVec2(7.0, 7.0))
-    local table2_flags = bit32.bor(ImGuiTableFlags.RowBg)
-    if ImGui.BeginTable("t2", 1, table2_flags) then
-        ImGui.TableNextRow()
-        ImGui.TableNextColumn()
-
-        ImGui.Dummy(0, 0)
-        ImGui.SameLine()
-
-        ---@type boolean
-        local clicked, result
-        result, clicked = ImGui.Checkbox("Stick", MeleeStateConfig:GetStick())
-        if clicked then
-            MeleeStateConfig.SetStick(result)
-        end
-
-        ImGui.SameLine()
-        ---@type boolean
-        local clicked, result
-        result, clicked = ImGui.Checkbox("Auto-Engage", MeleeStateConfig:GetAutoEngage())
-        if clicked then
-            MeleeStateConfig.SetAutoEngage(result)
-        end
-
-        ImGui.Dummy(0, 0)
-        ImGui.SameLine()
-
-        ImGui.PushItemWidth(40)
-        ---@type integer
-        local result
-        ---@type boolean
-        local selected
-        result, selected = ImGui.DragInt("Engage Distance", MeleeStateConfig:GetEngageDistance(), 1, 0, 500)
-        if selected then
-            MeleeStateConfig.SetEngageDistance(result)
-        end
-        ImGui.PopItemWidth()
-
-        ImGui.SameLine()
-        if ImGui.Button("Reset Default", 100, 23) then
-            MeleeStateConfig.SetEngageDistance(50)
-        end
-
-        ImGui.TableNextRow()
-        ImGui.TableNextColumn()
-
-        ImGui.Dummy(0, 0)
-        ImGui.SameLine()
-
-        local disabled = false
-        if mq.TLO.Target() == nil then
-            ImGui.BeginDisabled(true)
-            disabled = true
-        end
-        if ImGui.Button("Attack", 60, 23) then
-            local targetId = mq.TLO.Target.ID()
-            EngageTargetId(targetId)
-            StickToCurrentTarget(GetSpawnMeleeRange(targetId))
-        end
-        if disabled then
-            ImGui.EndDisabled()
-        end
-
-        ImGui.SameLine()
-        if MeleeState._.currentAction ~= MeleeState._.meleeActions.attackTarget then
-            ImGui.BeginDisabled(true)
-            disabled = true
-        end
-        if ImGui.Button("Back Off", 70, 23) then
-            Reset()
-        end
-        if disabled then
-            ImGui.EndDisabled()
-        end
-
-        local attackLabel = "<No Target>"
-        if mq.TLO.Target() ~= nil then
-            ---@type string
-            ---@diagnostic disable-next-line: assign-type-mismatch
-            attackLabel = mq.TLO.Target()
-        end
-        ImGui.SameLine()
-        local width = ImGui.GetContentRegionAvail()
-        ImGui.PushItemWidth(width)
-        ImGui.LabelText("##f006", attackLabel)
-        ImGui.PopItemWidth()
-
-        ImGui.TableNextRow()
-        ImGui.TableNextColumn()
-
-        ImGui.Dummy(0, 0)
-        ImGui.SameLine()
-
-        ImGui.PushItemWidth(100)
-        local primaryMeleeAbility = MeleeStateConfig.GetPrimaryCombatAbility()
-        if ImGui.BeginCombo("Primary Melee Skill##foo7", primaryMeleeAbility:Name()) then
-            for index, value in ipairs(MeleeState._.primaryAbilityChoices) do
-                ---@type Skill
-                value = value
-                local _, pressed = ImGui.Selectable(value:Name(), MeleeState._.menu.selectedPrimaryAbility == index)
-                if pressed then
-                    MeleeState._.menu.selectedPrimaryAbility = index
-                    MeleeStateConfig.SetPrimaryCombatAbility(value)
-                end
-            end
-            ImGui.EndCombo()
-        end
-
-        if mq.TLO.Me.Class.ShortName() == "MNK" then
-            ImGui.SameLine()
-            local secondaryMeleeAbility = MeleeStateConfig.GetSecondaryCombatAbility()
-            if ImGui.BeginCombo("Secondary Melee Skill##foo8", secondaryMeleeAbility:Name()) then
-                for index, value in ipairs(MeleeState._.secondaryAbilityChoices) do
-                    ---@type Skill
-                    value = value
-                    local _, pressed = ImGui.Selectable(value:Name(), MeleeState._.menu.selectedSecondaryAbility == index)
-                    if pressed then
-                        MeleeState._.menu.selectedSecondaryAbility = index
-                        MeleeStateConfig.SetSecondaryCombatAbility(value)
-                    end
-                end
-                ImGui.EndCombo()
-            end
-        end
-        ImGui.PopItemWidth()
-
-        if Skills.bash:HasAction() then
-            ImGui.Dummy(0, 0)
-            ImGui.SameLine()
-
-            ---@type boolean
-            local clicked, result
-            result, clicked = ImGui.Checkbox("Bash when shield equipped", MeleeStateConfig:GetBashOverride())
-            if clicked then
-                MeleeStateConfig.SetBashOverride(result)
-            end
-
-            ImGui.SameLine()
-            CommonUI.HelpMarker("When enabled, bash will be used instead of the selected Primary Melee Skill only when a shield is presently equipped.")
-        end
-
-        ImGui.EndTable()
-    end
-    ImGui.PopStyleVar()
-
-    ImGui.SeparatorText("Melee Actions");
-
-    local actions = MeleeStateConfig.GetActions()
-    if ImGui.Button("Add", 50, 23) then
-        local newAction = {}
-        actions[#actions+1] = newAction
-    end
-
-    local availableActions = AvailableActions.new()
-    availableActions.abilities = Character.meleeAbilities
-    availableActions.discs = Disciplines.melee
-
-    for i, action in ipairs(actions) do
-        ---@type Action
-        action = action
-        if i % 2 == 0 then
-            ImGui.PushStyleColor(ImGuiCol.ChildBg, 0.1, 0.1, 0.1, 1)
-        else
-            ImGui.PushStyleColor(ImGuiCol.ChildBg, 0.15, 0.15, 0.15, 1)
-        end
-        ActionUI.ActionControl(action, actions, availableActions)
-        ImGui.PopStyleColor()
-    end
+    MeleeStateMenu.BuildMenu(MeleeState)
 end
 
 return MeleeState

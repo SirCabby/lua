@@ -127,8 +127,7 @@ local function ClassSetup(stateMachine)
 -- | 59 Mez
 
 -- | 69 Tank / grab aggro
-
--- | 79 Dps
+-- | 79 Dps (melee / spells)
 
 -- | -- OUT COMBAT
 -- | 89 Looting
