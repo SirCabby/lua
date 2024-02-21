@@ -92,6 +92,11 @@ function Skill:HasAction()
     return type(skillValue) == "number" and skillValue > 0
 end
 
+---@return number
+function Skill:EndCost()
+    return 0
+end
+
 ---@return boolean
 function Skill:IsReady()
     if self:Name() == "none" then return true end

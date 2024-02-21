@@ -1,5 +1,9 @@
+local mq = require("mq")
+
 local TableUtils = require("utils.TableUtils.TableUtils")
 
+local Action = require("cabby.actions.action")
+local Actions = require("cabby.actions.actions")
 local ActionType = require("cabby.actions.actionType")
 local CommonUI = require("cabby.ui.commonUI")
 local EditAction = require("cabby.ui.actions.editAction")
@@ -29,6 +33,12 @@ local orderedActionTypes = {
     ActionType.Spell
 }
 
+local orderedValueTypes = {
+    Action.valueTypes.Percent,
+    Action.valueTypes.Raw,
+    Action.valueTypes.Minimum
+}
+
 ---@param liveAction Action
 ---@return EditAction editAction
 local function GetEditAction(liveAction)
@@ -38,6 +48,18 @@ local function GetEditAction(liveAction)
         ActionUI._.actions[liveAction] = result
     end
     return result
+end
+
+---@param value string
+---@return string display
+local function GetUsageValueTypeDisplayFromValue(value)
+    for _, valueType in pairs(Action.valueTypes) do
+        if valueType.value == value then
+            return valueType.display
+        end
+    end
+
+    return Action.valueTypes.Minimum.display
 end
 
 ---@param liveAction Action
@@ -60,7 +82,7 @@ ActionUI.ActionControl = function(liveAction, actions, availableActions)
     end
 
     local childFlags = bit32.bor(ImGuiChildFlags.Border, ImGuiChildFlags.AutoResizeX)
-    if ImGui.BeginChild("actionChild" .. tostring(actionIndex), 613, height, childFlags) then
+    if ImGui.BeginChild("actionChild" .. tostring(actionIndex), 623, height, childFlags) then
         local isValid = true
         if editAction.editing or editAction.actionType == ActionType.Edit or editAction.name == "" or editAction.name == "none" then
             isValid = false
@@ -169,7 +191,7 @@ ActionUI.ActionControl = function(liveAction, actions, availableActions)
             ImGui.BeginDisabled()
         end
         ImGui.SameLine()
-        if ImGui.Button("Up", 30, 22) then
+        if ImGui.Button("Up", 40, 22) then
             ActionUI._.actions[liveAction] = nil
             table.remove(actions, actionIndex)
             table.insert(actions, actionIndex-1, liveAction)
@@ -204,12 +226,48 @@ ActionUI.ActionControl = function(liveAction, actions, availableActions)
 
         ---- EDITING ----
         if editAction.editing then
-            local _, pressed = ImGui.Checkbox("LUA Enabled", editAction.luaEnabled)
-            if pressed then
-                editAction.luaEnabled = not editAction.luaEnabled
+            local action = Actions.Get(editAction.actionType, editAction.name)
+            if action ~= nil and action:EndCost() > 0 then
+                ImGui.Text("Endurance Threshold")
+
+                ImGui.SameLine()
+                ImGui.SetNextItemWidth(100)
+                if ImGui.BeginCombo("##threshold" .. tostring(actions), GetUsageValueTypeDisplayFromValue(editAction.end_type)) then
+                    for _, valueType in ipairs(orderedValueTypes) do
+                        local _, pressed = ImGui.Selectable(valueType.display, editAction.end_type == valueType.value)
+                        if pressed then
+                            editAction.end_type = valueType.value
+                        end
+                    end
+                    ImGui.EndCombo()
+                end
+
+                if editAction.end_type ~= Action.valueTypes.Minimum.value then
+                    ImGui.SameLine()
+                    ImGui.SetNextItemWidth(40)
+                    local min = 0
+                    local max = 100
+                    if editAction.end_type == Action.valueTypes.Raw.value then
+                        min = action:EndCost()
+                        max = mq.TLO.Me.MaxEndurance()
+                    else
+                        min = math.ceil(action:EndCost() / mq.TLO.Me.MaxEndurance())
+                    end
+
+                    editAction.end_threshold = math.min(editAction.end_threshold or min, max)
+                    editAction.end_threshold = math.max(editAction.end_threshold, min)
+
+                    local result, selected = ImGui.DragInt("##cost" .. tostring(actions), editAction.end_threshold, 1, min, max)
+                    if selected then
+                        editAction.end_threshold = result
+                    end
+                end
+
+                ImGui.SameLine()
+                CommonUI.HelpMarker("Use this action only when above a certain resource threshold. 'Percent' uses percentage-based thresholds. 'Raw' uses a raw resource value. 'Minimum' assumes the minimum amount required by the action.")
+            else
+                ImGui.Dummy(0, 0)
             end
-            ImGui.SameLine()
-            CommonUI.HelpMarker("Provide a lua expression that results in 'true'. This is evaluated when deciding if an action should be run.")
 
             ImGui.SameLine(428)
             local cannotSave = false
@@ -223,6 +281,14 @@ ActionUI.ActionControl = function(liveAction, actions, availableActions)
             if cannotSave then
                 ImGui.EndDisabled()
             end
+
+            ImGui.SameLine()
+            local _, pressed = ImGui.Checkbox("LUA Enabled", editAction.luaEnabled)
+            if pressed then
+                editAction.luaEnabled = not editAction.luaEnabled
+            end
+            ImGui.SameLine()
+            CommonUI.HelpMarker("Provide a lua expression that results in 'true'. This is evaluated when deciding if an action should be run.")
 
             if editAction.luaEnabled then
                 local inputFlags = bit32.bor(ImGuiInputTextFlags.AllowTabInput)

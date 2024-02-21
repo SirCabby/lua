@@ -7,7 +7,16 @@ local Actions = require("cabby.actions.actions")
 ---@field enabled boolean
 ---@field luaEnabled boolean
 ---@field lua string
-local Action = {}
+--- Specialty fields
+---@field end_type string
+---@field end_threshold number
+local Action = {
+    valueTypes = {
+        Raw = { value = "raw", display = "Raw" },
+        Percent = { value = "percent", display = "Percent" },
+        Minimum = { value = "minimum", display = "Minimum" }
+    }
+}
 
 ---@param action Action
 ---@return boolean isLuaReady Returns true to continue executing action, false to abort action

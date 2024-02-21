@@ -1,5 +1,7 @@
 local TableUtils = require("utils.TableUtils.TableUtils")
 
+local Action = require("cabby.actions.action")
+local Actions = require("cabby.actions.actions")
 local ActionType = require("cabby.actions.actionType")
 
 ---@class EditAction : Action
@@ -28,12 +30,14 @@ EditAction.new = function(liveAction)
     else
         self.actionType = liveAction.actionType
     end
-    
+
     self.liveAction = liveAction
     self.name = liveAction.name
     self.enabled = liveAction.enabled
     self.lua = liveAction.lua
     self.luaEnabled = liveAction.luaEnabled
+    self.end_type = liveAction.end_type
+    self.end_threshold = liveAction.end_threshold
 
     return self
 end
@@ -41,12 +45,24 @@ end
 ---@param actionType string
 function EditAction:SwitchType(actionType)
     self.actionType = actionType
+
+    if Actions.Get(self.actionType, self.name):EndCost() > 0 then
+        self.end_type = self.liveAction.end_type or Action.valueTypes.Minimum.value
+        if self.end_type == Action.valueTypes.Minimum.value then
+            self.end_threshold = nil
+        end
+    else
+        self.end_type = nil
+    end
 end
 
 function EditAction:ResetMetaFields()
     self.name = nil
     self.lua = nil
     self.luaEnabled = false
+    self.endurance = nil
+    self.end_type = nil
+    self.end_threshold = nil
 end
 
 function EditAction:CancelEdit()
@@ -57,6 +73,8 @@ function EditAction:CancelEdit()
     self.actionType = self.liveAction.actionType
     self.lua = self.liveAction.lua
     self.luaEnabled = self.liveAction.luaEnabled
+    self.end_type = self.liveAction.end_type
+    self.end_threshold = self.liveAction.end_threshold
 end
 
 function EditAction:SaveEdit()
@@ -67,6 +85,8 @@ function EditAction:SaveEdit()
     self.liveAction.actionType = self.actionType
     self.liveAction.lua = self.lua
     self.liveAction.luaEnabled = self.luaEnabled
+    self.liveAction.end_type = self.end_type
+    self.liveAction.end_threshold = self.end_threshold
 
     Global.configStore:SaveConfig()
 end

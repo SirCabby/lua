@@ -42,11 +42,17 @@ function Discipline:HasAction()
     return mq.TLO.Me.CombatAbility(self:Name()).ID() == nil
 end
 
+---@return number
+function Discipline:EndCost()
+    return mq.TLO.Me.CombatAbility(mq.TLO.Me.CombatAbility(self:Name())() or "").EnduranceCost()
+end
+
 ---@return boolean
 function Discipline:IsReady()
     ---@type Timer
     self._.timer = self._.timer
-    return mq.TLO.Me.CombatAbilityReady(self:Name())() and self._.timer:timer_expired()
+    return mq.TLO.Me.CombatAbilityReady(self:Name())() and self._.timer:timer_expired() and
+        mq.TLO.Me.CombatAbility(mq.TLO.Me.CombatAbility(self:Name())() or "").EnduranceCost() < mq.TLO.Me.CurrentEndurance()
 end
 
 function Discipline:DoAction()

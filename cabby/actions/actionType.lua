@@ -23,6 +23,11 @@ function ActionType:HasAction()
     error("Action:HasAction() not implemented")
 end
 
+---@return number
+function ActionType:EndCost()
+    error("ActionType:EndCost() not implemented")
+end
+
 ---@return boolean
 function ActionType:IsReady()
     error("Action:IsReady() not implemented")
