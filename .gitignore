@@ -41,7 +41,7 @@ luac.out
 
 # default folders
 examples
-IntegrationTests/*
+IntegrationTests/
 mq
 .vscode/*
 
