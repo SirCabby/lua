@@ -76,14 +76,15 @@ local function Reset()
 end
 
 local function CloseToLastLoc()
-    return mq.TLO.Math.Distance(tostring(FollowState._.lastLoc.y) .. "," .. tostring(FollowState._.lastLoc.x) .. tostring(FollowState._.lastLoc.z))() < 30
+    return mq.TLO.Math.Distance(tostring(FollowState._.lastLoc.y) .. "," .. tostring(FollowState._.lastLoc.x) .. "," .. tostring(FollowState._.lastLoc.z))() < 30
 end
 
 FollowState._.followActions.findFollowTarget = function()
     -- Found target, begin follow mode
-    if mq.TLO.Spawn("pc radius 200 los " .. FollowState._.followTarget).Name() ~= nil then
+    local followSpawnId = mq.TLO.Spawn("pc radius 200 los " .. FollowState._.followTarget).ID()
+    if followSpawnId ~= nil and followSpawnId > 0 then
         FollowState._.checkingRetry = false
-        mq.cmd("/afollow spawn " .. tostring(mq.TLO.Spawn("pc " .. FollowState._.followTarget).ID))
+        mq.cmd("/afollow spawn " .. tostring(followSpawnId))
         FollowState._.currentAction = FollowState._.followActions.keepClose
         FollowState._.currentActionTimer = Timer.new(5000)
         return true
@@ -115,8 +116,8 @@ FollowState._.followActions.keepClose = function()
         local corpse = mq.TLO.Spawn("corpse " .. FollowState._.followTarget)
         if corpse.Name() == nil or corpse.Distance() > 100 then
             -- target zoned without dying, check for nearby switch
-            local switch = mq.TLO.Switch("nearest")
-            if switch ~= nil and switch.Distance() < 100 then
+            local switchDistance = mq.TLO.Switch("nearest").Distance()
+            if switchDistance ~= nil and switchDistance < 100 then
                 FollowState._.currentAction = FollowState._.clickZoneActions.findingSwitch
                 return true
             end
@@ -190,12 +191,13 @@ FollowState._.clickZoneActions.findingSwitch = function()
         mq.cmd("/afollow off")
     end
 
-    local switch = mq.TLO.Switch("nearest")
-    if switch ~= nil and switch.Distance() < 100 then
-        if switch.Distance() > 25 then
-            local switch = mq.TLO.Switch("nearest")
-            if switch ~= nil then
-                mq.cmd("/moveto loc " .. tostring(switch.Y) .. " " .. tostring(switch.X))
+    local switchDistance = mq.TLO.Switch("nearest").Distance()
+    if switchDistance ~= nil and switchDistance < 100 then
+        if switchDistance > 25 then
+            local switchY = mq.TLO.Switch("nearest").Y()
+            local switchX = mq.TLO.Switch("nearest").X()
+            if switchY ~= nil and switchX ~= nil then
+                mq.cmd("/moveto loc " .. tostring(switchY) .. " " .. tostring(switchX))
             end
             FollowState._.currentAction = FollowState._.clickZoneActions.clickingSwitch
         else
@@ -219,8 +221,8 @@ end
 
 FollowState._.clickZoneActions.clickingSwitch = function()
     -- We found it, click and start waiting for zone
-    local switch = mq.TLO.Switch("nearest")
-    if switch ~= nil and switch.Distance() < 25 then
+    local switchDistance = mq.TLO.Switch("nearest").Distance()
+    if switchDistance ~= nil and switchDistance < 25 then
         UpdateLastLoc()
         mq.cmd("/invoke ${Switch[nearest].Target}")
         mq.cmd("/click left switch")
@@ -322,9 +324,9 @@ function FollowState.Init()
                 if mq.TLO.AdvPath.Following() then
                     mq.cmd("/afollow off")
                 end
-                local spawn = mq.TLO.Spawn("pc radius 200 " .. speaker)
-                if spawn ~= nil then
-                    mq.cmd("/moveto id " .. tostring(spawn.ID))
+                local spawnId = mq.TLO.Spawn("pc radius 200 " .. speaker).ID()
+                if spawnId ~= nil and spawnId > 0 then
+                    mq.cmd("/moveto id " .. tostring(spawnId))
                 else
                     Commands.GetCommandSpeak(FollowState.eventIds.moveToMe):speak("M2m target [" .. speaker .. "] out of range, aborting...")
                 end
@@ -369,7 +371,7 @@ function FollowState.Init()
                     end
                 else
                     local spawn = mq.TLO.Spawn("pc radius 200 " .. speaker)
-                    if spawn ~= nil then
+                    if (spawn.ID() or 0) > 0 then
                         FollowState._.anchor.x = spawn.X()
                         FollowState._.anchor.y = spawn.Y()
                         FollowState._.currentAction = FollowState._.anchorActions.stayingAtAnchor

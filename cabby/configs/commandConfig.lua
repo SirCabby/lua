@@ -229,7 +229,10 @@ function CommandConfig.Init()
 
                     print("(/activechannels " .. args[1] .. " " .. args[2] .. "):")
                     CommandConfig.ToggleActiveChannel(channelType, command)
-                    Commands.SetPhrasePatternOverrides(command, Speak.GetPhrasePatterns(configForCommands.commandOverrides[command].activeChannels))
+                    local override = configForCommands.commandOverrides[command]
+                    if override ~= nil and override.activeChannels ~= nil then
+                        Commands.SetPhrasePatternOverrides(command, Speak.GetPhrasePatterns(override.activeChannels))
+                    end
                     return
                 end
             end

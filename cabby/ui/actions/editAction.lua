@@ -46,7 +46,8 @@ end
 function EditAction:SwitchType(actionType)
     self.actionType = actionType
 
-    if Actions.Get(self.actionType, self.name):EndCost() > 0 then
+    local action = Actions.Get(self.actionType, self.name)
+    if action ~= nil and action:EndCost() > 0 then
         self.end_type = self.liveAction.end_type or Action.valueTypes.Minimum.value
         if self.end_type == Action.valueTypes.Minimum.value then
             self.end_threshold = nil

@@ -66,12 +66,12 @@ function Speak.new(channels)
         end
         if Speak.IsTellType(channel) then
             if #channelWithTo ~= 2 then
-                print("Invalid tell-type channel with recepient. Expected: '<tell-channel> <name>. Received: " .. channelWithTo)
+                print("Invalid tell-type channel with recepient. Expected: '<tell-channel> <name>. Received: " .. StringUtils.Join(channelWithTo, " "))
                 return nil
             end
         else
             if #channelWithTo ~= 1 then
-                print("Cannot supply additional channel arguments for non tell-type channel. Received: " .. channelWithTo)
+                print("Cannot supply additional channel arguments for non tell-type channel. Received: " .. StringUtils.Join(channelWithTo, " "))
                 return nil
             end
         end

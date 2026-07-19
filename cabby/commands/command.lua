@@ -1,5 +1,6 @@
 ---@class Command : CommandBase
 ---@field eventFunction function
+---@field wrappedEventFunction function?
 ---@field phrasePatternOverrides table?
 ---@field registeredEvents table?
 local Command = {}

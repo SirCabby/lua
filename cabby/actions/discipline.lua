@@ -39,7 +39,7 @@ end
 
 ---@return boolean
 function Discipline:HasAction()
-    return mq.TLO.Me.CombatAbility(self:Name()).ID() == nil
+    return mq.TLO.Me.CombatAbility(self:Name())() ~= nil
 end
 
 ---@return number

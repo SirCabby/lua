@@ -10,6 +10,7 @@ local Actions = {}
 ---@param name string
 ---@return ActionType? action
 Actions.Get = function(type, name)
+    if type == nil or name == nil then return nil end
     type = type:lower()
     if type == ActionType.Ability then
         local skillname = StringUtils.Join(StringUtils.Split(name:lower())) -- this removes spaces and lowercases it

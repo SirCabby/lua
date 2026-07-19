@@ -58,7 +58,9 @@ local function FixCombatState()
 end
 
 function MeleeState.GetSpawnMeleeRange(id)
-    return math.min(14, mq.TLO.Spawn(id).MaxRangeTo() - 3)
+    local maxRangeTo = mq.TLO.Spawn(id).MaxRangeTo()
+    if maxRangeTo == nil then return 14 end
+    return math.min(14, maxRangeTo - 3)
 end
 
 ---@param range number

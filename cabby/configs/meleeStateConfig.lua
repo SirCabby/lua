@@ -58,7 +58,7 @@ local function initAndValidate()
         taint = true
     end
 
-    if Character.HasSecondaryAbilities() and configRoot.primary_combat_ability == nil then
+    if Character.HasSecondaryAbilities() and configRoot.secondary_combat_ability == nil then
         configRoot.secondary_combat_ability = Skills.none:Name()
         taint = true
     end
@@ -86,13 +86,13 @@ local function initAndValidate()
             configRoot.taunt_usage = MeleeStateConfig.usages.AsNeeded.value
             taint = true
         end
-    end
 
-    for i = #configRoot.taunt_actions, 1, -1 do
-        local action = configRoot.taunt_actions[i]
-        if action.actionType == nil or action.actionType == ActionType.Edit then
-            table.remove(configRoot.taunt_actions, i)
-            taint = true
+        for i = #configRoot.taunt_actions, 1, -1 do
+            local action = configRoot.taunt_actions[i]
+            if action.actionType == nil or action.actionType == ActionType.Edit then
+                table.remove(configRoot.taunt_actions, i)
+                taint = true
+            end
         end
     end
 
@@ -106,13 +106,13 @@ local function initAndValidate()
             configRoot.hate_usage = MeleeStateConfig.usages.Always.value
             taint = true
         end
-    end
 
-    for i = #configRoot.hate_actions, 1, -1 do
-        local action = configRoot.hate_actions[i]
-        if action.actionType == nil or action.actionType == ActionType.Edit then
-            table.remove(configRoot.hate_actions, i)
-            taint = true
+        for i = #configRoot.hate_actions, 1, -1 do
+            local action = configRoot.hate_actions[i]
+            if action.actionType == nil or action.actionType == ActionType.Edit then
+                table.remove(configRoot.hate_actions, i)
+                taint = true
+            end
         end
     end
 

@@ -1,5 +1,7 @@
 ---@class Event : CommandBase
+---@field id string
 ---@field eventFunction function
+---@field wrappedEventFunction function?
 ---@field reregister boolean reregister this event on event updates for last order preservation
 local Event = {}
 
@@ -19,6 +21,7 @@ setmetatable(Event, {
 function Event.new(id, command, eventFunction, docs, reregister)
     local self = setmetatable({}, Event)
 
+    self.id = id
     self.command = command
     self.eventFunction = eventFunction
     self.docs = docs

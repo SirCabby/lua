@@ -94,7 +94,7 @@ function StopWatch:split(splitName)
     end
     self.splitName = splitName
 
-    return 0
+    return result
 end
 
 return StopWatch

@@ -36,12 +36,16 @@ Disciplines.Refresh = function()
         local disc = mq.TLO.Me.CombatAbility(i)
         if disc.Name() == nil then break end
 
-        Disciplines.all[#Disciplines.all+1] = Discipline.new(disc.Name())
+        -- one shared instance per disc so cooldown timers stay in sync across category lists
+        local discipline = Discipline.new(disc.Name())
+        Disciplines.all[#Disciplines.all+1] = discipline
 
-        if disc.HasSPA(92)() or disc.HasSPA(192)() then
-            Disciplines.hate[#Disciplines.hate+1] = Discipline.new(disc.Name())
+        if disc.HasSPA(199)() then -- SPA 199 = SE_Taunt
+            Disciplines.taunt[#Disciplines.taunt+1] = discipline
+        elseif disc.HasSPA(92)() or disc.HasSPA(192)() then
+            Disciplines.hate[#Disciplines.hate+1] = discipline
         elseif disc.TargetType() == "Single" then
-            Disciplines.melee[#Disciplines.melee+1] = Discipline.new(disc.Name())
+            Disciplines.melee[#Disciplines.melee+1] = discipline
         end
 
         -- if disc.Name() == "Provoke" then

@@ -1,0 +1,172 @@
+# Cabby Roadmap
+
+Companion to [ARCHITECTURE.md](ARCHITECTURE.md). Origin: design review 2026-07-18.
+Vision: one script that bots any class/race — states for every band in the priority table
+(commands, passive, cure, heal, pull, mez, tank, dps, loot, anchor, follow, buff).
+
+Current coverage: Follow/Anchor/ClickZone and Melee states; MNK + WAR only; melee-only
+action types (Skill, Discipline). Everything else below.
+
+---
+
+## Phase 0 — Stabilize (fix before building on top)
+
+Status 2026-07-18: **all rows below fixed** except 1 (intended) and 14 (needs in-game
+verification). Fixes are parse-checked (LuaJIT) and the pure-logic ones are covered by an
+off-game harness; **in-game smoke test still pending**.
+
+| # | Where | Bug | Status |
+|---|---|---|---|
+| 1 | `setup.lua:113` | `class.Init` on nil for the 14 unimplemented classes — loud failure until each class is built out | intended |
+| 2 | `configs/meleeStateConfig.lua` | taunt/hate cleanup loops ran *outside* their `HasTaunts`/`HasHates` guards → `#nil` crash on fresh config for classes without taunts/hate discs | fixed |
+| 3 | `configs/meleeStateConfig.lua` | checked `primary_combat_ability == nil` instead of `secondary_combat_ability` → secondary default never written | fixed |
+| 4 | `states/followState.lua` | `Math.Distance` string missing comma between x and z → stuck-detection distance garbage | fixed |
+| 5 | `status.lua` | `mq.TLO.Target == nil` never true; no-target case could report "facing target" | fixed (checks `Target.ID()`) |
+| 6 | `states/followState.lua` | `Spawn(...) ~= nil` / `Switch ~= nil` always true; nil `Distance()` compares crash; `/moveto id NULL` on missing spawn; `.ID` missing call parens | fixed (ID/Distance captured + nil-guarded) |
+| 7 | `ui/actions/editAction.lua` | `SwitchType` → `Actions.Get(newType, oldName):EndCost()` crashed on fresh actions (nil name) and AA/Item/Spell types (nil return) | fixed (nil guards both layers) |
+| 8 | `actions/discipline.lua` | `HasAction` inverted (also `.ID()` on the int-typed name lookup) | fixed (`CombatAbility(name)() ~= nil`) |
+| 9 | `actions/disciplines.lua` | `Disciplines.taunt` never populated; hate/melee buckets held duplicate instances with independent cooldown timers | fixed (SPA 199 → taunt, needs in-game verify; one shared instance per disc) |
+| 10 | `configs/commandConfig.lua` | `/activechannels <cmd> reset` dereferenced the override it just removed | fixed |
+| 11 | `commands/commands.lua` | `arg = ...` leaked a global | fixed |
+| 12 | `states/meleeState.lua` | `MaxRangeTo()` nil race → arithmetic on nil | fixed (defaults to 14) |
+| 13 | `stateMachine.lua` | No pcall barrier (any state error killed the script); 1 ms hot loop | fixed (see barrier note below; base delay 25 ms via `SetLoopDelay`) |
+| 14 | `configs/generalConfig.lua` | tellToMe catchall likely *also* fires for command tells (only filters NPCs) | open — see Verify list |
+| 15 | `commands/event.lua` + `commands.lua` | `Event.new` dropped its `id` — event registrations were keyed by *pattern*, so `/chelp`, `/owners <event>`, `/speak <event>` matched patterns while handlers looked up ids → per-event owner/speak overrides could never apply | fixed (id stored; registrations, mq.event names, GetEventIds all keyed by id) |
+
+**Crash barrier (landed, initial version):** every state `Go()`/`IsEnabled()` and every
+command/event/slash handler runs under `xpcall` with `debug.traceback`. Errors go to
+`cabby/errorAlert.lua`: dedicated "Cabby Alerts" ImGui window (dismiss required; separate
+from chat), append to `configDir/cabby/<Name>-errors.log`, dedup by raise-site signature
+with a running count, one-line red chat notice on first occurrence only. A state that fails
+3 consecutive frames is paused (runtime only — config untouched) and its alert shows a
+Resume button. Verified off-game: healthy states keep running while a broken state errors;
+dedup, auto-pause, resume, re-pause, and log writes all covered by
+`scratchpad/test_barrier.lua`-style harness under LuaJIT and Lua 5.1.
+
+Utils layer (from the utils sub-review; fix opportunistically):
+~~`StopWatch:split` always returns 0~~ (fixed); ~~`StringUtils.Split` infinite loop on
+leading single-char delimiter~~ (fixed, harness-tested); `Config.new()` no-arg nil-deref
+(`Config.lua:38`); `TableUtils.GetKeys` sort crash on mixed-key tables; `GetValues` returns
+arrays by reference; `Compare` throws on divergent nesting; `Stack.Push(nil)` stores `"nil"`;
+`testConfig.lua` asserts a removed implementation (stale); Debug eager string building +
+per-line file reopen; timers are wall-clock (decision to ratify or change).
+
+## Phase 1 — Skeleton refactors
+
+In rough order (details in ARCHITECTURE.md "Target architecture"):
+
+1. ~~Crash barrier + **error surfacing**~~ — **done** (initial version; see Phase 0 barrier
+   note). Remaining polish: route through the Phase 1 Logger once it exists.
+2. Loop cadence: base delay now 25 ms (**done**); still to do: per-state throttles so
+   expensive TLO scans (XTarget sweep, spawn searches) run behind short timers with cached
+   results instead of every frame.
+3. Config `Section` helper (schema/defaults/migration; kills taint boilerplate + writing getters).
+4. Module contract + registrar (kills isInit/Menu.Register/Setup-order boilerplate).
+5. Declarative class profiles: per-class state lists with priorities drawn from shared band
+   constants; classes omit states they have no business running; hybrids register shared
+   states at weaker priorities; runtime priority/constraint modifiers by role + group
+   makeup. Unimplemented classes keep failing loudly until built.
+6. Movement service seam: wrap `/stick`, `/moveto`, `/afollow` behind a Movement interface
+   so states stop calling plugin commands directly (enables the Phase 2 backend swap).
+7. Split `commandConfig.lua` (store / bridge / UI; spec-table editor).
+8. Channel known at dispatch: the capture patterns stay (they extract speaker/args from
+   chat); pass the originating channel through from event registration instead of
+   reverse-regexing the line for replies (`Speak.GetRequestChannel`).
+9. UI access rule: panels stay colocated with their domain, but read via public status
+   accessors instead of `_` privates.
+10. Logger with levels + lazy formatting (replace print/Debug mix; error alerts ride this).
+11. mq facade injection + off-client tests for pure logic (fix Debug's top-level `require("mq")`).
+12. Style guide (naming, colon-vs-dot, module layout) + mechanical cleanup pass.
+
+## Phase 2 — Plugin independence (reusable movement + transport libs)
+
+Goal: run without MQ2MoveUtils, MQ2AdvPath, or MQ2DanNet. Build as **reusable modules**
+(candidates for `utils/` since they're script-agnostic), consumed by cabby through the
+Phase 1 service seams; keep plugin backends as fallbacks until the Lua versions reach parity.
+
+- **Locomotion primitives**: `/keypress`-based run/strafe/turn with hold semantics, `/face`,
+  stop-all; a single owner of movement keys so behaviors can't fight each other.
+- **GoTo**: straight-line move to loc with arrival radius, stuck detection (position-delta
+  windows), simple unstick attempts (strafe/jump), timeout + failure callback.
+- **Stick** (MoveUtils replacement): hold range/arc to a spawn id (melee-range hold, loose
+  follow), re-face cadence, break conditions.
+- **Breadcrumb follow** (AdvPath replacement): sample the followed spawn's loc into a trail,
+  walk the trail (handles corners/LOS loss), trail expiry, hand off to GoTo/Stick for the
+  final segment.
+- **Out of scope**: navmesh-grade pathfinding (that's MQ2Nav's whole job; revisit only if
+  breadcrumbs + goto prove insufficient in practice on emu zones).
+- **Transport**: tell/group/raid channels already work plugin-free through Speak. Add an MQ
+  Lua **actors** backend for structured client-to-client messages (the launcher post office
+  routes between clients on one machine — matches the wine setup). EQBC remains optional
+  for bc/bct until actors/tells cover those uses (open decision, see Verify).
+
+## Phase 3 — Caster foundation
+
+- Implement `ActionType` for **Spell / AA / Item** (Actions.Get resolves them; ActionUI
+  already has the slots). Needs a casting service: gem memorization, mana/reagent checks,
+  cast + interrupt/fizzle/resist outcome detection, stacking checks, recast tracking.
+- Extend `character.lua` discovery: spellbook/memmed gems, AAs, clickies, songs; refresh
+  triggers (level/skill-up events, gear swap, respec) instead of load-time-only snapshot.
+- Buff-stacking model (`Spell.Stacks`, existing-buff checks) shared by buff/heal logic.
+
+## Phase 4 — The planned states
+
+Per priority band: **Passive** (global pause; also a /cpause slash + comm command),
+**Heal** (self + group + role targets, HP thresholds, emergency vs topping),
+**Cure** (detrimental scan → cure actions), **Pull** (target selection, pathing, leash,
+camp radius), **Mez** (add control, in-combat priority above dps), **Tank** (taunt/hate
+action lists already modeled in MeleeStateConfig; needs aggro-loss detection for "as
+needed" usage), **DPS** (melee exists; add caster rotations + assist-at-% rules),
+**Loot** (corpse scan, loot rules per item, master-loot coordination),
+**Buff** (self/group maintenance with stacking + rebuff timers).
+Each new state = state module + config section + UI panel + comm commands, which is why
+the Phase 1 module contract comes first.
+
+## Phase 5 — Group/raid coordination
+
+- Assist protocol: MA/marks broadcast, `attack <id>` exists — add assist-percent, target
+  dedup, anti-summon distance rules, leash/give-up timers.
+- Role model: main tank / main assist / puller / healer assignments in config + comms;
+  feeds the runtime priority modifiers from the class-profile design (group makeup changes
+  who heals/tanks at what priority).
+- Structured coordination messages ride the Phase 2 transport (actors preferred, chat
+  channels as universal fallback).
+- Fleet UX: broadcast config changes ("everyone set camp here"), status dashboards.
+
+## Cross-cutting gaps (no owner yet)
+
+- **Lifecycle events**: zoning, death/rez handling, camp/disconnect detection, GM detect →
+  a global interrupt that resets states safely (states currently keep stale targets/actions
+  across zone lines; only FollowState notices zone changes, and only for click-zoning).
+- **Leash/give-up timers** on engage (attackTarget can hold "busy" forever on an unreachable
+  target, starving Follow below it).
+- **Config migration** when schemas change (version key exists, no mechanism).
+- **Performance**: per-frame spawn-search dedup/caching (several functions repeat identical
+  `Spawn(...)` queries 2–3× per frame), XTarget scan throttling.
+- **Docs for users**: /chelp exists; needs a README quickstart (install, plugins, first-run
+  config, command tour).
+- **Tests for cabby layer**: none today. Highest-value first targets: command parsing
+  (slash arg paths — several Phase 0 bugs live there), Owners ACL, config init/migration,
+  follow stuck-detection math.
+
+## Verify (assumptions to test in-game)
+
+1. **MQ event multi-match**: does a line matching two registered events (command tell +
+   tellToMe catchall) fire both callbacks? The `reregister`/"add last" hack implies ordering
+   matters; confirm actual semantics and either dedupe in a single dispatcher or filter
+   command phrases out of tellToMe.
+2. `Switch("nearest")` behavior when no switch in zone (click-zone chain).
+3. `/stick loose` + `MaxRangeTo` interaction on emu client vs live-era plugin builds
+   (relevant only until the Phase 2 stick replacement lands).
+4. Wall-clock timers through zoning (ability cooldown timers keep running — acceptable?).
+5. MQ Lua **actors** between clients on the wine/emu setup: the launcher post office must
+   route messages across the injected clients in the prefix (launcher already runs for
+   injection). Validates the Phase 2 transport backend before building on it.
+6. **EQBC fate** (decision): keep the plugin for bc/bct channels, or retire it once
+   actors + tell/group/raid cover command traffic.
+7. **SPA 199 = taunt** on emu spell data: `disciplines.lua` now buckets discs with SPA 199
+   into `Disciplines.taunt` — confirm a warrior taunt disc (and no non-taunt disc) lands
+   there (the commented HasSPA probe loop in that file helps).
+8. In-game smoke of the 2026-07-18 Phase 0 fixes: fresh-config startup on a taunt-less
+   class, follow/stuck detection, add-new-action UI flow, `/activechannels <cmd> reset`,
+   and the Cabby Alerts window (force an error to see alert + log + pause/resume).

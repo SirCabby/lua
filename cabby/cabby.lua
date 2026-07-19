@@ -3,6 +3,7 @@
 local mq = require("mq")
 local FileSystem = require("utils.FileSystem.FileSystem")
 
+local ErrorAlert = require("cabby.errorAlert")
 local Setup = require("cabby.setup")
 local StateMachine = require("cabby.stateMachine")
 
@@ -50,6 +51,7 @@ mq.cmd("/mqclear")
 print("Loading Cabby script...")
 
 local configFilePath = FileSystem.PathJoin(mq.configDir, "cabby", mq.TLO.Me.Name() .. "-Config.lua")
+ErrorAlert.Init(FileSystem.PathJoin(mq.configDir, "cabby", mq.TLO.Me.Name() .. "-errors.log"))
 local stateMachine = StateMachine:new()
 Setup:Init(configFilePath, stateMachine)
 

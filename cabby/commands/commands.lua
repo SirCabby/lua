@@ -5,6 +5,7 @@ local StringUtils = require("utils.StringUtils.StringUtils")
 local TableUtils = require("utils.TableUtils.TableUtils")
 
 local ChelpDocs = require("cabby.commands.chelpDocs")
+local ErrorAlert = require("cabby.errorAlert")
 local SlashCmd = require("cabby.commands.slashcmd")
 
 ---@class Commands
@@ -36,6 +37,22 @@ local Commands = {
 
 local function DebugLog(str)
     Debug.Log(Commands.key, str)
+end
+
+local unpack = unpack or table.unpack
+
+---Wraps a handler so an error alerts and logs instead of killing the script
+---@param sourceKey string
+---@param handler function
+---@return function
+local function protect(sourceKey, handler)
+    return function(...)
+        local args = {...}
+        local ok, err = xpcall(function() handler(unpack(args)) end, debug.traceback)
+        if not ok then
+            ErrorAlert.Record(sourceKey, err)
+        end
+    end
 end
 
 ---@param config Config
@@ -85,7 +102,7 @@ function Commands.Init(config, owners, speak)
             if args == nil or #args < 1 or args[1]:lower() == "help" then
                 chelpDocs:Print()
             else
-                arg = args[1]:lower()
+                local arg = args[1]:lower()
                 if arg == "ces" then
                     chelpDocs.additionalLines["ces"]:Print()
                 elseif arg == "comms" then
@@ -111,7 +128,7 @@ function Commands.Init(config, owners, speak)
                     for _, event in pairs(Commands._.registrations.events.registeredEvents) do
                         ---@type Event
                         event = event
-                        if event.command:lower() == arg:lower() then
+                        if event.id:lower() == arg:lower() then
                             event.docs:Print()
                             return
                         end
@@ -146,7 +163,7 @@ function Commands.RegisterSlashCommand(command)
         return
     end
 
-    mq.bind("/" .. command.command, command.cmdFunction)
+    mq.bind("/" .. command.command, protect("slashcmd:/" .. command.command, command.cmdFunction))
     Commands._.registrations.slashcommands.registeredSlashCommands[command.command] = command
 end
 
@@ -176,7 +193,7 @@ local function UpdateCommEvent(command)
         local thisPhrase = string.gsub(pattern, "<<phrase>>", command.command)
         local newEventId = command.command .. tostring(#command.registeredEvents + 1)
         table.insert(command.registeredEvents, newEventId)
-        mq.event(newEventId, thisPhrase, command.eventFunction)
+        mq.event(newEventId, thisPhrase, command.wrappedEventFunction or command.eventFunction)
     end
 end
 
@@ -184,6 +201,7 @@ end
 function Commands.RegisterCommEvent(command)
     if not TableUtils.ArrayContains(TableUtils.GetKeys(Commands._.registrations.commands.registeredCommands), command.command) then
         Commands._.registrations.commands.registeredCommands[command.command] = command
+        command.wrappedEventFunction = protect("command:" .. StringUtils.Split(command.command)[1], command.eventFunction)
         command.registeredEvents = {}
         UpdateCommEvent(command)
     else
@@ -198,12 +216,12 @@ local function UpdateCommChannels()
     end
 
     -- These events are intentionally added last to act as catchalls for similar event patterns
-    for id, event in pairs(Commands._.registrations.events.registeredEvents) do
+    for _, event in pairs(Commands._.registrations.events.registeredEvents) do
         ---@type Event
         event = event
         if event.reregister then
-            mq.unevent(id)
-            mq.event(id, event.command, event.eventFunction)
+            mq.unevent(event.id:lower())
+            mq.event(event.id:lower(), event.command, event.wrappedEventFunction or event.eventFunction)
         end
     end
 end
@@ -260,18 +278,19 @@ end
 
 ---@param event Event
 function Commands.RegisterEvent(event)
-    if not TableUtils.ArrayContains(TableUtils.GetKeys(Commands._.registrations.events.registeredEvents), event.command) then
-        Commands._.registrations.events.registeredEvents[event.command] = event
-        mq.event(event.command:lower(), event.command, event.eventFunction)
+    if not TableUtils.ArrayContains(TableUtils.GetKeys(Commands._.registrations.events.registeredEvents), event.id) then
+        Commands._.registrations.events.registeredEvents[event.id] = event
+        event.wrappedEventFunction = protect("event:" .. event.id, event.eventFunction)
+        mq.event(event.id:lower(), event.command, event.wrappedEventFunction)
     else
-        print("Cannot re-register same event Id: ["..event.command:lower().."]")
+        print("Cannot re-register same event Id: ["..event.id:lower().."]")
     end
 end
 
 function Commands.GetEventIds()
     local events = {}
     for _, event in pairs(Commands._.registrations.events.registeredEvents) do
-        table.insert(events, event.command:lower())
+        table.insert(events, event.id:lower())
     end
     return events
 end

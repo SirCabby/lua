@@ -23,7 +23,7 @@ function StringUtils.Split(str, delimiter)
             str = ""
             break
         elseif matchStart == 1 then
-            str = str:sub(#delimiter)
+            str = str:sub(#delimiter + 1)
         else
             split[index] = str:sub(1, matchStart - 1)
             str = str:sub(matchStart + #delimiter)
