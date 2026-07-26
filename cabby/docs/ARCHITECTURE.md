@@ -14,17 +14,23 @@ agreed target architecture. Companion doc: [ROADMAP.md](ROADMAP.md) (gaps, bugs,
 ```
 cabby.lua
   └─ Setup:Init(configFilePath, stateMachine)
-       ├─ PluginSetup        — ensure MQ2EQBC (connected), MQ2MoveUtils, MQ2AdvPath
+       ├─ PluginSetup        — ensure MQ2EQBC (optional; nothing else is required)
        ├─ Config.new(path)   — per-character pickle store: configDir/cabby/<Name>-Config.lua
        ├─ *Config.Init()     — CommandConfig, DebugConfig, GeneralConfig, MeleeStateConfig
+       ├─ CabbyMovement.Init — registers the movement service + /cmove
        ├─ ClassSetup         — class module Init(stateMachine) registers states
        └─ Menu.Init()        — ImGui shell (must be last)
   └─ stateMachine:Start()    — main loop
 ```
 
-**Main loop** (`stateMachine.lua`): `mq.doevents()` → walk registered states in registration
-order → first enabled state whose `Go()` returns `true` ("busy") wins the frame; everything
-below it is starved → `mq.delay(1)`.
+**Main loop** (`stateMachine.lua`): `mq.doevents()` → pulse registered **services** → walk
+registered states in registration order → first enabled state whose `Go()` returns `true`
+("busy") wins the frame; everything below it is starved → `mq.delay(25)`.
+
+**Services** run every frame regardless of which state is busy (`RegisterService`, anything
+with `key` + `Pulse()` and optionally `Stop()`). They are for work that cannot wait for its
+requesting state to get another turn — Movement is the only one today, and it has to release
+its keys on the frame its task ends, not whenever FollowState next runs.
 
 This is a **priority-chain cooperative scheduler**: state order = priority; `Go()` returning
 `false` yields to lower states. The intended priority bands (from the comment block in
@@ -58,7 +64,8 @@ BuildMenu`. `BaseState` documents this contract but is *not* a real metatable ba
 cabby/
   cabby.lua           entry; defines global `Global` { tracing (FlowTracer), configStore }
   setup.lua           plugin checks, config init order, class dispatch (16-way if/elseif)
-  stateMachine.lua    priority-chain loop (instance class)
+  stateMachine.lua    priority-chain loop + per-frame services (instance class)
+  movement.lua        wiring only: registers the movement service and /cmove
   character.lua       capability snapshot: which skills exist (primary/secondary/melee lists)
   status.lua          shared predicates (IsFacingTarget)
   states/             baseState, followState, meleeState
@@ -67,8 +74,8 @@ cabby/
   configs/            per-domain config modules (see below)
   actions/            ActionType interface + implementations + registries
   ui/                 ImGui menu shell + per-domain panels
-  utils/ (sibling)    Time/Timer/StopWatch, Config, Debug/FlowTracer, FileSystem, Json,
-                      PriorityQueue (unused), Stack, StringUtils, TableUtils
+  utils/ (sibling)    Movement/ (see below), Time/Timer/StopWatch, Config, Debug/FlowTracer,
+                      FileSystem, Json, PriorityQueue (unused), Stack, StringUtils, TableUtils
 ```
 
 ## Command bus (`commands/`)
@@ -98,6 +105,49 @@ overrides, persisted by CommandConfig:
 `configs/commandConfig.lua` (1,350 lines) persists all of the above *and* implements the
 generic ImGui override editor (`buildCommandEventEditor`, 14 positional params) — splitting
 it is a planned refactor.
+
+## Movement (`utils/Movement/`, wired by `cabby/movement.lua`)
+
+Cabby drives its own movement; MQ2MoveUtils and MQ2AdvPath are not loaded. The modules live
+in `utils/` because nothing in them knows about cabby — the only cabby-side piece is
+`movement.lua`, which puts the service on the state machine's per-frame pulse and registers
+`/cmove` (status, and `/cmove off` to force-release the keys).
+
+```
+Movement.lua        the service: one active task, arbitration, the pause gate, status queries
+  MoveTo.lua        straight-line move to a loc or spawn, with arrival radius and timeout
+  Stick.lua         hold range on a spawn (loose, or `behind` to strafe into the rear arc)
+  Follow.lua        breadcrumb-trail follow of a spawn, opens doors in the way
+Locomotion.lua      the only thing that touches movement keys; hold/release, /face, /stand
+StuckDetector.lua   position delta over wall-clock windows
+Unsticker.lua       jump + alternating strafe recovery
+Geometry.lua        pure distance/heading math (headings are degrees CCW, EQ style)
+MovementStatus.lua  idle | moving | holding | blocked | arrived | failed
+```
+
+Design rules that matter when adding a caller:
+
+- **One task at a time, one owner of the keys.** Starting a task cancels the previous one.
+  Pass `owner = <state key>` and clean up with `Movement.StopFor(owner)`, which no-ops when
+  a higher-priority state has since taken movement over — `Movement.Stop()` is unconditional.
+- **The service must be pulsed every frame**, which is why it is a service and not something
+  each state pokes. Keys get released the frame a task ends, and the pause gate (dead, bind,
+  feign, stun, mez, charm, mid-cast for non-bards; stands up out of sit/duck) is enforced
+  even while the state that asked for the move is starved.
+- **Requests never touch the client; only `Pulse()` does.** `Stick`/`Follow`/`MoveTo*`/`Stop`
+  record intent, and `Locomotion` holds a desired-vs-applied key state that `Pulse()`
+  reconciles. This matters because callers are not all on the main loop: the MeleeState menu
+  has Attack and Back Off buttons, so a movement request can originate inside the ImGui
+  render callback. Running EQ's mappable commands (`/keypress`) mid-frame from there is a
+  crash-to-desktop hazard — MQ2MoveUtils guarded the same call for the same reason. Anything
+  new that emits a game command belongs inside `Pulse()`, and UI panels should read cached
+  values (task names are resolved once at construction) rather than hitting TLOs per frame.
+- **Terminal results are polled by task id**: `Movement.GetResult(id)` returns nil while the
+  task runs, then `arrived`/`failed` plus a reason. `holding` is not terminal — stick and
+  follow stay active and satisfied with the keys released.
+- Tasks are best-effort straight-line movers with stuck detection, *not* pathfinding. Follow
+  works around corners because it replays the trail the target actually walked. Real navmesh
+  pathing remains out of scope (that is MQ2Nav's job).
 
 ## Action system (`actions/`)
 
@@ -215,13 +265,12 @@ hand-wired:
    per-channel registered event already implies its channel, so pass that through to
    handlers/`Respond` instead of re-deriving it afterward by regexing the line
    (`Speak.GetRequestChannel`).
-9. **Plugin independence.** Replace MQ2MoveUtils and MQ2AdvPath (and never adopt MQ2DanNet)
-   with reusable Lua modules behind service interfaces — see ROADMAP "Plugin independence".
-   States stop calling plugin commands directly; plugin backends remain a fallback until
-   the Lua implementations reach parity. Transport: native chat channels (tell/group/raid)
-   are already plugin-free; MQ Lua actors (routed between same-machine clients by the
-   launcher post office) become the structured-message backend; EQBC stays optional for
-   bc/bct until then (open decision).
+9. **Plugin independence.** Movement is **done** — `utils/Movement` replaced MQ2MoveUtils and
+   MQ2AdvPath and neither plugin is loaded (see the Movement section above). Still open:
+   transport. Native chat channels (tell/group/raid) are already plugin-free; MQ Lua actors
+   (routed between same-machine clients by the launcher post office) become the structured-
+   message backend; EQBC stays optional for bc/bct until then (open decision). MQ2DanNet is
+   never adopted.
 10. **UI stays colocated with its domain** (panels next to the code they control — intended
     design), but panels read through public status accessors instead of `_` privates
     (`MeleeState._.currentAction`, `Commands._.registrations`).

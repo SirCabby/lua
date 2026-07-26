@@ -1,5 +1,21 @@
 --- Author judged
 
+-- Run interpreted. LuaJIT's trace compiler has crashed this client three times from
+-- lj_mcode_patch (lj_mcode.c:351): its MCode area search walks off the end of the chain and
+-- reads NULL+4, which surfaces as an unhandled page fault on 00000004 -- a JIT-internal
+-- invariant break that no amount of care in Lua can guard against. Cabby is nowhere near
+-- CPU bound at a 25ms loop, so interpreting costs us nothing worth having.
+--
+-- Deliberately not calling jit.flush(): flushing traces is what *invokes* lj_mcode_patch,
+-- so it would exercise the exact path we are avoiding. Existing traces from an earlier run
+-- in this client survive; restart EQ for a clean state.
+--
+-- Note this is VM-wide (MQ2Lua shares one lua_State across scripts), and it is a workaround
+-- for an upstream bug, not a fix. Revisit if the bundled LuaJIT is ever updated.
+if jit ~= nil then
+    jit.off()
+end
+
 local mq = require("mq")
 local FileSystem = require("utils.FileSystem.FileSystem")
 

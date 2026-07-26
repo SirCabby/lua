@@ -1,6 +1,7 @@
 local mq = require("mq")
 
 local Debug = require("utils.Debug.Debug")
+local Movement = require("utils.Movement.Movement")
 local Timer = require("utils.Time.Timer")
 local StringUtils = require("utils.StringUtils.StringUtils")
 
@@ -19,6 +20,9 @@ local function passive()
     return false
 end
 
+-- How long "As Needed" waits between tanking actions so they fire one at a time
+local sequentialActionDelayMs = 1500
+
 ---@class MeleeState : BaseState
 local MeleeState = {
     key = "MeleeState",
@@ -30,6 +34,8 @@ local MeleeState = {
         currentAction = passive,
         currentActionTimer = nil,
         currentTargetID = 0,
+        tauntTimer = Timer.new(sequentialActionDelayMs),
+        hateTimer = Timer.new(sequentialActionDelayMs),
         meleeActions = {
             checkForCombat = passive,
             attackTarget = passive
@@ -45,6 +51,18 @@ end
 ---@return boolean isIncapacitated
 local function IsIncapacitated()
     return mq.TLO.Me.Stunned() or mq.TLO.Me.Mezzed() ~= nil or mq.TLO.Me.Charmed() ~= nil or mq.TLO.Me.Binding() or mq.TLO.Me.Casting() ~= nil
+end
+
+---@return boolean hasAggro Whether we are currently holding aggro on the current target
+local function HasTargetAggro()
+    local targetOfTarget = mq.TLO.Target.TargetOfTarget.ID()
+    if targetOfTarget ~= nil and targetOfTarget > 0 then
+        return targetOfTarget == mq.TLO.Me.ID()
+    end
+
+    -- Target-of-target isn't populated; fall back to the aggro meter when the server sends it
+    local pctAggro = mq.TLO.Target.PctAggro()
+    return type(pctAggro) == "number" and pctAggro >= 100
 end
 
 local function FixCombatState()
@@ -66,7 +84,7 @@ end
 ---@param range number
 function MeleeState.StickToCurrentTarget(range)
     if MeleeStateConfig.GetStick() then
-        mq.cmd("/stick id " .. tostring(MeleeState._.currentTargetID) .. " loose " .. range)
+        Movement.Stick(MeleeState._.currentTargetID, { distance = range, owner = MeleeState.key })
     end
 end
 
@@ -97,6 +115,43 @@ local function DoPrimaryCombatAction()
             secondaryAction:DoAction()
         end
     end
+end
+
+---Runs a configured tanking action list according to its usage setting
+---@param actions table? configured actions, in priority order
+---@param usage string? one of MeleeStateConfig.usages values
+---@param timer Timer paces "as needed" actions so they fire one at a time
+local function DoTankingActionList(actions, usage, timer)
+    if actions == nil or usage == nil or usage == MeleeStateConfig.usages.Off.value then return end
+
+    local asNeeded = usage == MeleeStateConfig.usages.AsNeeded.value
+    if asNeeded and (HasTargetAggro() or not timer:timer_expired()) then return end
+
+    for _, action in ipairs(actions) do
+        ---@type Action
+        action = action
+
+        if action.enabled ~= false then
+            local actionType = Action.GetActionType(action)
+
+            if actionType ~= nil and actionType:IsReady() and Action.GetLuaResult(action) then
+                actionType:DoAction()
+
+                -- "As Needed" walks the list one action at a time with a short delay between
+                if asNeeded then
+                    timer:reset()
+                    return
+                end
+            end
+        end
+    end
+end
+
+local function DoTankingActions()
+    if not MeleeStateConfig.GetTanking() then return end
+
+    DoTankingActionList(MeleeStateConfig.GetTauntActions(), MeleeStateConfig.GetTauntUsage(), MeleeState._.tauntTimer)
+    DoTankingActionList(MeleeStateConfig.GetHateActions(), MeleeStateConfig.GetHateUsage(), MeleeState._.hateTimer)
 end
 
 MeleeState._.meleeActions.checkForCombat = function()
@@ -136,7 +191,7 @@ MeleeState._.meleeActions.attackTarget = function()
 
     local range = MeleeState.GetSpawnMeleeRange(MeleeState._.currentTargetID)
 
-    if MeleeStateConfig.GetStick() and not mq.TLO.Stick.Active() and mq.TLO.Target.Distance() < MeleeStateConfig.GetEngageDistance() and mq.TLO.Target.LineOfSight() then
+    if MeleeStateConfig.GetStick() and not Movement.IsSticking(MeleeState._.currentTargetID) and mq.TLO.Target.Distance() < MeleeStateConfig.GetEngageDistance() and mq.TLO.Target.LineOfSight() then
         MeleeState.StickToCurrentTarget(range)
     end
 
@@ -146,14 +201,18 @@ MeleeState._.meleeActions.attackTarget = function()
         end
 
         DoPrimaryCombatAction()
+        DoTankingActions()
 
         for _, action in ipairs(MeleeStateConfig.GetActions()) do
             ---@type Action
             action = action
-            local actionType = Action.GetActionType(action)
 
-            if actionType ~= nil and actionType:IsReady() and Action.GetLuaResult(action) then
-                actionType:DoAction()
+            if action.enabled ~= false then
+                local actionType = Action.GetActionType(action)
+
+                if actionType ~= nil and actionType:IsReady() and Action.GetLuaResult(action) then
+                    actionType:DoAction()
+                end
             end
         end
     end
@@ -165,9 +224,8 @@ function MeleeState.Reset()
     MeleeState._.currentAction = MeleeState._.meleeActions.checkForCombat
     MeleeState._.currentTargetID = 0
     MeleeState._.currentActionTimer = Timer.new(0)
-    if mq.TLO.Stick.Active() or mq.TLO.Stick.Paused() then
-        mq.cmd("/stick off")
-    end
+    -- only our own stick; a higher priority behavior may have taken movement over since
+    Movement.StopFor(MeleeState.key)
 end
 
 ---@diagnostic disable-next-line: duplicate-set-field

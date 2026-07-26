@@ -9,6 +9,7 @@ local DebugConfig = require("cabby.configs.debugConfig")
 local GeneralConfig = require("cabby.configs.generalConfig")
 local MeleeStateConfig = require("cabby.configs.meleeStateConfig")
 local Menu = require("cabby.ui.menu")
+local CabbyMovement = require("cabby.movement")
 
 local Setup = {
     key = "Setup"
@@ -67,8 +68,7 @@ local function PluginSetup()
     if CheckPlugin("MQ2EQBC", true) then
         SetupEqbc()
     end
-    CheckPlugin("MQ2MoveUtils")
-    CheckPlugin("MQ2AdvPath")
+    -- Movement is ours now (utils/Movement), so MQ2MoveUtils and MQ2AdvPath are not loaded
     -- CheckPlugin("MQ2Rez")
     -- CheckPlugin("MQ2Twist")
     -- CheckPlugin("MQ2Melee")
@@ -156,6 +156,7 @@ function Setup:Init(configFilePath, stateMachine)
     DebugLog("Starting Cabby Setup...")
 
     ConfigSetup(configFilePath)
+    CabbyMovement.Init(stateMachine) -- states expect the movement service to exist before they register
     ClassSetup(stateMachine)
 
     Menu.Init() -- Needs to be after all importing for imgui, so as last as possible

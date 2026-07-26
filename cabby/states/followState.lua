@@ -1,6 +1,8 @@
 local mq = require("mq")
 
 local Debug = require("utils.Debug.Debug")
+local Geometry = require("utils.Movement.Geometry")
+local Movement = require("utils.Movement.Movement")
 local StringUtils = require("utils.StringUtils.StringUtils")
 local TableUtils = require("utils.TableUtils.TableUtils")
 local Timer = require("utils.Time.Timer")
@@ -14,6 +16,13 @@ local UserInput = require("cabby.utils.userinput")
 local function passive()
     return false
 end
+
+-- how close the movement service holds us to the follow target
+local followDistance = 10
+-- and how close we have to be before we stop hogging the frame from lower priority states
+local keepCloseDistance = 12
+-- how close to an anchor still counts as being parked on it
+local anchorRadius = 15
 
 ---@class FollowState : BaseState
 local FollowState = {
@@ -31,6 +40,7 @@ local FollowState = {
         currentActionTimer = nil,
         lastLoc = { x = 0, y = 0, z = 0, zoneId = 0 },
         followTarget = "",
+        followSpawnId = 0,
         checkingStuck = false,
         checkingRetry = false,
         anchor = {
@@ -69,6 +79,7 @@ local function Reset()
     FollowState._.currentActionTimer = Timer.new(0)
     FollowState._.lastLoc = { x = 0, y = 0, z = 0, zoneId = 0 }
     FollowState._.followTarget = ""
+    FollowState._.followSpawnId = 0
     FollowState._.checkingStuck = false
     FollowState._.checkingRetry = false
     FollowState._.anchor.x = 0
@@ -84,7 +95,8 @@ FollowState._.followActions.findFollowTarget = function()
     local followSpawnId = mq.TLO.Spawn("pc radius 200 los " .. FollowState._.followTarget).ID()
     if followSpawnId ~= nil and followSpawnId > 0 then
         FollowState._.checkingRetry = false
-        mq.cmd("/afollow spawn " .. tostring(followSpawnId))
+        FollowState._.followSpawnId = followSpawnId
+        Movement.Follow(followSpawnId, { distance = followDistance, owner = FollowState.key })
         FollowState._.currentAction = FollowState._.followActions.keepClose
         FollowState._.currentActionTimer = Timer.new(5000)
         return true
@@ -101,10 +113,8 @@ FollowState._.followActions.findFollowTarget = function()
     end
     FollowState._.checkingRetry = true
 
-    -- If following, must be something else, disable it
-    if mq.TLO.AdvPath.Following() then
-        mq.cmd("/afollow off")
-    end
+    -- Nothing to follow, so stop following (but leave anyone else's movement alone)
+    Movement.StopFor(FollowState.key)
 
     -- waiting to find follow target, allow lower tier action
     return false
@@ -113,6 +123,12 @@ end
 FollowState._.followActions.keepClose = function()
     -- Follow target not in zone? Go back to finding target or attempt zoning
     if mq.TLO.Spawn("pc " .. FollowState._.followTarget).Name() == nil then
+        -- their breadcrumb trail outlives them leaving; walk it out first, which puts us at
+        -- the zone line (or their corpse) before we decide what to do about it
+        if Movement.IsFollowing(FollowState._.followSpawnId) then
+            return true
+        end
+
         local corpse = mq.TLO.Spawn("corpse " .. FollowState._.followTarget)
         if corpse.Name() == nil or corpse.Distance() > 100 then
             -- target zoned without dying, check for nearby switch
@@ -127,26 +143,19 @@ FollowState._.followActions.keepClose = function()
         return true
     end
 
-    -- If we're close, turn off autofollow and re-enable when we get distance again
-    -- AdvPath is hardcoded to follow at distance 10, so we hardcode to 12
-    if mq.TLO.Spawn("pc " .. FollowState._.followTarget).Distance3D() < 12 then
+    -- If we're close the follow task parks itself, so let lower tier actions have the frame
+    local targetDistance = mq.TLO.Spawn("pc " .. FollowState._.followTarget).Distance3D()
+    if targetDistance ~= nil and targetDistance < keepCloseDistance then
         UpdateLastLoc()
-        if mq.TLO.AdvPath.Following() then
-            mq.cmd("/afollow off")
-        end
         FollowState._.checkingStuck = false
 
         -- we're close and waiting, allow lower tier action
         return false
     end
 
-    -- Had previously locked onto another target to follow, turn off that follow and reset it
-    if mq.TLO.AdvPath.Monitor() ~= nil and mq.TLO.AdvPath.Monitor():lower() ~= FollowState._.followTarget:lower() then
-        mq.cmd("/afollow off")
-    end
-
-    -- Not following for some reason, resume
-    if not mq.TLO.AdvPath.Following() then
+    -- Follow ended, failed, or something with higher priority took movement over. Either
+    -- way we are no longer following our target, so go pick them back up.
+    if not Movement.IsFollowing(FollowState._.followSpawnId) then
         FollowState._.currentAction = FollowState._.followActions.findFollowTarget
         return true
     end
@@ -187,9 +196,7 @@ FollowState._.followActions.keepClose = function()
 end
 
 FollowState._.clickZoneActions.findingSwitch = function()
-    if mq.TLO.AdvPath.Following() then
-        mq.cmd("/afollow off")
-    end
+    Movement.StopFor(FollowState.key)
 
     local switchDistance = mq.TLO.Switch("nearest").Distance()
     if switchDistance ~= nil and switchDistance < 100 then
@@ -197,7 +204,7 @@ FollowState._.clickZoneActions.findingSwitch = function()
             local switchY = mq.TLO.Switch("nearest").Y()
             local switchX = mq.TLO.Switch("nearest").X()
             if switchY ~= nil and switchX ~= nil then
-                mq.cmd("/moveto loc " .. tostring(switchY) .. " " .. tostring(switchX))
+                Movement.MoveToLoc(switchY, switchX, { distance = 20, timeoutMs = 10000, owner = FollowState.key })
             end
             FollowState._.currentAction = FollowState._.clickZoneActions.clickingSwitch
         else
@@ -270,12 +277,18 @@ FollowState._.clickZoneActions.waitingToZone = function()
 end
 
 FollowState._.anchorActions.stayingAtAnchor = function()
-    if mq.TLO.AdvPath.Following() then
-        mq.cmd("/afollow off")
+    -- already walking back to the anchor, let it finish
+    if Movement.IsMovingTo() and Movement.IsOwnedBy(FollowState.key) then
+        return true
     end
 
-    if not mq.TLO.MoveTo.Moving() and mq.TLO.Spawn("pc " .. mq.TLO.Me.Name() .. " radius 15 loc " .. FollowState._.anchor.x .. " " .. FollowState._.anchor.y).Name() == nil then
-        mq.cmd("/moveto loc " .. FollowState._.anchor.y .. " " .. FollowState._.anchor.x)
+    local myY = mq.TLO.Me.Y()
+    local myX = mq.TLO.Me.X()
+    if myY == nil or myX == nil then return false end
+
+    if Geometry.Distance2D(myY, myX, FollowState._.anchor.y, FollowState._.anchor.x) > anchorRadius then
+        Movement.StopFor(FollowState.key)
+        Movement.MoveToLoc(FollowState._.anchor.y, FollowState._.anchor.x, { owner = FollowState.key })
         return true
     end
     return false
@@ -305,8 +318,8 @@ function FollowState.Init()
         local function event_StopFollow(_, speaker)
             if Commands.GetCommandOwners(FollowState.eventIds.stopFollow):HasPermission(speaker) then
                 DebugLog("Stopping follow of speaker [" .. speaker .. "]")
-                if mq.TLO.AdvPath.Monitor() ~= nil and mq.TLO.AdvPath.Monitor():lower() == FollowState._.followTarget:lower() then
-                    mq.cmd("/afollow off")
+                if Movement.IsFollowing(FollowState._.followSpawnId) then
+                    Movement.StopFor(FollowState.key)
                 end
                 Reset()
             else
@@ -321,12 +334,10 @@ function FollowState.Init()
         local function event_MoveToMe(_, speaker)
             if Commands.GetCommandOwners(FollowState.eventIds.moveToMe):HasPermission(speaker) then
                 DebugLog("Moving to speaker [" .. speaker .. "]")
-                if mq.TLO.AdvPath.Following() then
-                    mq.cmd("/afollow off")
-                end
+                Movement.StopFor(FollowState.key)
                 local spawnId = mq.TLO.Spawn("pc radius 200 " .. speaker).ID()
                 if spawnId ~= nil and spawnId > 0 then
-                    mq.cmd("/moveto id " .. tostring(spawnId))
+                    Movement.MoveToSpawn(spawnId, { owner = FollowState.key })
                 else
                     Commands.GetCommandSpeak(FollowState.eventIds.moveToMe):speak("M2m target [" .. speaker .. "] out of range, aborting...")
                 end
@@ -471,6 +482,13 @@ function FollowState.BuildMenu()
 
         ImGui.TableNextColumn()
         ImGui.Text(FollowState._.followTarget)
+
+        ImGui.TableNextRow()
+        ImGui.TableNextColumn()
+        ImGui.Text("Movement")
+
+        ImGui.TableNextColumn()
+        ImGui.Text(Movement.Describe() .. " [" .. (Movement.GetBlockedReason() or Movement.GetStatus()) .. "]")
 
         ImGui.EndTable()
     end

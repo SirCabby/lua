@@ -86,10 +86,11 @@ end
 
 ---@return boolean
 function Skill:HasAction()
-    if self:Name() == "none" then return true end
+    if self:Name():lower() == "none" then return true end
 
-    local skillValue = mq.TLO.Me.Skill(self:Name())()
-    return type(skillValue) == "number" and skillValue > 0
+    -- Me.Skill only covers trained skills (ids 0-99) and returns NULL for innate
+    -- abilities such as Slam (id 111). Me.Ability resolves both.
+    return mq.TLO.Me.Ability(self:Name())() == true
 end
 
 ---@return number
@@ -99,7 +100,7 @@ end
 
 ---@return boolean
 function Skill:IsReady()
-    if self:Name() == "none" then return true end
+    if self:Name():lower() == "none" then return true end
     if self:Targeted() and (mq.TLO.Target.ID() < 1 or mq.TLO.Target.Distance() > 14) then return false end
     if self:Facing() and not Status.IsFacingTarget() then return false end
 
@@ -107,7 +108,7 @@ function Skill:IsReady()
 end
 
 function Skill:DoAction()
-    if self:Name() == "none" then return end
+    if self:Name():lower() == "none" then return end
 
     ---@type Timer
     self._.timer = self._.timer

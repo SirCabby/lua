@@ -66,8 +66,9 @@ In rough order (details in ARCHITECTURE.md "Target architecture"):
    constants; classes omit states they have no business running; hybrids register shared
    states at weaker priorities; runtime priority/constraint modifiers by role + group
    makeup. Unimplemented classes keep failing loudly until built.
-6. Movement service seam: wrap `/stick`, `/moveto`, `/afollow` behind a Movement interface
-   so states stop calling plugin commands directly (enables the Phase 2 backend swap).
+6. ~~Movement service seam~~ — **done**, and it went straight to the Lua implementation
+   rather than wrapping the plugins first (see Phase 2). States call
+   `utils.Movement.Movement`; no state issues `/stick`, `/moveto` or `/afollow`.
 7. Split `commandConfig.lua` (store / bridge / UI; spec-table editor).
 8. Channel known at dispatch: the capture patterns stay (they extract speaker/args from
    chat); pass the originating channel through from event registration instead of
@@ -81,20 +82,33 @@ In rough order (details in ARCHITECTURE.md "Target architecture"):
 ## Phase 2 — Plugin independence (reusable movement + transport libs)
 
 Goal: run without MQ2MoveUtils, MQ2AdvPath, or MQ2DanNet. Build as **reusable modules**
-(candidates for `utils/` since they're script-agnostic), consumed by cabby through the
-Phase 1 service seams; keep plugin backends as fallbacks until the Lua versions reach parity.
+(in `utils/` since they're script-agnostic), consumed by cabby through the Phase 1 service
+seams.
 
-- **Locomotion primitives**: `/keypress`-based run/strafe/turn with hold semantics, `/face`,
-  stop-all; a single owner of movement keys so behaviors can't fight each other.
-- **GoTo**: straight-line move to loc with arrival radius, stuck detection (position-delta
-  windows), simple unstick attempts (strafe/jump), timeout + failure callback.
-- **Stick** (MoveUtils replacement): hold range/arc to a spawn id (melee-range hold, loose
-  follow), re-face cadence, break conditions.
-- **Breadcrumb follow** (AdvPath replacement): sample the followed spawn's loc into a trail,
-  walk the trail (handles corners/LOS loss), trail expiry, hand off to GoTo/Stick for the
-  final segment.
+**Movement: done.** `utils/Movement/` replaced both plugins and `setup.lua` no longer loads
+them. Architecture notes are in ARCHITECTURE.md ("Movement"); what landed:
+
+- ~~**Locomotion primitives**~~ — `Locomotion.lua`: `/keypress` hold semantics with key state
+  tracked so holds only fire on transitions, `/face fast nolook`, stand, jump, release-all,
+  and it is the single owner of the movement keys.
+- ~~**GoTo**~~ — `MoveTo.lua`: straight line to a loc or a spawn, arrival radius, timeout,
+  stuck detection over wall-clock windows (`StuckDetector.lua`), jump + alternating strafe
+  unstick (`Unsticker.lua`), terminal status + reason polled by task id.
+- ~~**Stick**~~ — `Stick.lua`: hold range on a spawn id with constant re-facing, back off when
+  crowded, `behind` mode strafes into the rear arc, breaks on target gone/dead/self/warp.
+- ~~**Breadcrumb follow**~~ — `Follow.lua`: samples the target into a trail, walks the trail
+  (so corners and lost LOS work), drops reached waypoints with a lookahead that collapses
+  laggy backtracking, invalidates the trail when *we* get moved (summon/port/gate), keeps
+  walking after the target zones out, clicks closed doors in the way.
 - **Out of scope**: navmesh-grade pathfinding (that's MQ2Nav's whole job; revisit only if
   breadcrumbs + goto prove insufficient in practice on emu zones).
+- Verified off-client against a simulated client (arrival, unreachable-destination failure,
+  timeout, chase, stick converge/back-off/rear-arc, pause gate, follow around a corner and
+  through a door, task hand-off between owners). **In-game smoke test still pending**; the
+  behaviors most worth watching there are stuck thresholds and door clicking.
+
+Still open in this phase:
+
 - **Transport**: tell/group/raid channels already work plugin-free through Speak. Add an MQ
   Lua **actors** backend for structured client-to-client messages (the launcher post office
   routes between clients on one machine — matches the wine setup). EQBC remains optional
