@@ -78,7 +78,11 @@ function HotbarButtonEditor.Open(bar, index)
         -- work on a copy: Cancel has to be able to throw the whole thing away
         lines = TableUtils.DeepClone(HotbarConfig.GetButtonLines(button)) or {},
         selectedIndex = nil,  -- the line the picker is pointed at, when any
-        pickerLoaded = false  -- whether the picker actually managed to represent it
+        pickerLoaded = false, -- whether the picker actually managed to represent it
+        -- the label this picker gave the button, so changing the pick can rename it and a label
+        -- the user typed cannot be taken over. Not persisted: once saved, an auto-named label is
+        -- indistinguishable from a chosen one, and is treated as the user's
+        autoName = nil
     }
 
     -- the picked command is cleared, but the channel and type are deliberately kept: binding a
@@ -128,13 +132,18 @@ local function InsertLine(text)
     edit.lines[#edit.lines+1] = text
 end
 
----A button called "New" has never been named, so name it after the action being added. An
----edited label is the user's and is left alone.
----@param name string
+---A button called "New" has never been named, so name it after what is being added -- and so has
+---one this picker named a moment ago, which is what lets changing the pick change the label while
+---the label the *user* typed is left alone.
+---@param name string? nothing to name it after leaves it as it is
 local function NameButtonAfter(name)
+    if name == nil or trim(name) == "" then return end
+
     local edit = HotbarButtonEditor._.edit
-    if trim(edit.label) == "" or edit.label == HotbarConfig.defaults.buttonLabel then
+    local label = trim(edit.label)
+    if label == "" or label == HotbarConfig.defaults.buttonLabel or label == edit.autoName then
         edit.label = name
+        edit.autoName = name
     end
 end
 
@@ -419,6 +428,101 @@ local function PickedArgsSpec()
     return HotbarButtonEditor.GetArgsSpec(commandTypeOptions[HotbarButtonEditor._.picker.typeIndex], PickedName())
 end
 
+---@return boolean takesArgs whether there is anything to type after the picked command. A comm
+---command declares what it expects (`Command:WithArgs`), so one that declares nothing expects
+---nothing and is offered no field: an empty box under `followtarget` only suggests arguments it
+---has nowhere to put. Slash commands declare nothing either way, so they keep the field. A line
+---already carrying arguments keeps it too -- the picker must never hold text that ends up in the
+---line while the user cannot see it.
+local function PickedTakesArgs()
+    local picker = HotbarButtonEditor._.picker
+
+    local name = PickedName()
+    if name == nil or trim(name) == "" then return false end
+
+    if commandTypeOptions[picker.typeIndex] == HotbarButtonEditor.commandTypes.slash then return true end
+
+    return PickedArgsSpec() ~= nil or trim(picker.args) ~= ""
+end
+
+---@return table? choices the arguments the picked command offers, nil when it offers none. Empty
+---is not nil: a command that has choices and none configured yet is worth saying so about, rather
+---than looking like a command that never had any.
+local function PickedArgChoices()
+    local argsSpec = PickedArgsSpec()
+    if argsSpec == nil or argsSpec.choices == nil then return nil end
+
+    local choices = argsSpec.choices()
+    if type(choices) ~= "table" then return nil end
+    return choices
+end
+
+---Offer what the command says its arguments can be, so binding one is a pick rather than
+---remembering how a discipline is spelled. The selection is *derived* from the arguments rather
+---than remembered: the text field below stays the one source of truth, so editing it by hand can
+---never leave this combo claiming something the line does not say.
+---@param choices table
+---@param args string current arguments
+---@return string? picked new arguments, when one was clicked
+local function DrawArgChoices(choices, args)
+    if #choices < 1 then
+        ImGui.TextDisabled("Nothing configured for this command to offer yet")
+        return nil
+    end
+
+    args = trim(args):lower()
+
+    local preview = (args == "" and "<Select>") or ("Custom: " .. args)
+    for _, choice in ipairs(choices) do
+        if choice.args:lower() == args then
+            preview = choice.label
+            break
+        end
+    end
+
+    local picked = nil
+    ImGui.SetNextItemWidth(260)
+    if ImGui.BeginCombo("Options", preview) then
+        local group = nil
+        for index, choice in ipairs(choices) do
+            -- a long list reads as sections: every slot three times over is what `action` offers
+            if choice.group ~= nil and choice.group ~= group then
+                group = choice.group
+                ImGui.SeparatorText(group)
+            end
+
+            -- the same label appears once per section, so the row needs its own id. The click, not
+            -- the first return: a row reports itself selected every frame it is, and taking that
+            -- for a click would let the selected row overwrite the one just clicked below it.
+            ImGui.PushID(index)
+            local _, pressed = ImGui.Selectable(choice.label, choice.args:lower() == args)
+            if pressed then
+                picked = choice.args
+            end
+            ImGui.PopID()
+        end
+        ImGui.EndCombo()
+    end
+    return picked
+end
+
+---@return string? name what to call a button that runs the current pick: what the picked choice
+---says to call it, falling back to the command's own name. `action` is the case that needs it --
+---a button that switches a discipline should be called after the discipline, since "action" says
+---nothing about which one, and a bar of them would say it four times over.
+local function PickedButtonName()
+    local choices = PickedArgChoices()
+    if choices ~= nil then
+        local args = trim(HotbarButtonEditor._.picker.args):lower()
+        for _, choice in ipairs(choices) do
+            if choice.name ~= nil and choice.args:lower() == args then
+                return choice.name
+            end
+        end
+    end
+    return PickedName()
+end
+
 ---Offer the newly selected command's suggested arguments. Picking `attack` should hand back a
 ---button that attacks your target, not one that needs to be edited before it does anything.
 local function ResetArgsForSelection()
@@ -570,13 +674,26 @@ local function DrawActionPicker()
         ResetArgsForSelection()
     end
 
-    -- arguments are always offered: a command can take more than it declares, and a declared
-    -- default is only ever a starting point
-    local argsSpec = PickedArgsSpec()
-    ImGui.SetNextItemWidth(220)
-    picker.args = ImGui.InputTextWithHint("Arguments", (argsSpec ~= nil and argsSpec.hint) or "(optional)", picker.args)
-    ImGui.SameLine()
-    CommonUI.HelpMarker("Whatever the command needs after its name -- a spawn id, a slot, on/off. ${Target.ID} and other TLOs are resolved when the button is pressed, so a button reading `attack ${Target.ID}` always means your current target.")
+    local choices = PickedArgChoices()
+    if choices ~= nil then
+        local picked = DrawArgChoices(choices, picker.args)
+        if picked ~= nil then
+            picker.args = picked
+        end
+        if #choices > 0 then
+            ImGui.SameLine()
+            CommonUI.HelpMarker("What this command has to offer, as it is configured right now -- the action slots on the Melee State page, on/off for a setting. Picking one fills in the arguments below, which are still yours to edit afterwards.")
+        end
+    end
+
+    -- a declared default is only ever a starting point, so what is offered here stays editable
+    if PickedTakesArgs() then
+        local argsSpec = PickedArgsSpec()
+        ImGui.SetNextItemWidth(220)
+        picker.args = ImGui.InputTextWithHint("Arguments", (argsSpec ~= nil and argsSpec.hint) or "(optional)", picker.args)
+        ImGui.SameLine()
+        CommonUI.HelpMarker("Whatever the command needs after its name -- a spawn id, a slot, on/off. ${Target.ID} and other TLOs are resolved when the button is pressed, so a button reading `attack ${Target.ID}` always means your current target.")
+    end
 
     local picked, reason = PickedLine()
 
@@ -586,16 +703,16 @@ local function DrawActionPicker()
     if isEditingLine then
         if ImGui.Button("Update Line", 120, 24) and picked ~= nil then
             edit.lines[edit.selectedIndex] = picked
-            NameButtonAfter(PickedName())
+            NameButtonAfter(PickedButtonName())
         end
         ImGui.SameLine()
         if ImGui.Button("Add as New", 120, 24) and picked ~= nil then
             InsertLine(picked)
-            NameButtonAfter(PickedName())
+            NameButtonAfter(PickedButtonName())
         end
     elseif ImGui.Button("Add to Button", 120, 24) and picked ~= nil then
         InsertLine(picked)
-        NameButtonAfter(PickedName())
+        NameButtonAfter(PickedButtonName())
     end
 
     if isDisabled then ImGui.EndDisabled() end
@@ -621,19 +738,34 @@ local function DrawActionPicker()
     end
 end
 
+---Where a button has got to. The button being edited is held by identity, never by number,
+---because it can be dragged into another slot -- or onto another bar entirely -- while its
+---editor is open, and a move is no reason to throw away half-finished lines.
+---@param button table
+---@return table? bar nil once the button is nowhere, which is the one case worth giving up on
+---@return number index
+local function LocateButton(button)
+    for _, bar in ipairs(HotbarConfig.GetBars()) do
+        local index = TableUtils.ArrayIndexOf(bar.buttons, button)
+        if index > 0 then return bar, index end
+    end
+    return nil, -1
+end
+
 ---Draw the editor window, if a button is being edited. Called from the hotbars render
 ---callback so it lives on the same ImGui pass as the bars it edits.
 function HotbarButtonEditor.Draw()
     local edit = HotbarButtonEditor._.edit
     if edit == nil then return end
 
-    -- the bar or the button can be removed from under us by another window's context menu
-    local barIndex = TableUtils.ArrayIndexOf(HotbarConfig.GetBars(), edit.bar)
-    local buttonIndex = TableUtils.ArrayIndexOf(edit.bar.buttons, edit.button)
-    if barIndex < 1 or buttonIndex < 1 then
+    -- the button can be removed from under us by another window's context menu, and moved from
+    -- under us by a drag; only the first of those is a reason to close
+    local bar, buttonIndex = LocateButton(edit.button)
+    if bar == nil then
         HotbarButtonEditor.Close()
         return
     end
+    edit.bar = bar
     edit.index = buttonIndex
 
     ImGui.SetNextWindowSize(520, 520, ImGuiCond.FirstUseEver)

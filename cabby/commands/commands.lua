@@ -21,6 +21,7 @@ local Commands = {
         registrations = {
             commands = {
                 registeredCommands = {}, -- { <phrase> = <command> }
+                byPhrase = {}, -- { <lowercased first word of phrase> = <command> }
                 defaultChannelPatterns = {}, -- { "some pattern with <<phrase>> in it, which will be replaced later with registeredComms.commandId.phrase" }
                 phrasePatternOverrides = {}, -- { <phrase> = { array of patterns } }
                 ownersOverrides = {}, -- { <phrase> = { owners } }
@@ -203,20 +204,15 @@ end
 ---@param phrase string command phrase, extra words are ignored ("attack 123" finds "attack")
 ---@return Command? command nil when the phrase is not a registered comm command
 function Commands.GetCommand(phrase)
-    if phrase == nil or phrase == "" then return nil end
+    if type(phrase) ~= "string" then return nil end
 
-    local words = StringUtils.Split(phrase)
-    if #words < 1 then return nil end
-    phrase = words[1]:lower()
+    -- indexed rather than searched, and matched rather than Split: this is on the hotbar's per
+    -- frame path now (ReadLineState), and walking every registration to re-split its phrase built
+    -- a debug string per candidate whether debugging was on or not
+    local word = phrase:match("^%s*(%S+)")
+    if word == nil then return nil end
 
-    for _, command in pairs(Commands._.registrations.commands.registeredCommands) do
-        ---@type Command
-        command = command
-        if StringUtils.Split(command.command)[1]:lower() == phrase then
-            return command
-        end
-    end
-    return nil
+    return Commands._.registrations.commands.byPhrase[word:lower()]
 end
 
 ---@return table names registered slash commands, without their leading slash
@@ -273,6 +269,39 @@ function Commands.Dispatch(commandLine, speaker)
     return true
 end
 
+---Read the on/off state a command line reflects, for lines that flip something readable
+---(`Command:WithState`). This is what lets a hotbar button carrying `stick toggle` be drawn as the
+---stick setting rather than as anonymous text -- nothing is persisted about a button's lines, so
+---the meaning has to be recovered from the text, the same way ParseActionLine recovers it.
+---
+---Only lines that run *here* are answered for: bare text, which CommandQueue dispatches to this
+---character, and the `/cself` spelling of the same thing. A line spoken on a channel is an order to
+---the others listening on it -- EQBC does not echo to the speaker, so our own setting is not what
+---that line changes, and showing it would be showing the wrong character's state.
+---@param line string a command line as a hotbar button holds it
+---@return boolean? state nil when the line flips nothing readable
+---@return string? phrase the command phrase it read, when it read one
+function Commands.ReadLineState(line)
+    if type(line) ~= "string" then return nil, nil end
+
+    -- matched rather than Split: this runs for every button of every bar, every frame
+    local first, rest = line:match("^%s*(%S+)%s*(.-)%s*$")
+    if first == nil then return nil, nil end
+
+    local phrase, args
+    if first:sub(1, 1) ~= "/" then
+        phrase, args = first, rest
+    elseif first:sub(2):lower() == Commands.selfCommand then
+        phrase, args = rest:match("^(%S+)%s*(.-)$")
+    end
+    if phrase == nil then return nil, nil end
+
+    local command = Commands.GetCommand(phrase)
+    if command == nil or command.stateReader == nil then return nil, nil end
+
+    return command.stateReader(args or ""), phrase:lower()
+end
+
 ---@param command Command
 local function UpdateCommEvent(command)
     for _,registeredEventId in ipairs(command.registeredEvents) do
@@ -299,6 +328,7 @@ end
 function Commands.RegisterCommEvent(command)
     if not TableUtils.ArrayContains(TableUtils.GetKeys(Commands._.registrations.commands.registeredCommands), command.command) then
         Commands._.registrations.commands.registeredCommands[command.command] = command
+        Commands._.registrations.commands.byPhrase[StringUtils.Split(command.command)[1]:lower()] = command
         command.wrappedEventFunction = protect("command:" .. StringUtils.Split(command.command)[1], command.eventFunction)
         command.registeredEvents = {}
         UpdateCommEvent(command)

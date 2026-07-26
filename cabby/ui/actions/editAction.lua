@@ -4,6 +4,14 @@ local Action = require("cabby.actions.action")
 local Actions = require("cabby.actions.actions")
 local ActionType = require("cabby.actions.actionType")
 
+---Staged copy of one action slot: what the row's controls edit until Save writes it back, so
+---Cancel can walk away from a half-finished action.
+---
+---The slot's `enabled` switch is deliberately *not* staged. It is not part of describing an
+---action, it is how one is taken out of the rotation while the character is fighting, so it is
+---read and written straight on the live action (see `Action.SetEnabled`) -- staging it would mean
+---a flip did nothing until Save, and that saving an unrelated edit could put back a value that
+---was captured when the row was first drawn.
 ---@class EditAction : Action
 ---@field liveAction Action Table reference of unedited action
 ---@field editing boolean
@@ -21,7 +29,6 @@ setmetatable(EditAction, {
 EditAction.new = function(liveAction)
     local self = setmetatable(TableUtils.DeepClone(liveAction) or {}, EditAction)
 
-    if liveAction.enabled == nil then liveAction.enabled = true end
     if liveAction.luaEnabled == nil then liveAction.luaEnabled = false end
 
     if liveAction.actionType == nil then
@@ -33,7 +40,8 @@ EditAction.new = function(liveAction)
 
     self.liveAction = liveAction
     self.name = liveAction.name
-    self.enabled = liveAction.enabled
+    -- the clone brought a copy of the switch along; drop it so nothing can read a stale one
+    self.enabled = nil
     self.lua = liveAction.lua
     self.luaEnabled = liveAction.luaEnabled
     self.end_type = liveAction.end_type
@@ -70,7 +78,6 @@ function EditAction:CancelEdit()
     self.editing = false
 
     self.name = self.liveAction.name
-    self.enabled = self.liveAction.enabled
     self.actionType = self.liveAction.actionType
     self.lua = self.liveAction.lua
     self.luaEnabled = self.liveAction.luaEnabled
@@ -82,7 +89,6 @@ function EditAction:SaveEdit()
     self.editing = false
 
     self.liveAction.name = self.name
-    self.liveAction.enabled = self.enabled
     self.liveAction.actionType = self.actionType
     self.liveAction.lua = self.lua
     self.liveAction.luaEnabled = self.luaEnabled

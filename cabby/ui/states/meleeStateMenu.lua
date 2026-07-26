@@ -103,7 +103,8 @@ function MeleeStateMenu.BuildMenu(meleeState)
         local clicked, result
         result, clicked = ImGui.Checkbox("Stick", MeleeStateConfig:GetStick())
         if clicked then
-            MeleeStateConfig.SetStick(result)
+            -- through the state, not the config: turning it off releases a stick already running
+            meleeState.SetStick(result)
         end
 
         ImGui.SameLine()
@@ -138,29 +139,28 @@ function MeleeStateMenu.BuildMenu(meleeState)
         ImGui.Dummy(0, 0)
         ImGui.SameLine()
 
-        local disabled = false
-        if mq.TLO.Target() == nil then
+        local attackDisabled = mq.TLO.Target() == nil
+        if attackDisabled then
             ImGui.BeginDisabled(true)
-            disabled = true
         end
         if ImGui.Button("Attack", 60, 23) then
             local targetId = mq.TLO.Target.ID()
             meleeState.EngageTargetId(targetId)
             meleeState.StickToCurrentTarget(meleeState.GetSpawnMeleeRange(targetId))
         end
-        if disabled then
+        if attackDisabled then
             ImGui.EndDisabled()
         end
 
         ImGui.SameLine()
-        if meleeState._.currentAction ~= meleeState._.meleeActions.attackTarget then
+        local backOffDisabled = meleeState._.currentAction ~= meleeState._.meleeActions.attackTarget
+        if backOffDisabled then
             ImGui.BeginDisabled(true)
-            disabled = true
         end
         if ImGui.Button("Back Off", 70, 23) then
             meleeState.Reset()
         end
-        if disabled then
+        if backOffDisabled then
             ImGui.EndDisabled()
         end
 

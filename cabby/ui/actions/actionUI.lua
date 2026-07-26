@@ -88,10 +88,13 @@ ActionUI.ActionControl = function(liveAction, actions, availableActions)
             isValid = false
             ImGui.BeginDisabled()
         end
-        local enabled, pressed = ImGui.Checkbox("Enabled", editAction.enabled)
+        -- the switch is the only control here that is not staged: it reads and writes the live
+        -- action, so it takes effect on the next pulse the way an in-combat switch has to, and so
+        -- it shows a flip that came from somewhere else (a hotbar button, a chat order) instead
+        -- of a value copied when this row was first drawn
+        local enabled, pressed = ImGui.Checkbox("Enabled", Action.IsEnabled(liveAction))
         if pressed then
-            editAction.enabled = enabled
-            Global.configStore:SaveConfig()
+            Action.SetEnabled(liveAction, enabled)
         end
         if not isValid then
             ImGui.EndDisabled()

@@ -94,15 +94,44 @@ The most developed subsystem. Three registration kinds, all carrying self-docume
   (per-channel patterns live in `Speak.channelTypes`: bc, bct, tell, raid, group) and
   registered as an `mq.event`. Changing active channels re-registers everything. A command may
   also declare, chained onto `Command.new`, what it needs to be a real order rather than a
-  no-op: `:WithArgs{ required, hint, default }` (attack declares a required spawn id defaulting
-  to `${Target.ID}`) and `:ActsOnSpeaker()` for commands that act on whoever said them
-  (followme, m2m), which cannot be issued to yourself. Whatever offers commands to a user reads
+  no-op: `:WithArgs{ required, hint, default, choices }` (attack declares a required spawn id
+  defaulting to `${Target.ID}`) and `:ActsOnSpeaker()` for commands that act on whoever said them
+  (followme, m2m), which cannot be issued to yourself. An order a character has to be able to give
+  *itself* needs a phrase that names no speaker: `followtarget` is `followme` turned around, following
+  whoever the listener has targeted, and so is the one a hand-played character binds to a hotbar
+  button. Whatever offers commands to a user reads
   these — the hotbar editor prefills the default, refuses to build a line that cannot work, and
-  flags one that was typed anyway.
+  flags one that was typed anyway. `choices` is a function, read when the command is offered rather
+  than registered once, returning `{ label, args, group? }` rows: what the arguments can *be* as
+  things stand. It is what separates a command a user can bind from one they have to know the
+  spelling of — `action` can switch any configured action slot, which as free text means typing part
+  of a discipline's name from memory, and as choices is a pick from the slots this character has.
+  `:WithState(reader)` declares the other direction: a command
+  that flips something whose state can be read back, so whatever *presents* the command can
+  present it as that state (a hotbar button carrying `stick toggle` is drawn as the stick setting).
+  The reader answers for this character and returns nil when there is no single answer.
 - **Events** (`Event`): raw line patterns (group invite, generic tell-forwarder). `reregister`
   flag re-adds them last so catchall patterns sort after specific ones.
 - **Slash commands** (`SlashCmd`): `mq.bind` wrappers (/chelp, /cself, /debug, /activechannels,
   /speak, /owners, /state, /cmenu, /restart).
+
+**Settings are commands too** (`commands/toggleCommand.lua`). A setting the menu draws as a
+checkbox is also registered as a one-word comm command over that same setting — `stick off`,
+`tanking on`, or the phrase by itself to flip whatever it is now. The factory writes the help
+(including what the setting is *right now*, read when the help is asked for) and declares `toggle`
+as the command's default arguments, so binding one to a hotbar button is a pick with no typing. It
+holds no state: `get`/`set` are the config's own accessors, the ones the checkbox calls, so a
+button, a chat order and the checkbox cannot disagree. Saying what changed is left to the setter,
+which is where this codebase already prints it — printing in both places would report every flip
+twice and still leave the checkbox as the one path that says nothing. MeleeState registers `melee`,
+`stick`, `autoengage`, `tanking`, and `bashoverride` for characters that can bash, plus `action
+<on | off | toggle> <part of an action's name>` over the configured action slots (exact name wins;
+failing that every slot whose name contains the fragment is switched together, so they end up
+agreeing rather than in opposite states). `/chelp action` lists those slots with their current
+state, which is also what the button editor's docs pane shows while the command is picked. Two of
+these switches have to call off work in progress rather than only stopping new work: `melee off`
+resets the state and `stick off` releases the stick Movement is still holding, both through
+`MeleeState` rather than the config, so the checkboxes get the same behavior.
 
 **The local ("self") channel.** `Speak.channelTypes.self` is a channel that never touches chat.
 `Commands.Dispatch(line)` hands a comm phrase straight to its registered handler with our own
@@ -192,7 +221,16 @@ actions gate on a user-authored Lua predicate evaluated with `loadstring` each u
 the replacement for MQ2Melee downshit/holyshit lines (originals kept as reference comments at
 the bottom of `meleeState.lua`). `EditAction` + `ActionUI` implement staged edit/save/cancel
 editing of these slots; `MeleeStateConfig` stores three lists (actions, taunt_actions,
-hate_actions) with usage modes (always / as-needed / off).
+hate_actions) with usage modes (always / as-needed / off), reachable as one set through
+`GetActionLists()`.
+
+The slot's `enabled` switch is the exception to that staging: it is not part of *describing* an
+action, it is how one is taken out of the rotation while the character is fighting, so
+`Action.IsEnabled/SetEnabled` read and write the live action and persist immediately. Staged, a
+flip did nothing until Save was pressed (and never persisted at all), and saving an unrelated edit
+later could put back the value captured when the row was first drawn — including over a flip that
+came from a hotbar button. `enabled` absent means on, which is how slots saved before the switch
+existed, and slots that were just added, come forward.
 
 `character.lua` is the capability layer: which skills/discs this character actually has,
 snapshotted at load (refresh triggers are a known gap: level-ups, gear swaps, respecs).
@@ -233,9 +271,9 @@ padding and of gap between buttons, no scrollbar, a lowered `WindowMinSize` (ImG
 window size with it *after* applying our constraints), and a title of just `HB<number>` — the
 bar's name would otherwise set the width of the whole window. Its minimum size is therefore one
 button plus the title bar. Bars are created from the General config page; everything else is on
-the right-click menus (rename, button size, add/remove button, edit a button's commands, remove
-hotbar behind a confirmation modal), and the title-bar close box hides a bar rather than
-deleting it. Rules the code depends on:
+the right-click menus (rename, button size, add/remove button, edit a button's commands, lock the
+bar's position, remove hotbar behind a confirmation modal), and the title-bar close box hides a
+bar rather than deleting it. Rules the code depends on:
 
 - **The window snaps to its grid.** Letting go of a resize squares the window off to the
   columns × rows it is laying out, trimming the slack to the right and below; adding a button
@@ -248,6 +286,30 @@ deleting it. Rules the code depends on:
   left mouse button is up — `Begin` has already settled the current frame's size by the time
   the layout is known, and resizing mid-drag fights the user for the window edge.
 
+- **Locking freezes where things sit, and nothing else.** `bar.locked` adds `NoMove` to that
+  window's flags, so the bar cannot be dragged off the spot it was parked on, and it takes that
+  bar's buttons out of the drag-and-drop below, so a stray click cannot shuffle a bar that is
+  being played off. It still resizes, still snaps to its grid, and still opens its right-click
+  menus, which is what unlocks it again. The entry sits on *both* menus, like the other bar-wide
+  entries: a bar packed to its buttons has next to no empty space to right-click, so the button
+  menu is often the only one within reach.
+- **Buttons are rearranged by dragging them**, within a bar or across onto another one, for as
+  long as the bar is unlocked. Every button is both a drag source and a drop target. The payload
+  (`CABBY_HOTBAR_BUTTON`, carrying `"<bar id>:<slot>"`) names the bar it came off rather than
+  handing the table over — a payload can only hold plain data, and naming the source is also what
+  keeps a drop onto a *different* bar from moving whatever happens to sit at that number over
+  there. `MoveButton` lifts the button and inserts it at the number it was dropped on, which in
+  both directions lands it *in* that slot and shifts the rest along; the index is clamped after
+  the lift, since a rightward move along one bar aims at a slot that is one lower once the button
+  is off it. An empty bar's "Right-click to add a button" hint is a drop target too — without it a
+  bar emptied by dragging its last button away could never be dragged back into. Three ImGui facts
+  this leans on: a drag only begins once the mouse passes ImGui's own threshold, so a plain click
+  still presses the button; the drag source stops reporting as hovered while it is being carried,
+  so letting go over the button it was lifted off does not press it either; and a window that ends
+  restores the last-item state its contents clobbered, which is what lets the drag source, the drop
+  target, the tooltip and the context menu all read the same button. The editor holds its button by
+  identity and re-finds it across every bar each frame, so a button dragged elsewhere mid-edit takes
+  its half-finished lines with it rather than having them thrown away.
 - **Mutations are deferred to the end of the frame.** Menu handlers append a closure to a
   `pending` list that runs after the draw loop, so a bar or button is never removed out from
   under the iteration drawing it. Likewise `confirmRemove` is a flag consumed on the *next*
@@ -257,6 +319,17 @@ deleting it. Rules the code depends on:
   it pushes them to `CommandQueue`, which runs them on the next main-loop frame. Running a game
   command from inside an ImGui callback is the crash-to-desktop hazard described in the Movement
   section.
+- **A button that carries a switch is drawn as that switch** — accented while the setting is on,
+  dimmed (fill and lettering) while it is off, and left in the theme's own colours when it carries
+  no switch, because an ordinary button must not read as one that is switched off. Since nothing is
+  persisted about what a line means, the state is read back out of the line text every frame
+  (`Commands.ReadLineState` → `Command.stateReader`), which is exactly what makes the colour follow
+  a flip that came from the menu checkbox or from another character's order. Only lines that run
+  *here* count — bare text and `/cself`; a `/bc stick toggle` button is an order to the others
+  listening, and our own stick is not what it changes, so it stays plain. A button carrying two
+  switches shows a state only while they agree, and the tooltip says it in words as well
+  ("stick is on"), which is what disambiguates a button that sets a switch to a fixed value from
+  one that flips it.
 - **A command line is plain text, and nothing more.** It is exactly what the user could type:
   `/bc followme`, `/cself stopfollow`, `/g attack ${Target.ID}` (TLOs resolve at press time,
   through `mq.cmd`). A line with no leading slash is treated as one of our own comm commands
@@ -264,7 +337,21 @@ deleting it. Rules the code depends on:
   `ui/hotbarButtonEditor.lua` edits a button: label, a line list that grows as it is filled in,
   and an action picker over the live command registries (comm commands with a channel to speak
   them on, or slash commands) whose only job is `BuildActionLine` — generating that text and
-  writing it into the next free line. Once written the line is just text, which is the point:
+  writing it into the next free line. A command that declares argument `choices` adds an Options
+  row to the picker, listing what those arguments can be right now — every action slot configured
+  on the Melee State page, sectioned by whether picking it switches the slot on, off, or over — and
+  picking one fills in the arguments field. That field is offered only where there is something to
+  type: a comm command declaring no arguments (`followtarget`, `stopfollow`) takes none, so it gets
+  no box — unless the line being edited already carries arguments, which are always shown rather
+  than silently kept. A choice may also say what to call a button that runs it
+  (`name`), which is how a button that switches a discipline ends up labelled after the discipline
+  rather than after `action` — a bar of `action` buttons says nothing about which is which. The
+  picker renames only a label it set itself or has never set (tracked per edit, not persisted), so
+  changing the pick relabels the button while a label the user typed is left alone. The selection
+  shown in the Options row is *derived* from the arguments field
+  rather than remembered, so a hand edit cannot leave the combo claiming something the line does not
+  say; the field stays the one source of truth, and stays editable, because the picker generates
+  text and nothing more. Once written the line is just text, which is the point:
   the picker writes `/bc attack ${Target.ID}` and the user is free to edit it into anything.
   Nothing is persisted about where a line came from. Editing is staged and applied on Save.
 - **The picker reads as well as writes.** Clicking a line's number selects it and

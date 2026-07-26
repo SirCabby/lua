@@ -4,6 +4,7 @@ local ImGui = require("ImGui")
 local Debug = require("utils.Debug.Debug")
 
 local CommandQueue = require("cabby.commandQueue")
+local Commands = require("cabby.commands.commands")
 local HotbarButtonEditor = require("cabby.ui.hotbarButtonEditor")
 local HotbarConfig = require("cabby.configs.hotbarConfig")
 
@@ -13,11 +14,19 @@ local HotbarConfig = require("cabby.configs.hotbarConfig")
 ---Layout: buttons flow into as many columns as the window is currently wide, so resizing a
 ---hotbar window turns it into a horizontal bar, a vertical bar, or any grid in between.
 ---A bar is packed tight -- see barPadding/buttonGap below -- so it costs no more screen space
----than the buttons on it, and its title is just the bar number.
+---than the buttons on it, and its title is just the bar number. Once a bar sits where it is
+---wanted, Lock Position on either right-click menu pins it there.
+---
+---Buttons are dragged into whatever order is wanted, on their own bar or across onto another
+---one, for as long as the bar is unlocked -- locking is what says a bar is done being arranged.
 ---
 ---Pressing a button does not run anything here. Its command lines are pushed to CommandQueue
 ---and run from the main loop on the next frame, because issuing game commands from inside an
 ---ImGui render callback is a crash-to-desktop hazard (see ARCHITECTURE.md, Movement).
+---
+---A button whose lines flip a switch is drawn as that switch -- lit while it is on, dimmed while
+---it is off -- read fresh every frame from the setting itself, so it also follows a flip that came
+---from the menu checkbox or from another character's order.
 ---@class HotbarsUI
 local HotbarsUI = {
     key = "HotbarsUI",
@@ -149,6 +158,70 @@ local function DrawRemoveHotbarConfirm(bar, state, pending)
     end
 end
 
+---A switch a button carries is drawn as itself: the accent means the setting is on, the dim means
+---it is off. A button that carries no switch keeps the theme's own look -- an ordinary button must
+---not read as one that is switched off.
+local switchColors = {
+    on = {
+        button = { 0.19, 0.49, 0.24, 0.90 },
+        hovered = { 0.25, 0.62, 0.31, 1.00 },
+        active = { 0.14, 0.38, 0.18, 1.00 }
+    },
+    off = {
+        button = { 0.16, 0.16, 0.16, 0.90 },
+        hovered = { 0.27, 0.27, 0.27, 1.00 },
+        active = { 0.12, 0.12, 0.12, 1.00 },
+        -- dimmed lettering as well: at hotbar sizes the fill alone is a subtle difference
+        text = { 0.62, 0.62, 0.62, 1.00 }
+    }
+}
+
+---What state a button is drawn in: the switches its lines flip, when they have one state between
+---them. Lines are plain text and nothing is stored about where they came from, so this is read
+---back out of the text every frame (`Commands.ReadLineState`) -- which is also what keeps it
+---honest when the same setting is flipped from somewhere else entirely.
+---@param button table
+---@return boolean? state nil when the button carries no switch, or carries several that disagree
+---@return table phrases the switches it carries, for the tooltip to name
+function HotbarsUI.ButtonState(button)
+    local state = nil
+    local phrases = {}
+
+    for _, line in ipairs(HotbarConfig.GetButtonLines(button)) do
+        local lineState, phrase = Commands.ReadLineState(line)
+        if lineState ~= nil then
+            -- a button that flips two settings at once only has a state while they agree
+            if state ~= nil and state ~= lineState then return nil, {} end
+            state = lineState
+            phrases[#phrases+1] = phrase
+        end
+    end
+
+    return state, phrases
+end
+
+---@param styleColor integer
+---@param color table? { r, g, b, a }
+---@return integer pushed 1 when there was a colour to push, 0 when there was not
+local function PushColor(styleColor, color)
+    if color == nil then return 0 end
+
+    ImGui.PushStyleColor(styleColor, color[1], color[2], color[3], color[4])
+    return 1
+end
+
+---@param state boolean? as returned by ButtonState
+---@return integer pushed how many style colors to pop once the button is drawn
+local function PushSwitchColors(state)
+    if state == nil then return 0 end
+
+    local colors = state and switchColors.on or switchColors.off
+    return PushColor(ImGuiCol.Button, colors.button)
+        + PushColor(ImGuiCol.ButtonHovered, colors.hovered)
+        + PushColor(ImGuiCol.ButtonActive, colors.active)
+        + PushColor(ImGuiCol.Text, colors.text)
+end
+
 ---Press a button: hand its lines to the main loop
 ---@param bar table
 ---@param index number
@@ -165,10 +238,81 @@ local function PressButton(bar, index)
     CommandQueue.PushAll(lines)
 end
 
+---What a button being dragged carries: which bar it came off and which slot it sat in. The bar
+---is named rather than handed over because a payload can only hold plain data -- and naming it
+---is what makes a drop onto a *different* bar unambiguous instead of a move of whatever happens
+---to sit at that number over there.
+local buttonPayloadType = "CABBY_HOTBAR_BUTTON"
+
+---@param bar table
+---@param index number
+---@return string payload
+local function WriteButtonPayload(bar, index)
+    return tostring(bar.id) .. ":" .. tostring(index)
+end
+
+---@param data any payload as it comes back off the drop
+---@return table? bar nil when the payload is malformed, or names a bar that has since gone away
+---@return number? index
+local function ReadButtonPayload(data)
+    if type(data) ~= "string" then return nil, nil end
+
+    local id, index = data:match("^(%d+):(%d+)$")
+    if id == nil then return nil, nil end
+
+    for _, bar in ipairs(HotbarConfig.GetBars()) do
+        if bar.id == tonumber(id) then return bar, tonumber(index) end
+    end
+    return nil, nil
+end
+
+---Let the button just drawn be picked up and carried. ImGui only starts a drag once the mouse
+---has moved past its own threshold, so an ordinary click still presses the button; and while a
+---drag is running the source stops reporting as hovered, so letting go over the button it was
+---lifted off does not press it either.
+---@param bar table
+---@param index number
+local function DrawButtonDragSource(bar, index)
+    -- a locked bar is one that is finished being arranged: it will not be dragged around the
+    -- screen and its buttons will not be dragged around the bar
+    if bar.locked then return end
+    if not ImGui.BeginDragDropSource(ImGuiDragDropFlags.None) then return end
+
+    ImGui.SetDragDropPayload(buttonPayloadType, WriteButtonPayload(bar, index))
+    -- what is being carried, which a bar of three-letter labels does not otherwise make obvious
+    ImGui.Text(bar.buttons[index].label)
+    ImGui.EndDragDropSource()
+end
+
+---Let a dragged button be dropped onto the item just drawn. ImGui outlines it while a payload
+---is over it, which is the whole of the drop feedback.
+---@param bar table
+---@param index number slot the drop would land in
+---@param pending function[]
+local function DrawButtonDropTarget(bar, index, pending)
+    if bar.locked then return end
+    if not ImGui.BeginDragDropTarget() then return end
+
+    local payload = ImGui.AcceptDragDropPayload(buttonPayloadType)
+    if payload ~= nil then
+        local fromBar, fromIndex = ReadButtonPayload(payload.Data)
+        if fromBar ~= nil then
+            -- deferred like every other mutation: this runs mid-iteration over the very list
+            -- it reorders, and the drop can be over a bar that has not been drawn yet
+            pending[#pending+1] = function() HotbarConfig.MoveButton(fromBar, fromIndex, bar, index) end
+        end
+    end
+
+    ImGui.EndDragDropTarget()
+end
+
 ---Hover text listing what a button will run, so a bar of short labels is still readable.
 ---Delayed, so dragging the mouse across a bar does not flash a tooltip per button.
+---@param bar table
 ---@param button table
-local function DrawButtonTooltip(button)
+---@param state boolean? the state this button is drawn in
+---@param phrases table the switches it carries
+local function DrawButtonTooltip(bar, button, state, phrases)
     if not ImGui.IsItemHovered(ImGuiHoveredFlags.DelayNormal) then return end
 
     local lines = HotbarConfig.GetButtonLines(button)
@@ -181,7 +325,33 @@ local function DrawButtonTooltip(button)
             ImGui.Text(line)
         end
     end
+
+    -- in words as well as in colour: what the accent means is obvious on a `toggle` button and
+    -- worth spelling out on one that sets a switch to a fixed value
+    if state ~= nil then
+        ImGui.Separator()
+        ImGui.TextDisabled(table.concat(phrases, ", ") .. " is " .. (state and "on" or "off"))
+    end
+
+    -- nothing about a button says it can be picked up, and the tooltip is already the place
+    -- being looked at. Only while it can be: on a locked bar this would be a lie
+    if not bar.locked then
+        ImGui.Separator()
+        ImGui.TextDisabled("Drag to move")
+    end
     ImGui.EndTooltip()
+end
+
+---Menu entry that pins a bar where it sits. Offered on both right-click menus, like the other
+---bar-wide entries: a packed bar has next to no empty space to right-click, so the button menu is
+---often the only one in reach. Locking takes hold on the next frame's Begin -- this frame's window
+---flags were settled before the menu was drawn.
+---@param bar table
+local function DrawLockPositionItem(bar)
+    local activated, locked = ImGui.MenuItem("Lock Position", nil, bar.locked == true)
+    if activated then
+        HotbarConfig.SetBarLocked(bar, locked)
+    end
 end
 
 ---Right-click menu of a single button
@@ -220,6 +390,7 @@ local function DrawButtonContextMenu(bar, index, state, pending)
     end
 
     ImGui.Separator()
+    DrawLockPositionItem(bar)
     if ImGui.MenuItem("Remove Hotbar...") then
         state.confirmRemove = true
     end
@@ -269,6 +440,7 @@ local function DrawHotbarContextMenu(bar, state, pending)
     if ImGui.MenuItem("Add Button") then
         pending[#pending+1] = function() HotbarConfig.AddButton(bar) end
     end
+    DrawLockPositionItem(bar)
     if ImGui.MenuItem("Remove Hotbar...") then
         state.confirmRemove = true
     end
@@ -309,11 +481,18 @@ local function DrawHotbar(bar, pending)
         state.snapTo = nil
     end
 
+    -- a locked bar only refuses to be dragged. It still resizes, still snaps to its grid, and
+    -- still opens its right-click menus -- which is how it gets unlocked again.
+    local windowFlags = ImGuiWindowFlags.NoScrollbar
+    if bar.locked then
+        windowFlags = bit32.bor(windowFlags, ImGuiWindowFlags.NoMove)
+    end
+
     -- the ### id keeps window geometry attached to the bar's id, so renaming it does not
     -- reset its position and size. Only the bar number is shown: at these sizes a title long
     -- enough to hold the name would set the width of the whole bar. NoScrollbar for the same
     -- reason -- a scrollbar appearing would eat a fifth of a one-button-wide window.
-    local open, show = ImGui.Begin("HB" .. tostring(bar.id) .. "###cabbyHotbar" .. tostring(bar.id), true, ImGuiWindowFlags.NoScrollbar)
+    local open, show = ImGui.Begin("HB" .. tostring(bar.id) .. "###cabbyHotbar" .. tostring(bar.id), true, windowFlags)
     ImGui.PopStyleVar(2)
 
     if not open then
@@ -336,19 +515,36 @@ local function DrawHotbar(bar, pending)
             end
 
             ImGui.PushID(index)
+
+            -- popped before the tooltip and the context menu below, which are windows of their
+            -- own and have no business inheriting a button's colours
+            local switchState, switchPhrases = HotbarsUI.ButtonState(button)
+            local pushedColors = PushSwitchColors(switchState)
             local pressed = ImGui.Button(button.label, bar.button_width, bar.button_height)
+            if pushedColors > 0 then
+                ImGui.PopStyleColor(pushedColors)
+            end
             ImGui.PopStyleVar()
 
             if pressed then
                 PressButton(bar, index)
             end
-            DrawButtonTooltip(button)
+
+            -- every button is both ends of a rearrange: the one being carried and a slot to
+            -- drop onto. Windows of their own -- the drag preview, the tooltip, the menu --
+            -- restore the last item when they end, so these four read the same button
+            DrawButtonDragSource(bar, index)
+            DrawButtonDropTarget(bar, index, pending)
+            DrawButtonTooltip(bar, button, switchState, switchPhrases)
             DrawButtonContextMenu(bar, index, state, pending)
             ImGui.PopID()
         end
 
         if #bar.buttons < 1 then
             ImGui.TextDisabled("Right-click to add a button")
+            -- the only thing on an empty bar there is to aim at, and without it a bar emptied
+            -- by dragging its last button away could never be dragged back into
+            DrawButtonDropTarget(bar, 1, pending)
         end
 
         RequestSnap(bar, state, columns)

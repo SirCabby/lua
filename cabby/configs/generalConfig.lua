@@ -182,7 +182,7 @@ function GeneralConfig.BuildMenu()
 
     ImGui.SeparatorText("Hotbars")
     ImGui.SameLine()
-    CommonUI.HelpMarker("A hotbar is a floating window of buttons. Resize it to lay its buttons out as a horizontal bar, a vertical bar, or a grid. Right-click a hotbar to rename it, resize its buttons, add or remove a button, or remove the hotbar. Right-click a button and pick Edit Commands to choose what it runs.")
+    CommonUI.HelpMarker("A hotbar is a floating window of buttons. Resize it to lay its buttons out as a horizontal bar, a vertical bar, or a grid. Right-click a hotbar to rename it, resize its buttons, add or remove a button, lock its position so it cannot be dragged, or remove the hotbar. Right-click a button and pick Edit Commands to choose what it runs.")
 
     if ImGui.Button("Add Hotbar", 100, 24) then
         HotbarConfig.AddBar()

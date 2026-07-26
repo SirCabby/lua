@@ -14,10 +14,16 @@ local TableUtils = require("utils.TableUtils.TableUtils")
 ---Config shape:
 ---  HotbarConfig = {
 ---      bars = {
----          { id = 1, name = "Hotbar 1", visible = true, button_width = 70, button_height = 24,
+---          { id = 1, name = "Hotbar 1", visible = true, locked = false,
+---            button_width = 70, button_height = 24,
 ---            buttons = { { label = "Follow", lines = { "/bc followme" } } } }
 ---      }
 ---  }
+---
+---`locked` pins a bar down: the window refuses to be dragged, so a bar parked over a corner of
+---the game window cannot be knocked loose by a misplaced click, and its buttons refuse to be
+---dragged into a different order, so a slip of the mouse cannot shuffle a bar that is being
+---played off. It is still resizable and still right-clickable, which is what unlocks it again.
 ---
 ---Ids are recycled: a new bar takes the lowest number no other bar is using, so deleting
 ---hotbars 1 and 2 makes the next one "Hotbar 1" again. Because the id also keys the ImGui
@@ -145,6 +151,11 @@ local function validateBar(bar)
         bar.visible = true
         taint = true
     end
+    -- bars saved before locking existed come forward unlocked
+    if type(bar.locked) ~= "boolean" then
+        bar.locked = false
+        taint = true
+    end
 
     local width = HotbarConfig.ClampButtonWidth(bar.button_width)
     if bar.button_width ~= width then
@@ -270,6 +281,7 @@ function HotbarConfig.AddBar()
         id = id,
         name = "Hotbar " .. tostring(id),
         visible = true,
+        locked = false,
         button_width = HotbarConfig.defaults.buttonWidth,
         button_height = HotbarConfig.defaults.buttonHeight,
         buttons = { { label = HotbarConfig.defaults.buttonLabel, lines = {} } }
@@ -298,6 +310,15 @@ function HotbarConfig.SetBarVisible(bar, visible)
     Global.configStore:SaveConfig()
 end
 
+---Pin a bar in place, or let it be dragged again
+---@param bar table
+---@param locked boolean
+function HotbarConfig.SetBarLocked(bar, locked)
+    bar.locked = locked == true
+    Global.configStore:SaveConfig()
+    DebugLog("Hotbar [" .. tostring(bar.name) .. "] position " .. (bar.locked and "locked" or "unlocked"))
+end
+
 ---@param bar table
 ---@param index? number position to insert at, appends when not given
 ---@return table button
@@ -319,6 +340,30 @@ function HotbarConfig.RemoveButton(bar, index)
 
     table.remove(bar.buttons, index)
     Global.configStore:SaveConfig()
+end
+
+---Move a button into another slot, on the same bar or on a different one. The button lands *in*
+---the slot it was dropped on -- whatever was there, and everything after it, shifts along to make
+---room -- which is what lift-then-insert-at-that-same-number does in both directions, so neither
+---direction needs the index adjusted.
+---@param fromBar table
+---@param fromIndex number
+---@param toBar table
+---@param toIndex number slot to land in, clamped to the bar it is landing on
+function HotbarConfig.MoveButton(fromBar, fromIndex, toBar, toIndex)
+    local button = fromBar.buttons[fromIndex]
+    if button == nil then return end
+    if fromBar == toBar and fromIndex == toIndex then return end
+
+    table.remove(fromBar.buttons, fromIndex)
+    -- clamped after the lift, not before: moving a button rightwards along its own bar aims at a
+    -- slot that is one lower once the button is off it, and a bar can be dropped onto while empty
+    toIndex = math.max(1, math.min(math.floor(toIndex), #toBar.buttons + 1))
+    table.insert(toBar.buttons, toIndex, button)
+
+    Global.configStore:SaveConfig()
+    DebugLog("Moved button [" .. button.label .. "] from " .. tostring(fromBar.name) .. " slot " ..
+        tostring(fromIndex) .. " to " .. tostring(toBar.name) .. " slot " .. tostring(toIndex))
 end
 
 ---@param button table

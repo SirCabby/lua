@@ -931,7 +931,10 @@ local function buildCommandEventEditor(commandOrEvent, overrideHelpText, allComm
         ImGui.EndDisabled()
 
         -- Remove-Selected Button
-        if selectedSubtypeIndex.value <= 0 then
+        -- capture the disabled state: the button body resets selectedSubtypeIndex, so re-reading it
+        -- after the click would call EndDisabled without a matching BeginDisabled
+        local removeDisabled = selectedSubtypeIndex.value <= 0
+        if removeDisabled then
             ImGui.BeginDisabled()
         end
         if ImGui.Button("Remove Selected", 120, 22) then
@@ -961,7 +964,7 @@ local function buildCommandEventEditor(commandOrEvent, overrideHelpText, allComm
                 selectedSubtypeIndex.value = 0
             end
         end
-        if selectedSubtypeIndex.value <= 0 then
+        if removeDisabled then
             ImGui.EndDisabled()
         end
 

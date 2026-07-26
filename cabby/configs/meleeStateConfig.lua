@@ -244,6 +244,7 @@ end
 function MeleeStateConfig.SetBashOverride(enable)
     getConfigSection().bash_override = enable == true
     Global.configStore:SaveConfig()
+    print("MeleeState bash override: [" .. tostring(enable) .. "]")
 end
 
 ---@return boolean enable
@@ -255,6 +256,7 @@ end
 function MeleeStateConfig.SetTanking(enable)
     getConfigSection().tanking = enable == true
     Global.configStore:SaveConfig()
+    print("MeleeState tanking: [" .. tostring(enable) .. "]")
 end
 
 ---@return string usage
@@ -302,6 +304,32 @@ end
 ---@return array actions
 function MeleeStateConfig.GetHateActions()
     return getConfigSection().hate_actions
+end
+
+---@class MeleeActionList
+---@field key string
+---@field label string how the menu names this list
+---@field actions table the live array, in priority order
+
+---Every list of action slots this state runs, in the order the menu shows them (the Tanking tab
+---before the Melee tab). A list a character has no use for is simply absent, the same way it is
+---absent from the config: no taunts means no taunt list to switch anything on in.
+---@return table lists array of MeleeActionList
+function MeleeStateConfig.GetActionLists()
+    local configRoot = getConfigSection()
+    local lists = {}
+
+    if type(configRoot.taunt_actions) == "table" then
+        lists[#lists+1] = { key = "taunt", label = "Taunt", actions = configRoot.taunt_actions }
+    end
+    if type(configRoot.hate_actions) == "table" then
+        lists[#lists+1] = { key = "hate", label = "Hate", actions = configRoot.hate_actions }
+    end
+    if type(configRoot.actions) == "table" then
+        lists[#lists+1] = { key = "melee", label = "Melee", actions = configRoot.actions }
+    end
+
+    return lists
 end
 
 return MeleeStateConfig
