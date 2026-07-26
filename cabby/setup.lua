@@ -18,18 +18,27 @@ local function DebugLog(str)
     Debug.Log(Setup.key, str)
 end
 
-local function CheckPlugin(name)
+---@param name string
+---@param isOptional? boolean true to warn and keep going when the plugin cannot be loaded
+---@return boolean isLoaded
+local function CheckPlugin(name, isOptional)
     local ftkey = Global.tracing.open("Checking Plugin ("..name..")")
     if tostring(mq.TLO.Plugin(name)) == "NULL" then
         print("Plugin [" .. name .. "] was not loaded. Loading...")
         mq.cmd("/plugin " .. name)
         mq.delay("10s", function() return tostring(mq.TLO.Plugin(name)) ~= "NULL" end)
         if tostring(mq.TLO.Plugin(name)) == "NULL" then
+            if isOptional then
+                print("Plugin [" .. name .. "] is unavailable. Continuing without it.")
+                Global.tracing.close(ftkey)
+                return false
+            end
             print("Failed to bring up required plugin [" .. name .. "]. Aborting...")
             mq.exit()
         end
     end
     Global.tracing.close(ftkey)
+    return true
 end
 
 local function SetupEqbc()
@@ -39,8 +48,9 @@ local function SetupEqbc()
         mq.cmd("/bccmd connect")
         mq.delay("5s", function() return tostring(mq.TLO.EQBC.Connected) ~= "FALSE" end)
         if tostring(mq.TLO.EQBC.Connected) == "FALSE" then
-            print("Could not connect to MQ2EQBC. Aborting...")
-            mq.exit()
+            print("Could not connect to MQ2EQBC. Continuing without the bc and bct channels.")
+            Global.tracing.close(ftkey)
+            return
         end
         DebugLog("MQ2EQBC is connected")
         if tostring(mq.TLO.EQBC.Setting("localecho")) ~= "FALSE" then
@@ -54,8 +64,9 @@ end
 local function PluginSetup()
     local ftkey = Global.tracing.open("Plugin Setup")
 
-    CheckPlugin("MQ2EQBC")
-    SetupEqbc()
+    if CheckPlugin("MQ2EQBC", true) then
+        SetupEqbc()
+    end
     CheckPlugin("MQ2MoveUtils")
     CheckPlugin("MQ2AdvPath")
     -- CheckPlugin("MQ2Rez")
