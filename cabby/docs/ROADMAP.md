@@ -155,10 +155,15 @@ the Phase 1 module contract comes first.
 - **Leash/give-up timers** on engage (attackTarget can hold "busy" forever on an unreachable
   target, starving Follow below it).
 - **Config migration** when schemas change (version key exists, no mechanism).
-- **Hotbar buttons do nothing yet**: `HotbarConfig` + `ui/hotbarsUI.lua` create, lay out and
-  persist bars, but a button carries only a label. Next: pick what a button binds to (action
-  slot / comm command / slash command / lua snippet), and dispatch it from the main loop —
-  the render callback must not run game commands itself.
+- ~~**Hotbar buttons do nothing yet**~~ — **done**. A button holds an ordered list of command
+  lines, run through the `CommandQueue` service on the next main-loop frame.
+  `ui/hotbarButtonEditor.lua` picks comm commands (with the channel to speak them on, including
+  the new local "self" channel) and slash commands out of the live registries and writes them
+  into a line; lines stay editable text afterwards. Still open here: **action slots** (the
+  `actions/` ActionType instances — fire a specific disc or skill from a button, which needs a
+  slash-command or comm entry point first) and **lua snippet** lines. In-game smoke test
+  pending: TLO expansion at press time (`/g attack ${Target.ID}`), and self-dispatch of every
+  comm command.
 - **Performance**: per-frame spawn-search dedup/caching (several functions repeat identical
   `Spawn(...)` queries 2–3× per frame), XTarget scan throttling.
 - **Docs for users**: /chelp exists; needs a README quickstart (install, plugins, first-run
@@ -185,6 +190,12 @@ the Phase 1 module contract comes first.
 7. **SPA 199 = taunt** on emu spell data: `disciplines.lua` now buckets discs with SPA 199
    into `Disciplines.taunt` — confirm a warrior taunt disc (and no non-taunt disc) lands
    there (the commented HasSPA probe loop in that file helps).
-8. In-game smoke of the 2026-07-18 Phase 0 fixes: fresh-config startup on a taunt-less
+8. **Local channel**: `/cself <command>` for each registered comm command — nothing should
+   appear in any chat window, and behavior should match the same command spoken by a group-mate.
+   Related: `Owners:HasPermission` now always says yes to our own name, so confirm our own
+   outgoing chat cannot re-trigger a command on ourselves (EQ renders our own group/raid lines
+   as "You tell your party, ...", which no registered pattern matches, and EQBC runs with
+   localecho off — verify both still hold).
+9. In-game smoke of the 2026-07-18 Phase 0 fixes: fresh-config startup on a taunt-less
    class, follow/stuck detection, add-new-action UI flow, `/activechannels <cmd> reset`,
    and the Cabby Alerts window (force an error to see alert + log + pause/resume).

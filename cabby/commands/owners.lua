@@ -1,4 +1,6 @@
 ---@diagnostic disable: undefined-field
+local mq = require("mq")
+
 local Debug = require("utils.Debug.Debug")
 local StringUtils = require("utils.StringUtils.StringUtils")
 local TableUtils = require("utils.TableUtils.TableUtils")
@@ -75,7 +77,19 @@ function Owners:IsOwner(name)
     return TableUtils.ArrayContains(self._.data.list, name:lower())
 end
 
+---@param name string speaker who issued the command
+---@return boolean hasPermission
 function Owners:HasPermission(name)
+    if name == nil then return false end
+
+    -- we always take our own orders, without having to list ourselves as an owner. The local
+    -- channel (Commands.Dispatch, /cself, hotbar buttons) speaks as this character, and a
+    -- chat line that really did come from us is our own order too.
+    local myName = mq.TLO.Me.CleanName()
+    if myName ~= nil and name:lower() == myName:lower() then
+        return true
+    end
+
     return self._.data.open or self:IsOwner(name)
 end
 

@@ -189,13 +189,20 @@ MeleeState._.meleeActions.attackTarget = function()
 
     FixCombatState()
 
+    -- FixCombatState issues commands, and mq.cmd yields the frame, so the target validated
+    -- above can be gone by the time we get here. Read distance once and bail if it is; the
+    -- next pulse falls into the re-aquire branch and lets the timer decide whether to reset.
+    local distance = mq.TLO.Target.Distance()
+    if distance == nil then return true end
+
     local range = MeleeState.GetSpawnMeleeRange(MeleeState._.currentTargetID)
 
-    if MeleeStateConfig.GetStick() and not Movement.IsSticking(MeleeState._.currentTargetID) and mq.TLO.Target.Distance() < MeleeStateConfig.GetEngageDistance() and mq.TLO.Target.LineOfSight() then
+    if MeleeStateConfig.GetStick() and not Movement.IsSticking(MeleeState._.currentTargetID) and distance < MeleeStateConfig.GetEngageDistance() and mq.TLO.Target.LineOfSight() then
         MeleeState.StickToCurrentTarget(range)
     end
 
-    if mq.TLO.Target.Distance() < range then
+    -- StickToCurrentTarget can yield too, so keep using the snapshot rather than re-reading
+    if distance < range then
         if not mq.TLO.Me.Combat() and Status:IsFacingTarget() then
             mq.cmd("/attack on")
         end
@@ -238,9 +245,21 @@ function MeleeState.Init()
             "(attack off) Tells listener(s) to call off attacks"
         } end )
         local function event_Attack(_, speaker, args)
+            -- permission first: a speaker we take no orders from should cost us nothing, not
+            -- even the complaints below
+            if not Commands.GetCommandOwners(MeleeState.eventIds.attack):HasPermission(speaker) then
+                DebugLog("Ignoring MeleeAttack speaker [" .. speaker .. "]")
+                return
+            end
+
             args = StringUtils.Split(StringUtils.TrimFront(args))
 
-            if #args < 1 then return end
+            -- these used to return silently, which is indistinguishable from a broken script
+            -- when the order came from a hotbar button that was never given a target
+            if #args < 1 then
+                print("(attack) No target given. Usage: attack <spawn id>, or `attack off` to call it off.")
+                return
+            end
 
             if UserInput.IsFalse(args[1]:lower()) then
                 MeleeState.Reset()
@@ -248,17 +267,22 @@ function MeleeState.Init()
             end
 
             local targetId = tonumber(args[1])
-            if targetId == nil or mq.TLO.SpawnCount("id " .. args[1] .. " radius 400 los")() < 1 then return end
-
-            if Commands.GetCommandOwners(MeleeState.eventIds.attack):HasPermission(speaker) then
-                DebugLog("MeleeAttack speaker [" .. speaker .. "] targetId: [ " .. targetId .. "]")
-                MeleeState.EngageTargetId(targetId)
-                MeleeState.StickToCurrentTarget(MeleeState.GetSpawnMeleeRange(targetId))
-            else
-                DebugLog("Ignoring MeleeAttack speaker [" .. speaker .. "]")
+            if targetId == nil then
+                print("(attack) [" .. args[1] .. "] is not a spawn id. Usage: attack <spawn id>")
+                return
             end
+
+            if mq.TLO.SpawnCount("id " .. tostring(targetId) .. " radius 400 los")() < 1 then
+                print("(attack) Nothing in range and in sight with id [" .. tostring(targetId) .. "]")
+                return
+            end
+
+            DebugLog("MeleeAttack speaker [" .. speaker .. "] targetId: [ " .. targetId .. "]")
+            MeleeState.EngageTargetId(targetId)
+            MeleeState.StickToCurrentTarget(MeleeState.GetSpawnMeleeRange(targetId))
         end
-        Commands.RegisterCommEvent(Command.new(MeleeState.eventIds.attack, event_Attack, attackDocs))
+        Commands.RegisterCommEvent(Command.new(MeleeState.eventIds.attack, event_Attack, attackDocs)
+            :WithArgs({ required = true, hint = "a spawn id, or off", default = "${Target.ID}" }))
 
         MeleeState.Reset()
         MeleeState._.isInit = true
@@ -271,7 +295,8 @@ function MeleeState.Go()
 end
 
 MeleeState.IsTargetInCombatAbilityRange = function()
-    return mq.TLO.Target.Distance() < 14
+    local distance = mq.TLO.Target.Distance()
+    return distance ~= nil and distance < 14
 end
 
 ---@return boolean isEnabled

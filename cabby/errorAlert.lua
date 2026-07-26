@@ -12,9 +12,14 @@ local ErrorAlert = {
         isInit = false,
         logFilePath = nil,
         alerts = {}, -- { [signature] = alert }
-        order = {}   -- signatures, oldest first
+        order = {},  -- signatures, oldest first
+        copiedLabel = nil, -- what the last Copy button grabbed, shown as feedback
+        copiedAt = 0
     }
 }
+
+-- how long the "Copied ..." confirmation stays up, in seconds
+local copiedFeedbackSeconds = 3
 
 local function timestamp()
     return os.date("%Y-%m-%d %H:%M:%S")
@@ -72,14 +77,78 @@ local function dismiss(signature)
     end
 end
 
+---@param alert table
+---@return string text full detail of one alert, suitable for pasting elsewhere
+local function alertToText(alert)
+    return "[" .. alert.source .. "] x" .. tostring(alert.count)
+        .. "\nfirst: " .. alert.firstSeen .. "   last: " .. alert.lastSeen
+        .. "\n" .. alert.message
+end
+
+---@return string text every open alert, plus the log path for context
+local function allAlertsToText()
+    local parts = { "Cabby Alerts (" .. tostring(#ErrorAlert._.order) .. " error(s))",
+                    "Log: " .. tostring(ErrorAlert._.logFilePath) }
+    for _, signature in ipairs(ErrorAlert._.order) do
+        parts[#parts+1] = ""
+        parts[#parts+1] = alertToText(ErrorAlert._.alerts[signature])
+    end
+    return table.concat(parts, "\n")
+end
+
+---@param label string what was copied, echoed back to the user
+---@param text string
+local function copyToClipboard(label, text)
+    ImGui.SetClipboardText(text)
+    ErrorAlert._.copiedLabel = label
+    ErrorAlert._.copiedAt = os.time()
+end
+
+local function DrawCopiedFeedback()
+    if ErrorAlert._.copiedLabel == nil then return end
+    if os.difftime(os.time(), ErrorAlert._.copiedAt) > copiedFeedbackSeconds then
+        ErrorAlert._.copiedLabel = nil
+        return
+    end
+    ImGui.SameLine()
+    ImGui.TextColored(0.4, 1, 0.4, 1, "Copied " .. ErrorAlert._.copiedLabel)
+end
+
+---@param text string
+---@return number lines
+local function countLines(text)
+    local lines = 1
+    for _ in text:gmatch("\n") do lines = lines + 1 end
+    return lines
+end
+
+---Read-only multiline input so the text can be drag-selected and Ctrl+C'd by hand.
+---@param text string
+local function DrawSelectableText(text)
+    local lines = math.max(3, math.min(countLines(text), 14))
+    local height = lines * ImGui.GetTextLineHeight() + 8
+    ImGui.InputTextMultiline("##selectable", text, -1, height, ImGuiInputTextFlags.ReadOnly)
+end
+
 local function DrawAlertsWindow()
     if #ErrorAlert._.order < 1 then return end
 
-    ImGui.SetNextWindowSize(560, 320, ImGuiCond.FirstUseEver)
+    ImGui.SetNextWindowSize(720, 420, ImGuiCond.FirstUseEver)
     local show = ImGui.Begin("Cabby Alerts")
     if show then
         ImGui.TextColored(1, 0.4, 0.4, 1, tostring(#ErrorAlert._.order) .. " error(s)")
         ImGui.Text("Log: " .. tostring(ErrorAlert._.logFilePath))
+
+        if ImGui.Button("Copy All") then
+            copyToClipboard("all errors", allAlertsToText())
+        end
+        ImGui.SameLine()
+        if ImGui.Button("Copy Log Path") then
+            copyToClipboard("log path", tostring(ErrorAlert._.logFilePath))
+        end
+        DrawCopiedFeedback()
+
+        ImGui.TextDisabled("Drag to select text below, Ctrl+C to copy the selection")
         ImGui.Separator()
 
         local toDismiss = nil
@@ -101,8 +170,12 @@ local function DrawAlertsWindow()
                     toDismiss = signature
                 end
             end
+            ImGui.SameLine()
+            if ImGui.Button("Copy Error") then
+                copyToClipboard("[" .. alert.source .. "]", alertToText(alert))
+            end
 
-            ImGui.TextWrapped(alert.message)
+            DrawSelectableText(alert.message)
             ImGui.Separator()
             ImGui.PopID()
         end

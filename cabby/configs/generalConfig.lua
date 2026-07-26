@@ -127,7 +127,8 @@ function GeneralConfig.Init()
                 Speak.Respond(_, speaker, "(inspect <slot>) Slot types: [" .. StringUtils.Join(GeneralConfig.equipmentSlots, ", ") .. "]")
             end
         end
-        Commands.RegisterCommEvent(Command.new(GeneralConfig.eventIds.inspectRequest, event_InspectRequest, inspectDocs))
+        Commands.RegisterCommEvent(Command.new(GeneralConfig.eventIds.inspectRequest, event_InspectRequest, inspectDocs)
+            :WithArgs({ required = true, hint = "an equipment slot", default = "mainhand" }))
 
         local restartDocs = ChelpDocs.new(function() return {
             "(restart) Tells listener(s) to restart cabby script"
@@ -181,7 +182,7 @@ function GeneralConfig.BuildMenu()
 
     ImGui.SeparatorText("Hotbars")
     ImGui.SameLine()
-    CommonUI.HelpMarker("A hotbar is a floating window of buttons. Resize it to lay its buttons out as a horizontal bar, a vertical bar, or a grid. Right-click a hotbar to rename it, resize its buttons, add or remove a button, or remove the hotbar.")
+    CommonUI.HelpMarker("A hotbar is a floating window of buttons. Resize it to lay its buttons out as a horizontal bar, a vertical bar, or a grid. Right-click a hotbar to rename it, resize its buttons, add or remove a button, or remove the hotbar. Right-click a button and pick Edit Commands to choose what it runs.")
 
     if ImGui.Button("Add Hotbar", 100, 24) then
         HotbarConfig.AddBar()

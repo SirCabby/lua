@@ -16,9 +16,12 @@ cabby.lua
   └─ Setup:Init(configFilePath, stateMachine)
        ├─ PluginSetup        — ensure MQ2EQBC (optional; nothing else is required)
        ├─ Config.new(path)   — per-character pickle store: configDir/cabby/<Name>-Config.lua
-       ├─ *Config.Init()     — CommandConfig, DebugConfig, GeneralConfig, MeleeStateConfig
+       ├─ *Config.Init()     — CommandConfig, DebugConfig, GeneralConfig, HotbarConfig,
+       │                       MeleeStateConfig
+       ├─ CommandQueue.Init  — registers the command queue service (what UI presses run through)
        ├─ CabbyMovement.Init — registers the movement service + /cmove
        ├─ ClassSetup         — class module Init(stateMachine) registers states
+       ├─ HotbarsUI.Init()   — ImGui shell for the hotbar windows
        └─ Menu.Init()        — ImGui shell (must be last)
   └─ stateMachine:Start()    — main loop
 ```
@@ -29,8 +32,10 @@ registered states in registration order → first enabled state whose `Go()` ret
 
 **Services** run every frame regardless of which state is busy (`RegisterService`, anything
 with `key` + `Pulse()` and optionally `Stop()`). They are for work that cannot wait for its
-requesting state to get another turn — Movement is the only one today, and it has to release
-its keys on the frame its task ends, not whenever FollowState next runs.
+requesting state to get another turn. Two exist: **Movement**, which has to release its keys on
+the frame its task ends rather than whenever FollowState next runs, and **CommandQueue**
+(`commandQueue.lua`), which runs command lines pushed to it by callers that must not run
+commands themselves — every ImGui callback, hotbar buttons above all.
 
 This is a **priority-chain cooperative scheduler**: state order = priority; `Go()` returning
 `false` yields to lower states. The intended priority bands (from the comment block in
@@ -66,6 +71,7 @@ cabby/
   setup.lua           plugin checks, config init order, class dispatch (16-way if/elseif)
   stateMachine.lua    priority-chain loop + per-frame services (instance class)
   movement.lua        wiring only: registers the movement service and /cmove
+  commandQueue.lua    service: runs command lines pushed from ImGui callbacks, a frame later
   character.lua       capability snapshot: which skills exist (primary/secondary/melee lists)
   status.lua          shared predicates (IsFacingTarget)
   states/             baseState, followState, meleeState
@@ -86,11 +92,28 @@ The most developed subsystem. Three registration kinds, all carrying self-docume
 - **Comms** (`Command`): phrases spoken in chat channels ("followme", "attack 123"). For each
   active channel a matcher pattern is instantiated from a template containing `<<phrase>>`
   (per-channel patterns live in `Speak.channelTypes`: bc, bct, tell, raid, group) and
-  registered as an `mq.event`. Changing active channels re-registers everything.
+  registered as an `mq.event`. Changing active channels re-registers everything. A command may
+  also declare, chained onto `Command.new`, what it needs to be a real order rather than a
+  no-op: `:WithArgs{ required, hint, default }` (attack declares a required spawn id defaulting
+  to `${Target.ID}`) and `:ActsOnSpeaker()` for commands that act on whoever said them
+  (followme, m2m), which cannot be issued to yourself. Whatever offers commands to a user reads
+  these — the hotbar editor prefills the default, refuses to build a line that cannot work, and
+  flags one that was typed anyway.
 - **Events** (`Event`): raw line patterns (group invite, generic tell-forwarder). `reregister`
   flag re-adds them last so catchall patterns sort after specific ones.
-- **Slash commands** (`SlashCmd`): `mq.bind` wrappers (/chelp, /debug, /activechannels,
+- **Slash commands** (`SlashCmd`): `mq.bind` wrappers (/chelp, /cself, /debug, /activechannels,
   /speak, /owners, /state, /cmenu, /restart).
+
+**The local ("self") channel.** `Speak.channelTypes.self` is a channel that never touches chat.
+`Commands.Dispatch(line)` hands a comm phrase straight to its registered handler with our own
+name as the speaker, synthesizing the line the handler would have seen (`Speak.BuildLine`) so
+nothing downstream — `Respond()` included — can tell the difference; replies land in our own
+console via `/echo`. `/cself <command>` is the slash command form, and hotbar buttons use it.
+This is what makes an order meant for *this* character possible at all: EQBC runs with
+localecho off, so a `/bc followme` is heard by everyone except the character that said it.
+Local channels are excluded from active-channel lists and from `GetPhrasePatterns` — there is no
+chat line to listen for. `Owners:HasPermission` always says yes to our own name, so dispatching
+to ourselves does not require listing ourselves as an owner.
 
 Cross-cutting per-command/event settings, each with a global default plus per-command
 overrides, persisted by CommandConfig:
@@ -194,9 +217,11 @@ snapshotted at load (refresh triggers are a known gap: level-ups, gear swaps, re
 `ui/menu.lua` owns the ImGui window ("Cabby Menu", toggled by `/cmenu`, persisted
 `isMenuOpen`): left nav tree of registered Configs and States, right pane renders the
 selection's `BuildMenu()`. Domains register themselves (`Menu.RegisterConfig/RegisterState`).
-Panels live with their domain (`ui/states/meleeStateMenu.lua`, `ui/actions/*`). UI code
-currently reaches into other modules' `_` privates (e.g. `MeleeState._.currentAction`,
-`Commands._.registrations`) — a coupling to remove when the facades grow real accessors.
+Panels live with their domain (`ui/states/meleeStateMenu.lua`, `ui/actions/*`,
+`ui/hotbarButtonEditor.lua`). UI code still reaches into other modules' `_` privates in places
+(e.g. `MeleeState._.currentAction`, the Help tab's `Commands._.registrations`) — a coupling to
+remove as the facades grow real accessors; the hotbar editor goes through `Commands.GetCommand`
+/ `GetCommsPhrases` / `GetSlashCommandNames` / `GetSlashCommand` instead.
 
 **Hotbars** (`ui/hotbarsUI.lua` + `configs/hotbarConfig.lua`) are a second ImGui shell,
 independent of the menu window. One render callback ("Cabby Hotbars") draws every bar in
@@ -204,19 +229,48 @@ independent of the menu window. One render callback ("Cabby Hotbars") draws ever
 registering new callbacks. Buttons flow into as many columns as the window is currently
 wide — resizing a hotbar turns it into a horizontal bar, a vertical bar, or a grid, and it
 never goes below one column. Bars are created from the General config page; everything else
-is on the right-click menus (rename, button size, add/remove button, remove hotbar behind a
-confirmation modal), and the title-bar close box hides a bar rather than deleting it.
-Two rules the code depends on:
+is on the right-click menus (rename, button size, add/remove button, edit a button's commands,
+remove hotbar behind a confirmation modal), and the title-bar close box hides a bar rather than
+deleting it. Rules the code depends on:
 
 - **Mutations are deferred to the end of the frame.** Menu handlers append a closure to a
   `pending` list that runs after the draw loop, so a bar or button is never removed out from
   under the iteration drawing it. Likewise `confirmRemove` is a flag consumed on the *next*
   frame: calling `OpenPopup` from inside the context menu would open the modal at the wrong
   level of the popup stack and it would vanish with the menu.
-- **Buttons are inert.** They store a label and nothing else. When they are wired up, the
-  action must be queued for the main loop, not run in the render callback — issuing game
-  commands from inside an ImGui callback is the crash-to-desktop hazard described in the
-  Movement section.
+- **A press queues, it does not run.** A button holds an ordered list of command lines; pressing
+  it pushes them to `CommandQueue`, which runs them on the next main-loop frame. Running a game
+  command from inside an ImGui callback is the crash-to-desktop hazard described in the Movement
+  section.
+- **A command line is plain text, and nothing more.** It is exactly what the user could type:
+  `/bc followme`, `/cself stopfollow`, `/g attack ${Target.ID}` (TLOs resolve at press time,
+  through `mq.cmd`). A line with no leading slash is treated as one of our own comm commands
+  issued to this character via `Commands.Dispatch` — never spoken, so a typo cannot broadcast.
+  `ui/hotbarButtonEditor.lua` edits a button: label, a line list that grows as it is filled in,
+  and an action picker over the live command registries (comm commands with a channel to speak
+  them on, or slash commands) whose only job is `BuildActionLine` — generating that text and
+  writing it into the next free line. Once written the line is just text, which is the point:
+  the picker writes `/bc attack ${Target.ID}` and the user is free to edit it into anything.
+  Nothing is persisted about where a line came from. Editing is staged and applied on Save.
+- **The picker reads as well as writes.** Clicking a line's number selects it and
+  `ParseActionLine` — the exact inverse of `BuildActionLine` — takes it apart into the controls
+  that built it, so a saved line can be changed by picking a different channel rather than by
+  retyping. `Update Line` rewrites that line, `Add as New` appends instead. Because nothing was
+  persisted about the line's origin, parsing is the only way back, and it is deliberately
+  narrow: it recognizes `/cself`, the channel commands, and our own slash commands, and only
+  when the phrase is one this character has registered (the picker cannot offer a command it
+  does not have). A line it cannot represent still selects — and says so, rather than leaving
+  the picker sitting on stale values that `Update Line` would write over the top of. For the
+  same reason, committing a hand edit to the selected line re-parses it.
+- **A button that cannot work should not be easy to make.** Three layers, because the text is
+  free-form and only the last one sees every case: the picker prefills a command's declared
+  default arguments and `BuildActionLine` returns *why* instead of a line when the pick is
+  incomplete (no target for `attack`, no recipient for a tell, `followme` aimed at yourself);
+  `CheckLine` marks a saved line with the same problems, however it was typed, but only judges
+  lines carrying one of our commands and only judges an unknown phrase on `/cself`, since a
+  phrase spoken on a channel may be one only the listeners have registered; and the handlers
+  themselves say what was wrong when they are reached with nothing to act on, which is the only
+  layer that catches a line assembled at press time out of a TLO that resolved to nothing.
 - **Bar numbers are recycled**: a new bar takes the lowest number no other bar is using, so
   deleting hotbars 1 and 2 makes the next one "Hotbar 1" again. The number is also the bar's
   ImGui window id, which has two consequences — a recycled bar opens where that number's

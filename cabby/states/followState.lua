@@ -310,7 +310,7 @@ function FollowState.Init()
                 DebugLog("Ignoring followme of speaker [" .. speaker .. "]")
             end
         end
-        Commands.RegisterCommEvent(Command.new(FollowState.eventIds.followMe, event_FollowMe, followMeDocs))
+        Commands.RegisterCommEvent(Command.new(FollowState.eventIds.followMe, event_FollowMe, followMeDocs):ActsOnSpeaker())
 
         local stopFollowDocs = ChelpDocs.new(function() return {
             "(stopfollow) Tells listener(s) to stop autofollow on speaker"
@@ -346,7 +346,7 @@ function FollowState.Init()
                 DebugLog("Ignoring move to speaker [" .. speaker .. "]")
             end
         end
-        Commands.RegisterCommEvent(Command.new(FollowState.eventIds.moveToMe, event_MoveToMe, mtomDocs))
+        Commands.RegisterCommEvent(Command.new(FollowState.eventIds.moveToMe, event_MoveToMe, mtomDocs):ActsOnSpeaker())
 
         local clickZoneDocs = ChelpDocs.new(function() return {
             "(clickzone) Tells listener(s) to click to zone"
@@ -399,7 +399,8 @@ function FollowState.Init()
                 DebugLog("Ignoring anchor speaker [" .. speaker .. "]")
             end
         end
-        Commands.RegisterCommEvent(Command.new(FollowState.eventIds.anchor, event_Anchor, anchorDocs))
+        Commands.RegisterCommEvent(Command.new(FollowState.eventIds.anchor, event_Anchor, anchorDocs)
+            :WithArgs({ required = false, hint = "off to release the anchor" }))
 
         if Global.configStore:GetConfigRoot()[FollowState.key] == nil then
             Global.configStore:GetConfigRoot()[FollowState.key] = {}

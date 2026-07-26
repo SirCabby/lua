@@ -2,14 +2,20 @@ local Debug = require("utils.Debug.Debug")
 local TableUtils = require("utils.TableUtils.TableUtils")
 
 ---Persisted hotbar definitions. A hotbar is a floating ImGui window of buttons whose layout
----flows to whatever shape the user resizes that window into (see ui/hotbarsUI.lua). Buttons
----are not wired to any action yet, so only their label is stored.
+---flows to whatever shape the user resizes that window into (see ui/hotbarsUI.lua).
+---
+---A button carries a label and the command lines it runs, in order, when pressed. Lines are
+---stored as plain text -- exactly what the user could type -- because the action picker in
+---ui/hotbarButtonEditor.lua is only a text generator: it writes "/bc followme" or
+---"/cself stopfollow" into a line, and from then on that line is editable like any other
+---("/bc attack" becomes "/bc attack ${Target.ID}"). Lines run through CommandQueue, never
+---from the render callback.
 ---
 ---Config shape:
 ---  HotbarConfig = {
 ---      bars = {
 ---          { id = 1, name = "Hotbar 1", visible = true, button_width = 70, button_height = 24,
----            buttons = { { label = "New" } } }
+---            buttons = { { label = "Follow", lines = { "/bc followme" } } } }
 ---      }
 ---  }
 ---
@@ -42,6 +48,12 @@ end
 
 local function getConfigSection()
     return Global.configStore:GetConfigRoot()[HotbarConfig.key]
+end
+
+---@param str string
+---@return string trimmed
+local function trim(str)
+    return (str:match("^%s*(.-)%s*$"))
 end
 
 ---@param value any
@@ -155,9 +167,28 @@ local function validateBar(bar)
         if type(button) ~= "table" then
             table.remove(bar.buttons, buttonIndex)
             taint = true
-        elseif type(button.label) ~= "string" then
-            button.label = HotbarConfig.defaults.buttonLabel
-            taint = true
+        else
+            if type(button.label) ~= "string" then
+                button.label = HotbarConfig.defaults.buttonLabel
+                taint = true
+            end
+            -- a button with nothing to run is legal: that is what a new button looks like
+            -- until it is edited, and it is also how buttons saved before commands existed
+            -- come forward
+            if type(button.lines) ~= "table" then
+                button.lines = {}
+                taint = true
+            end
+            for lineIndex = #button.lines, 1, -1 do
+                local line = button.lines[lineIndex]
+                if type(line) ~= "string" or trim(line) == "" then
+                    table.remove(button.lines, lineIndex)
+                    taint = true
+                elseif line ~= trim(line) then
+                    button.lines[lineIndex] = trim(line)
+                    taint = true
+                end
+            end
         end
     end
 
@@ -241,7 +272,7 @@ function HotbarConfig.AddBar()
         visible = true,
         button_width = HotbarConfig.defaults.buttonWidth,
         button_height = HotbarConfig.defaults.buttonHeight,
-        buttons = { { label = HotbarConfig.defaults.buttonLabel } }
+        buttons = { { label = HotbarConfig.defaults.buttonLabel, lines = {} } }
     }
     configRoot.bars[#configRoot.bars+1] = bar
     Global.configStore:SaveConfig()
@@ -271,7 +302,7 @@ end
 ---@param index? number position to insert at, appends when not given
 ---@return table button
 function HotbarConfig.AddButton(bar, index)
-    local button = { label = HotbarConfig.defaults.buttonLabel }
+    local button = { label = HotbarConfig.defaults.buttonLabel, lines = {} }
     if index == nil or index > #bar.buttons then
         bar.buttons[#bar.buttons+1] = button
     else
@@ -287,6 +318,36 @@ function HotbarConfig.RemoveButton(bar, index)
     if bar.buttons[index] == nil then return end
 
     table.remove(bar.buttons, index)
+    Global.configStore:SaveConfig()
+end
+
+---@param button table
+---@return table lines command lines this button runs, empty when it has none yet
+function HotbarConfig.GetButtonLines(button)
+    if button == nil or type(button.lines) ~= "table" then return {} end
+    return button.lines
+end
+
+---Replace what a button runs. Blank lines are dropped rather than stored, so an editor can
+---keep a trailing empty row to type into without that row becoming a saved no-op.
+---@param button table
+---@param label string
+---@param lines table array of command lines
+function HotbarConfig.SetButton(button, label, lines)
+    label = trim(tostring(label or ""))
+    if label == "" then
+        label = HotbarConfig.defaults.buttonLabel
+    end
+    button.label = label
+
+    local kept = {}
+    for _, line in ipairs(lines or {}) do
+        if type(line) == "string" and trim(line) ~= "" then
+            kept[#kept+1] = trim(line)
+        end
+    end
+    button.lines = kept
+
     Global.configStore:SaveConfig()
 end
 

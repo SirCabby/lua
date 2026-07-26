@@ -7,10 +7,13 @@ local TableUtils = require("utils.TableUtils.TableUtils")
 local ChelpDocs = require("cabby.commands.chelpDocs")
 local ErrorAlert = require("cabby.errorAlert")
 local SlashCmd = require("cabby.commands.slashcmd")
+local Speak = require("cabby.commands.speak")
 
 ---@class Commands
 local Commands = {
     key = "Commands",
+    ---slash command that issues a comm command to this character with no chat traffic
+    selfCommand = "cself",
     _ = {
         isInit = false,
         speak = {},
@@ -140,6 +143,28 @@ function Commands.Init(config, owners, speak)
         end
         Commands.RegisterSlashCommand(SlashCmd.new("chelp", Bind_Chelp, chelpDocs))
 
+        local cselfDocs = ChelpDocs.new(function() return {
+            "(/" .. Commands.selfCommand .. ") Issue one of this script's communication commands to yourself",
+            " -- Nothing is said in any channel. The command goes straight to its handler with",
+            "    your own name as the speaker, so it runs here and only here.",
+            " -- Usage: /" .. Commands.selfCommand .. " <command> [args]",
+            " -- Example: /" .. Commands.selfCommand .. " stopfollow",
+            " -- Available commands: [" .. StringUtils.Join(Commands.GetCommsPhrases(), ", ") .. "]"
+        } end )
+        local function Bind_CSelf(...)
+            local args = {...} or {}
+            if args == nil or #args < 1 or args[1]:lower() == "help" then
+                cselfDocs:Print()
+                return
+            end
+
+            if not Commands.Dispatch(StringUtils.Join(args, " ")) then
+                print("(/" .. Commands.selfCommand .. ") Not a registered command: [" .. args[1] .. "]")
+                cselfDocs:Print()
+            end
+        end
+        Commands.RegisterSlashCommand(SlashCmd.new(Commands.selfCommand, Bind_CSelf, cselfDocs))
+
         Commands.SetSpeak(speak)
 
         Global.tracing.close(ftkey)
@@ -173,6 +198,79 @@ function Commands.GetCommsPhrases()
         table.insert(comms, StringUtils.Split(command.command)[1])
     end
     return comms
+end
+
+---@param phrase string command phrase, extra words are ignored ("attack 123" finds "attack")
+---@return Command? command nil when the phrase is not a registered comm command
+function Commands.GetCommand(phrase)
+    if phrase == nil or phrase == "" then return nil end
+
+    local words = StringUtils.Split(phrase)
+    if #words < 1 then return nil end
+    phrase = words[1]:lower()
+
+    for _, command in pairs(Commands._.registrations.commands.registeredCommands) do
+        ---@type Command
+        command = command
+        if StringUtils.Split(command.command)[1]:lower() == phrase then
+            return command
+        end
+    end
+    return nil
+end
+
+---@return table names registered slash commands, without their leading slash
+function Commands.GetSlashCommandNames()
+    return TableUtils.GetKeys(Commands._.registrations.slashcommands.registeredSlashCommands)
+end
+
+---@param name string slash command name, with or without its leading slash
+---@return SlashCmd? command nil when the name is not a registered slash command
+function Commands.GetSlashCommand(name)
+    if name == nil or name == "" then return nil end
+
+    name = name:lower()
+    if name:sub(1, 1) == "/" then
+        name = name:sub(2)
+    end
+    return Commands._.registrations.slashcommands.registeredSlashCommands[name]
+end
+
+---Run a comm command on this character with no chat traffic: the phrase is handed straight to
+---its registered handler with our own name as the speaker. This is the local ("self") channel
+---behind /cself and hotbar buttons -- it lets a button fire the same commands other characters
+---send us over chat, without broadcasting an order meant for one character to the whole group.
+---@param commandLine string command phrase plus any arguments, e.g. "attack 12345"
+---@param speaker string? who to attribute the command to, defaults to this character
+---@return boolean handled false when no comm command matches the phrase
+function Commands.Dispatch(commandLine, speaker)
+    commandLine = StringUtils.TrimFront(commandLine or "")
+    if commandLine == "" then return false end
+
+    local phrase = StringUtils.Split(commandLine)[1]
+    local command = Commands.GetCommand(phrase)
+    if command == nil then return false end
+
+    local myName = mq.TLO.Me.CleanName() or ""
+    speaker = speaker or myName
+
+    -- "follow me" said to yourself is a request to follow yourself. Report it rather than
+    -- running it: the handler would happily take our own name as its target and chase it.
+    if command.actsOnSpeaker and speaker:lower() == myName:lower() then
+        print("(" .. phrase .. ") acts on whoever asks for it, so issuing it to yourself does nothing.")
+        return true
+    end
+
+    -- mq hands comm handlers (line, <#1#> speaker, <#2#> trailing args), where the args
+    -- capture keeps the space that separated it from the phrase. Build the same shape so
+    -- handlers cannot tell a dispatched command from a spoken one.
+    local args = commandLine:sub(#phrase + 1)
+    local line = Speak.BuildLine(Speak.channelTypes.self.name, speaker, commandLine)
+
+    DebugLog("Dispatching [" .. commandLine .. "] as speaker [" .. speaker .. "]")
+    local handler = command.wrappedEventFunction or command.eventFunction
+    handler(line, speaker, args)
+    return true
 end
 
 ---@param command Command

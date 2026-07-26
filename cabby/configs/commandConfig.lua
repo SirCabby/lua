@@ -191,7 +191,7 @@ function CommandConfig.Init()
         local activeChannelDocs = ChelpDocs.new(function() return {
             "(/activechannels) Channels used for listening to commands",
             "To toggle an active channel, use: /activechannels <channel type>",
-            " -- Valid Active Channel Types: [" .. StringUtils.Join(TableUtils.GetValues(Speak.GetAllChannelTypes()), ", ") .. "]",
+            " -- Valid Active Channel Types: [" .. StringUtils.Join(TableUtils.GetValues(Speak.GetListenChannelTypes()), ", ") .. "]",
             " -- Currently active channels: [" .. StringUtils.Join(CommandConfig._.configData.activeChannels, ", ") .. "]",
             "To override active channels for a specific communication command, use: /activechannels <command> <channel type>",
             " -- Currently registered commands: [" .. StringUtils.Join(Commands.GetCommsPhrases(), ", ") .. "]",
@@ -503,8 +503,10 @@ function CommandConfig.ToggleActiveChannel(channel, command)
         end
     end
 
-    if not Speak.IsChannelType(channel) then
-        print(" -- Invalid Channel Type [" .. channel .. "]. Valid Channel Types: [" .. StringUtils.Join(TableUtils.GetValues(Speak.GetAllChannelTypes()), ", ") .. "]")
+    -- a local channel is dispatched straight to its handler and never appears in chat, so
+    -- there is nothing to listen for on it
+    if not Speak.IsChannelType(channel) or Speak.IsLocalType(channel) then
+        print(" -- Invalid Channel Type [" .. channel .. "]. Valid Channel Types: [" .. StringUtils.Join(TableUtils.GetValues(Speak.GetListenChannelTypes()), ", ") .. "]")
         return
     end
     if TableUtils.ArrayContains(config.activeChannels, channel) then
@@ -523,8 +525,8 @@ end
 ---@param configLocation table? table to work on active channels within
 function CommandConfig.AddActiveChannel(channel, configLocation)
     local generalConfig = configLocation or CommandConfig._.configData
-    if not Speak.IsChannelType(channel) then
-        print("Invalid Channel Type. Valid Channel Types: [" .. StringUtils.Join(TableUtils.GetValues(Speak.GetAllChannelTypes()), ", ") .. "]")
+    if not Speak.IsChannelType(channel) or Speak.IsLocalType(channel) then
+        print("Invalid Channel Type. Valid Channel Types: [" .. StringUtils.Join(TableUtils.GetValues(Speak.GetListenChannelTypes()), ", ") .. "]")
         return
     end
 
@@ -1129,7 +1131,7 @@ local function buildActiveChannelTab()
                 CommandConfig._.menu.activeChannels.selectedUsesDefaults,
                 nil,
                 "activeChannels",
-                Speak.GetAllChannelTypes(),
+                Speak.GetListenChannelTypes(),
                 CommandConfig.AddActiveChannel,
                 CommandConfig.RemoveActiveChannel
             )

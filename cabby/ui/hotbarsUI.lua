@@ -3,6 +3,8 @@ local ImGui = require("ImGui")
 
 local Debug = require("utils.Debug.Debug")
 
+local CommandQueue = require("cabby.commandQueue")
+local HotbarButtonEditor = require("cabby.ui.hotbarButtonEditor")
 local HotbarConfig = require("cabby.configs.hotbarConfig")
 
 ---Draws every configured hotbar as its own ImGui window. One render callback owns all of
@@ -10,6 +12,10 @@ local HotbarConfig = require("cabby.configs.hotbarConfig")
 ---
 ---Layout: buttons flow into as many columns as the window is currently wide, so resizing a
 ---hotbar window turns it into a horizontal bar, a vertical bar, or any grid in between.
+---
+---Pressing a button does not run anything here. Its command lines are pushed to CommandQueue
+---and run from the main loop on the next frame, because issuing game commands from inside an
+---ImGui render callback is a crash-to-desktop hazard (see ARCHITECTURE.md, Movement).
 ---@class HotbarsUI
 local HotbarsUI = {
     key = "HotbarsUI",
@@ -93,6 +99,41 @@ local function DrawRemoveHotbarConfirm(bar, state, pending)
     end
 end
 
+---Press a button: hand its lines to the main loop
+---@param bar table
+---@param index number
+local function PressButton(bar, index)
+    local button = bar.buttons[index]
+    local lines = HotbarConfig.GetButtonLines(button)
+
+    if #lines < 1 then
+        print("(Cabby) Hotbar button [" .. button.label .. "] has no commands. Right-click it to edit.")
+        return
+    end
+
+    DebugLog("Hotbar [" .. bar.name .. "] button [" .. button.label .. "] pressed, queueing " .. tostring(#lines) .. " line(s)")
+    CommandQueue.PushAll(lines)
+end
+
+---Hover text listing what a button will run, so a bar of short labels is still readable.
+---Delayed, so dragging the mouse across a bar does not flash a tooltip per button.
+---@param button table
+local function DrawButtonTooltip(button)
+    if not ImGui.IsItemHovered(ImGuiHoveredFlags.DelayNormal) then return end
+
+    local lines = HotbarConfig.GetButtonLines(button)
+
+    ImGui.BeginTooltip()
+    if #lines < 1 then
+        ImGui.TextDisabled("No commands. Right-click to edit.")
+    else
+        for _, line in ipairs(lines) do
+            ImGui.Text(line)
+        end
+    end
+    ImGui.EndTooltip()
+end
+
 ---Right-click menu of a single button
 ---@param bar table
 ---@param index number
@@ -113,6 +154,12 @@ local function DrawButtonContextMenu(bar, index, state, pending)
     end
     if ImGui.IsItemDeactivatedAfterEdit() then
         HotbarConfig.Save()
+    end
+
+    -- the editor is a window rather than a popup, so opening it from in here is safe: it is
+    -- drawn at the end of this same pass, outside the popup stack this menu lives on
+    if ImGui.MenuItem("Edit Commands...") then
+        HotbarButtonEditor.Open(bar, index)
     end
 
     if ImGui.MenuItem("Add Button") then
@@ -217,12 +264,9 @@ local function DrawHotbar(bar, pending)
 
             ImGui.PushID(index)
             if ImGui.Button(button.label, bar.button_width, bar.button_height) then
-                -- Nothing is wired to these yet. When they are: queue the work for the main
-                -- loop instead of doing it here. This is an ImGui render callback, and
-                -- running EQ commands from inside one is a crash-to-desktop hazard (same
-                -- reason the Movement service defers its keypresses to Pulse()).
-                DebugLog("Hotbar [" .. bar.name .. "] button [" .. tostring(index) .. "] pressed")
+                PressButton(bar, index)
             end
+            DrawButtonTooltip(button)
             DrawButtonContextMenu(bar, index, state, pending)
             ImGui.PopID()
         end
@@ -245,6 +289,10 @@ local function DrawHotbars()
             DrawHotbar(bar, pending)
         end
     end
+
+    -- drawn outside the bar loop: the editor stays up while its bar is hidden or scrolled
+    -- away, and it must not be nested inside a bar's window
+    HotbarButtonEditor.Draw()
 
     if #pending > 0 then
         for _, apply in ipairs(pending) do

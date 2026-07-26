@@ -5,6 +5,7 @@ local Debug = require("utils.Debug.Debug")
 
 require("cabby.character")
 local CommandConfig = require("cabby.configs.commandConfig")
+local CommandQueue = require("cabby.commandQueue")
 local DebugConfig = require("cabby.configs.debugConfig")
 local GeneralConfig = require("cabby.configs.generalConfig")
 local HotbarConfig = require("cabby.configs.hotbarConfig")
@@ -159,6 +160,7 @@ function Setup:Init(configFilePath, stateMachine)
     DebugLog("Starting Cabby Setup...")
 
     ConfigSetup(configFilePath)
+    CommandQueue.Init(stateMachine) -- anything drawn in ImGui runs its commands through this
     CabbyMovement.Init(stateMachine) -- states expect the movement service to exist before they register
     ClassSetup(stateMachine)
 
