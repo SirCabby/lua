@@ -7,6 +7,8 @@ require("cabby.character")
 local CommandConfig = require("cabby.configs.commandConfig")
 local DebugConfig = require("cabby.configs.debugConfig")
 local GeneralConfig = require("cabby.configs.generalConfig")
+local HotbarConfig = require("cabby.configs.hotbarConfig")
+local HotbarsUI = require("cabby.ui.hotbarsUI")
 local MeleeStateConfig = require("cabby.configs.meleeStateConfig")
 local Menu = require("cabby.ui.menu")
 local CabbyMovement = require("cabby.movement")
@@ -90,6 +92,7 @@ local function ConfigSetup(configFilePath)
     CommandConfig.Init()
     DebugConfig.Init()
     GeneralConfig.Init()
+    HotbarConfig.Init()
     MeleeStateConfig.Init()
 
     Global.tracing.close(ftkey)
@@ -159,6 +162,7 @@ function Setup:Init(configFilePath, stateMachine)
     CabbyMovement.Init(stateMachine) -- states expect the movement service to exist before they register
     ClassSetup(stateMachine)
 
+    HotbarsUI.Init()
     Menu.Init() -- Needs to be after all importing for imgui, so as last as possible
 
     DebugLog("Finished Cabby Setup")

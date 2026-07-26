@@ -155,6 +155,10 @@ the Phase 1 module contract comes first.
 - **Leash/give-up timers** on engage (attackTarget can hold "busy" forever on an unreachable
   target, starving Follow below it).
 - **Config migration** when schemas change (version key exists, no mechanism).
+- **Hotbar buttons do nothing yet**: `HotbarConfig` + `ui/hotbarsUI.lua` create, lay out and
+  persist bars, but a button carries only a label. Next: pick what a button binds to (action
+  slot / comm command / slash command / lua snippet), and dispatch it from the main loop —
+  the render callback must not run game commands itself.
 - **Performance**: per-frame spawn-search dedup/caching (several functions repeat identical
   `Spawn(...)` queries 2–3× per frame), XTarget scan throttling.
 - **Docs for users**: /chelp exists; needs a README quickstart (install, plugins, first-run

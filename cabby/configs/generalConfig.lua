@@ -1,4 +1,5 @@
 local mq = require("mq")
+local ImGui = require("ImGui")
 
 local Debug = require("utils.Debug.Debug")
 local StringUtils = require("utils.StringUtils.StringUtils")
@@ -7,7 +8,9 @@ local TableUtils = require("utils.TableUtils.TableUtils")
 local ChelpDocs = require("cabby.commands.chelpDocs")
 local Command = require("cabby.commands.command")
 local Commands = require("cabby.commands.commands")
+local CommonUI = require("cabby.ui.commonUI")
 local Event = require("cabby.commands.event")
+local HotbarConfig = require("cabby.configs.hotbarConfig")
 local Menu = require("cabby.ui.menu")
 local SlashCmd = require("cabby.commands.slashcmd")
 local Speak = require("cabby.commands.speak")
@@ -175,6 +178,31 @@ end
 function GeneralConfig.BuildMenu()
     local generalConfig = getConfigSection()
     ImGui.Text("Config Version: " .. generalConfig[GeneralConfig.keys.version])
+
+    ImGui.SeparatorText("Hotbars")
+    ImGui.SameLine()
+    CommonUI.HelpMarker("A hotbar is a floating window of buttons. Resize it to lay its buttons out as a horizontal bar, a vertical bar, or a grid. Right-click a hotbar to rename it, resize its buttons, add or remove a button, or remove the hotbar.")
+
+    if ImGui.Button("Add Hotbar", 100, 24) then
+        HotbarConfig.AddBar()
+    end
+
+    local bars = HotbarConfig.GetBars()
+    if #bars < 1 then
+        ImGui.TextDisabled("No hotbars yet")
+        return
+    end
+
+    for barIndex, bar in ipairs(bars) do
+        ImGui.PushID(barIndex)
+        local visible, pressed = ImGui.Checkbox("##visible", bar.visible)
+        if pressed then
+            HotbarConfig.SetBarVisible(bar, visible)
+        end
+        ImGui.SameLine()
+        ImGui.Text(bar.name .. " (" .. tostring(#bar.buttons) .. " buttons)")
+        ImGui.PopID()
+    end
 end
 
 ---@diagnostic disable-next-line: duplicate-set-field

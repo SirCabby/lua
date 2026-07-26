@@ -181,7 +181,7 @@ snapshotted at load (refresh triggers are a known gap: level-ups, gear swaps, re
   references into subtrees. Persisted with `mq.pickle` (a Lua file, loaded via `loadfile` —
   i.e. config is executed code). One file per character.
 - Each domain owns a top-level section keyed by module key — inconsistently named:
-  `CommandConfig`, `DebugConfig`, `GeneralConfig`, `MeleeState`, `FollowState`.
+  `CommandConfig`, `DebugConfig`, `GeneralConfig`, `HotbarConfig`, `MeleeState`, `FollowState`.
 - The universal pattern is init-and-validate ("taint"): on Init, write any missing defaults,
   save if anything changed. FollowState manages its section inline; MeleeState has a
   dedicated config module; states diverge here.
@@ -197,6 +197,31 @@ selection's `BuildMenu()`. Domains register themselves (`Menu.RegisterConfig/Reg
 Panels live with their domain (`ui/states/meleeStateMenu.lua`, `ui/actions/*`). UI code
 currently reaches into other modules' `_` privates (e.g. `MeleeState._.currentAction`,
 `Commands._.registrations`) — a coupling to remove when the facades grow real accessors.
+
+**Hotbars** (`ui/hotbarsUI.lua` + `configs/hotbarConfig.lua`) are a second ImGui shell,
+independent of the menu window. One render callback ("Cabby Hotbars") draws every bar in
+`HotbarConfig` as its own window, so bars can be added and removed at runtime without
+registering new callbacks. Buttons flow into as many columns as the window is currently
+wide — resizing a hotbar turns it into a horizontal bar, a vertical bar, or a grid, and it
+never goes below one column. Bars are created from the General config page; everything else
+is on the right-click menus (rename, button size, add/remove button, remove hotbar behind a
+confirmation modal), and the title-bar close box hides a bar rather than deleting it.
+Two rules the code depends on:
+
+- **Mutations are deferred to the end of the frame.** Menu handlers append a closure to a
+  `pending` list that runs after the draw loop, so a bar or button is never removed out from
+  under the iteration drawing it. Likewise `confirmRemove` is a flag consumed on the *next*
+  frame: calling `OpenPopup` from inside the context menu would open the modal at the wrong
+  level of the popup stack and it would vanish with the menu.
+- **Buttons are inert.** They store a label and nothing else. When they are wired up, the
+  action must be queued for the main loop, not run in the render callback — issuing game
+  commands from inside an ImGui callback is the crash-to-desktop hazard described in the
+  Movement section.
+- **Bar numbers are recycled**: a new bar takes the lowest number no other bar is using, so
+  deleting hotbars 1 and 2 makes the next one "Hotbar 1" again. The number is also the bar's
+  ImGui window id, which has two consequences — a recycled bar opens where that number's
+  window last sat, and transient per-bar ui state must not outlive the bar
+  (`ForgetRemovedBarState` prunes it after any mutation).
 
 ## Foundations (`utils/`) — key facts
 

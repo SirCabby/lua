@@ -1,0 +1,298 @@
+local Debug = require("utils.Debug.Debug")
+local TableUtils = require("utils.TableUtils.TableUtils")
+
+---Persisted hotbar definitions. A hotbar is a floating ImGui window of buttons whose layout
+---flows to whatever shape the user resizes that window into (see ui/hotbarsUI.lua). Buttons
+---are not wired to any action yet, so only their label is stored.
+---
+---Config shape:
+---  HotbarConfig = {
+---      bars = {
+---          { id = 1, name = "Hotbar 1", visible = true, button_width = 70, button_height = 24,
+---            buttons = { { label = "New" } } }
+---      }
+---  }
+---
+---Ids are recycled: a new bar takes the lowest number no other bar is using, so deleting
+---hotbars 1 and 2 makes the next one "Hotbar 1" again. Because the id also keys the ImGui
+---window, a recycled bar opens where the bar of that number last sat.
+---@class HotbarConfig : BaseConfig
+local HotbarConfig = {
+    key = "HotbarConfig",
+    defaults = {
+        buttonLabel = "New",
+        buttonWidth = 70,
+        buttonHeight = 24
+    },
+    limits = {
+        minButtonWidth = 24,
+        maxButtonWidth = 300,
+        minButtonHeight = 16,
+        maxButtonHeight = 120
+    },
+    _ = {
+        isInit = false
+    }
+}
+
+---@param str string
+local function DebugLog(str)
+    Debug.Log(HotbarConfig.key, str)
+end
+
+local function getConfigSection()
+    return Global.configStore:GetConfigRoot()[HotbarConfig.key]
+end
+
+---@param value any
+---@return number width clamped to the sizes the layout can work with
+function HotbarConfig.ClampButtonWidth(value)
+    if type(value) ~= "number" then return HotbarConfig.defaults.buttonWidth end
+    return math.max(HotbarConfig.limits.minButtonWidth, math.min(HotbarConfig.limits.maxButtonWidth, math.floor(value)))
+end
+
+---@param value any
+---@return number height clamped to the sizes the layout can work with
+function HotbarConfig.ClampButtonHeight(value)
+    if type(value) ~= "number" then return HotbarConfig.defaults.buttonHeight end
+    return math.max(HotbarConfig.limits.minButtonHeight, math.min(HotbarConfig.limits.maxButtonHeight, math.floor(value)))
+end
+
+---@param id any
+---@return boolean isUsable ids must be whole positive numbers: they key window geometry
+local function isUsableId(id)
+    return type(id) == "number" and id > 0 and id == math.floor(id)
+end
+
+---@param bars table
+---@return table claimed set of ids already in use
+local function claimedIds(bars)
+    local claimed = {}
+    for _, bar in ipairs(bars) do
+        if isUsableId(bar.id) then
+            claimed[bar.id] = true
+        end
+    end
+    return claimed
+end
+
+---@param claimed table set of ids already in use
+---@return number id lowest number free for a new bar, so deleted numbers come back around
+local function lowestFreeId(claimed)
+    local id = 1
+    while claimed[id] do
+        id = id + 1
+    end
+    return id
+end
+
+---Hand out ids so that no two bars share one. Duplicates would have the bars share their
+---ImGui window (identical ### id) and their transient ui state.
+---@param configRoot table
+---@return boolean taint true when any id had to be assigned or moved
+local function validateBarIds(configRoot)
+    local taint = false
+    local claimed = {}
+
+    -- first claim what the file already holds, so nothing new can land on top of it
+    for _, bar in ipairs(configRoot.bars) do
+        if isUsableId(bar.id) and claimed[bar.id] == nil then
+            claimed[bar.id] = true
+        else
+            bar.id = nil
+            taint = true
+        end
+    end
+
+    for _, bar in ipairs(configRoot.bars) do
+        if bar.id == nil then
+            bar.id = lowestFreeId(claimed)
+            claimed[bar.id] = true
+        end
+    end
+
+    -- ids used to be handed out by a stored counter; recycling replaced it
+    if configRoot.next_id ~= nil then
+        configRoot.next_id = nil
+        taint = true
+    end
+
+    return taint
+end
+
+---@param bar table
+---@return boolean taint true when the bar had to be repaired
+local function validateBar(bar)
+    local taint = false
+
+    if type(bar.name) ~= "string" or bar.name == "" then
+        bar.name = "Hotbar " .. tostring(bar.id)
+        taint = true
+    end
+    if type(bar.visible) ~= "boolean" then
+        bar.visible = true
+        taint = true
+    end
+
+    local width = HotbarConfig.ClampButtonWidth(bar.button_width)
+    if bar.button_width ~= width then
+        bar.button_width = width
+        taint = true
+    end
+    local height = HotbarConfig.ClampButtonHeight(bar.button_height)
+    if bar.button_height ~= height then
+        bar.button_height = height
+        taint = true
+    end
+
+    if type(bar.buttons) ~= "table" then
+        bar.buttons = {}
+        taint = true
+    end
+    -- an empty bar is legal: the user can right-click its window to add buttons back
+    for buttonIndex = #bar.buttons, 1, -1 do
+        local button = bar.buttons[buttonIndex]
+        if type(button) ~= "table" then
+            table.remove(bar.buttons, buttonIndex)
+            taint = true
+        elseif type(button.label) ~= "string" then
+            button.label = HotbarConfig.defaults.buttonLabel
+            taint = true
+        end
+    end
+
+    return taint
+end
+
+local function initAndValidate()
+    local taint = false
+    if getConfigSection() == nil then
+        DebugLog("HotbarConfig Section was not set, updating...")
+        Global.configStore:GetConfigRoot()[HotbarConfig.key] = {}
+        taint = true
+    end
+
+    local configRoot = getConfigSection()
+
+    if type(configRoot.bars) ~= "table" then
+        configRoot.bars = {}
+        taint = true
+    end
+
+    for barIndex = #configRoot.bars, 1, -1 do
+        if type(configRoot.bars[barIndex]) ~= "table" then
+            table.remove(configRoot.bars, barIndex)
+            taint = true
+        end
+    end
+
+    if validateBarIds(configRoot) then
+        taint = true
+    end
+
+    for _, bar in ipairs(configRoot.bars) do
+        if validateBar(bar) then
+            taint = true
+        end
+    end
+
+    if taint then
+        Global.configStore:SaveConfig()
+    end
+end
+
+---Initialize the static object, only done once
+---@diagnostic disable-next-line: duplicate-set-field
+function HotbarConfig.Init()
+    if not HotbarConfig._.isInit then
+        local ftkey = Global.tracing.open("HotbarConfig Setup")
+
+        initAndValidate()
+
+        HotbarConfig._.isInit = true
+        Global.tracing.close(ftkey)
+    end
+end
+
+---------------- Config Management --------------------
+
+---Persist in-place edits. The UI's text and drag fields mutate the live config table every
+---frame they change and call this once the edit is committed, so a file write costs one
+---edit instead of one keystroke.
+function HotbarConfig.Save()
+    Global.configStore:SaveConfig()
+end
+
+---@return table bars array of hotbars, empty when none are configured
+function HotbarConfig.GetBars()
+    local configRoot = getConfigSection()
+    if configRoot == nil then return {} end
+    return configRoot.bars or {}
+end
+
+---Create a hotbar holding a single button, numbered with the lowest number that is free
+---@return table bar
+function HotbarConfig.AddBar()
+    local configRoot = getConfigSection()
+    local id = lowestFreeId(claimedIds(configRoot.bars))
+    local bar = {
+        id = id,
+        name = "Hotbar " .. tostring(id),
+        visible = true,
+        button_width = HotbarConfig.defaults.buttonWidth,
+        button_height = HotbarConfig.defaults.buttonHeight,
+        buttons = { { label = HotbarConfig.defaults.buttonLabel } }
+    }
+    configRoot.bars[#configRoot.bars+1] = bar
+    Global.configStore:SaveConfig()
+    DebugLog("Added hotbar [" .. bar.name .. "]")
+    return bar
+end
+
+---@param bar table
+function HotbarConfig.RemoveBar(bar)
+    local configRoot = getConfigSection()
+    local barIndex = TableUtils.ArrayIndexOf(configRoot.bars, bar)
+    if barIndex < 1 then return end
+
+    table.remove(configRoot.bars, barIndex)
+    Global.configStore:SaveConfig()
+    DebugLog("Removed hotbar [" .. tostring(bar.name) .. "]")
+end
+
+---@param bar table
+---@param visible boolean
+function HotbarConfig.SetBarVisible(bar, visible)
+    bar.visible = visible == true
+    Global.configStore:SaveConfig()
+end
+
+---@param bar table
+---@param index? number position to insert at, appends when not given
+---@return table button
+function HotbarConfig.AddButton(bar, index)
+    local button = { label = HotbarConfig.defaults.buttonLabel }
+    if index == nil or index > #bar.buttons then
+        bar.buttons[#bar.buttons+1] = button
+    else
+        table.insert(bar.buttons, math.max(1, index), button)
+    end
+    Global.configStore:SaveConfig()
+    return button
+end
+
+---@param bar table
+---@param index number
+function HotbarConfig.RemoveButton(bar, index)
+    if bar.buttons[index] == nil then return end
+
+    table.remove(bar.buttons, index)
+    Global.configStore:SaveConfig()
+end
+
+---@diagnostic disable-next-line: duplicate-set-field
+function HotbarConfig.Print()
+    TableUtils.Print(getConfigSection())
+end
+
+return HotbarConfig
