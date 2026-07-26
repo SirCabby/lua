@@ -12,6 +12,8 @@ local HotbarConfig = require("cabby.configs.hotbarConfig")
 ---
 ---Layout: buttons flow into as many columns as the window is currently wide, so resizing a
 ---hotbar window turns it into a horizontal bar, a vertical bar, or any grid in between.
+---A bar is packed tight -- see barPadding/buttonGap below -- so it costs no more screen space
+---than the buttons on it, and its title is just the bar number.
 ---
 ---Pressing a button does not run anything here. Its command lines are pushed to CommandQueue
 ---and run from the main loop on the next frame, because issuing game commands from inside an
@@ -21,9 +23,15 @@ local HotbarsUI = {
     key = "HotbarsUI",
     _ = {
         isInit = false,
-        barUiState = {} -- [bar.id] = { confirmRemove = boolean }
+        barUiState = {} -- [bar.id] = { confirmRemove = boolean, snapTo = { width, height }? }
     }
 }
+
+---A hotbar is meant to take no more room than the buttons it holds, so it draws with its own
+---padding and gap rather than the global style's, and every size below is figured from these
+---two numbers instead of ImGui.GetStyle().
+local barPadding = 1
+local buttonGap = 1
 
 ---@param str string
 local function DebugLog(str)
@@ -62,8 +70,50 @@ end
 ---@return integer columns at least 1, so a window squeezed narrow becomes a vertical bar
 local function ColumnsThatFit(buttonWidth)
     local availableWidth = ImGui.GetContentRegionAvail()
-    local spacing = ImGui.GetStyle().ItemSpacing.x
-    return math.max(1, math.floor((availableWidth + spacing) / (buttonWidth + spacing)))
+    return math.max(1, math.floor((availableWidth + buttonGap) / (buttonWidth + buttonGap)))
+end
+
+---Outer window size that holds a grid of this shape and nothing more. The inverse of
+---ColumnsThatFit: a window this wide leaves exactly enough room for `columns` buttons, so
+---snapping to it cannot shift the layout it was measured from.
+---@param bar table
+---@param columns integer
+---@param rows integer
+---@return number width
+---@return number height counting the title bar, which is all the decoration these windows have
+local function GridWindowSize(bar, columns, rows)
+    local width = (columns * bar.button_width) + ((columns - 1) * buttonGap) + (barPadding * 2)
+    local height = (rows * bar.button_height) + ((rows - 1) * buttonGap) + (barPadding * 2) + ImGui.GetFrameHeight()
+    return width, height
+end
+
+---Note the size that would square this window off to the grid it just laid out, for the next
+---frame to apply. The grid is never re-flowed to do it: the column count is whatever the width
+---the user dragged to asked for, so a bar pulled into a row stays a row and one pulled into a
+---column stays a column, and a shape with a hole in it -- three buttons in a 2x2 -- keeps the
+---empty slot instead of collapsing into a line.
+---@param bar table
+---@param state table
+---@param columns integer the layout that was just drawn
+local function RequestSnap(bar, state, columns)
+    -- an empty bar has no grid to square off to, and trimming it to nothing would clip the
+    -- hint that says how to get a button back
+    if #bar.buttons < 1 then
+        state.snapTo = nil
+        return
+    end
+
+    local width, height = GridWindowSize(bar, columns, math.ceil(#bar.buttons / columns))
+    local currentWidth, currentHeight = ImGui.GetWindowSize()
+
+    -- under a pixel out is ImGui having truncated a fractional title bar, not slack to trim.
+    -- Asking for that difference every frame would never close it.
+    if math.abs(currentWidth - width) < 1 and math.abs(currentHeight - height) < 1 then
+        state.snapTo = nil
+        return
+    end
+
+    state.snapTo = { width = width, height = height }
 end
 
 ---Confirmation gate for destroying a hotbar. Drawn before the context menus that can request
@@ -231,23 +281,41 @@ end
 ---                          are never removed out from under the loops walking them
 local function DrawHotbar(bar, pending)
     local state = GetBarState(bar)
-    local style = ImGui.GetStyle()
-    local decorationHeight = ImGui.GetFrameHeight() + (style.WindowPadding.y * 2)
+
+    -- WindowMinSize is a floor ImGui applies after our own constraints, so a bar could not be
+    -- squeezed down to one small button while it sits at its default 32x32
+    ImGui.PushStyleVar(ImGuiStyleVar.WindowPadding, ImVec2(barPadding, barPadding))
+    ImGui.PushStyleVar(ImGuiStyleVar.WindowMinSize, ImVec2(1, 1))
 
     -- never let the window shrink below a single button, or there would be nothing to
     -- right-click to get the hotbar back
-    ImGui.SetNextWindowSizeConstraints(
-        bar.button_width + (style.WindowPadding.x * 2) + style.ScrollbarSize,
-        bar.button_height + decorationHeight,
-        10000, 10000)
-    ImGui.SetNextWindowSize(
-        (bar.button_width * 4) + (style.ItemSpacing.x * 3) + (style.WindowPadding.x * 2),
-        bar.button_height + decorationHeight,
-        ImGuiCond.FirstUseEver)
+    local minWidth, minHeight = GridWindowSize(bar, 1, 1)
+    ImGui.SetNextWindowSizeConstraints(minWidth, minHeight, 10000, 10000)
+
+    -- a bar seen for the first time opens as a row of up to four, already squared off to its
+    -- grid so that it does not appear at one size and snap to another a frame later
+    local buttonCount = math.max(1, #bar.buttons)
+    local defaultColumns = math.min(4, buttonCount)
+    local defaultWidth, defaultHeight = GridWindowSize(bar, defaultColumns, math.ceil(buttonCount / defaultColumns))
+    ImGui.SetNextWindowSize(defaultWidth, defaultHeight, ImGuiCond.FirstUseEver)
+
+    -- Square the window off to the grid the last frame laid out. Held until the mouse is up,
+    -- because resizing a window out from under the drag that is still sizing it fights the
+    -- user for the edge; and applied here rather than where it was measured, because by then
+    -- Begin has already settled this frame's size. Last SetNextWindowSize wins, so this one
+    -- has to come after the default above.
+    if state.snapTo ~= nil and not ImGui.IsMouseDown(ImGuiMouseButton.Left) then
+        ImGui.SetNextWindowSize(state.snapTo.width, state.snapTo.height)
+        state.snapTo = nil
+    end
 
     -- the ### id keeps window geometry attached to the bar's id, so renaming it does not
-    -- reset its position and size
-    local open, show = ImGui.Begin(bar.name .. "###cabbyHotbar" .. tostring(bar.id), true)
+    -- reset its position and size. Only the bar number is shown: at these sizes a title long
+    -- enough to hold the name would set the width of the whole bar. NoScrollbar for the same
+    -- reason -- a scrollbar appearing would eat a fifth of a one-button-wide window.
+    local open, show = ImGui.Begin("HB" .. tostring(bar.id) .. "###cabbyHotbar" .. tostring(bar.id), true, ImGuiWindowFlags.NoScrollbar)
+    ImGui.PopStyleVar(2)
+
     if not open then
         pending[#pending+1] = function() HotbarConfig.SetBarVisible(bar, false) end
     end
@@ -255,15 +323,23 @@ local function DrawHotbar(bar, pending)
     if show then
         DrawRemoveHotbarConfirm(bar, state, pending)
 
-        local columns = ColumnsThatFit(bar.button_width)
+        -- room for more columns than there are buttons lays out the same as room for exactly
+        -- as many, but it is trailing space the snap below would otherwise preserve
+        local columns = math.min(ColumnsThatFit(bar.button_width), math.max(1, #bar.buttons))
 
         for index, button in ipairs(bar.buttons) do
+            -- only the buttons pack tight: the tooltip and menus drawn below are ordinary
+            -- windows, and a one pixel gap between their rows would be unreadable
+            ImGui.PushStyleVar(ImGuiStyleVar.ItemSpacing, ImVec2(buttonGap, buttonGap))
             if index > 1 and ((index - 1) % columns) ~= 0 then
                 ImGui.SameLine()
             end
 
             ImGui.PushID(index)
-            if ImGui.Button(button.label, bar.button_width, bar.button_height) then
+            local pressed = ImGui.Button(button.label, bar.button_width, bar.button_height)
+            ImGui.PopStyleVar()
+
+            if pressed then
                 PressButton(bar, index)
             end
             DrawButtonTooltip(button)
@@ -275,6 +351,7 @@ local function DrawHotbar(bar, pending)
             ImGui.TextDisabled("Right-click to add a button")
         end
 
+        RequestSnap(bar, state, columns)
         DrawHotbarContextMenu(bar, state, pending)
     end
     ImGui.End()

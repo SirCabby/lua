@@ -228,10 +228,25 @@ independent of the menu window. One render callback ("Cabby Hotbars") draws ever
 `HotbarConfig` as its own window, so bars can be added and removed at runtime without
 registering new callbacks. Buttons flow into as many columns as the window is currently
 wide — resizing a hotbar turns it into a horizontal bar, a vertical bar, or a grid, and it
-never goes below one column. Bars are created from the General config page; everything else
-is on the right-click menus (rename, button size, add/remove button, edit a button's commands,
-remove hotbar behind a confirmation modal), and the title-bar close box hides a bar rather than
+never goes below one column. A bar is packed to the size of its buttons: one pixel of window
+padding and of gap between buttons, no scrollbar, a lowered `WindowMinSize` (ImGui floors
+window size with it *after* applying our constraints), and a title of just `HB<number>` — the
+bar's name would otherwise set the width of the whole window. Its minimum size is therefore one
+button plus the title bar. Bars are created from the General config page; everything else is on
+the right-click menus (rename, button size, add/remove button, edit a button's commands, remove
+hotbar behind a confirmation modal), and the title-bar close box hides a bar rather than
 deleting it. Rules the code depends on:
+
+- **The window snaps to its grid.** Letting go of a resize squares the window off to the
+  columns × rows it is laying out, trimming the slack to the right and below; adding a button
+  that no longer fits grows it (there is no scrollbar to reach a clipped button with). The
+  column count is *not* re-flowed to do it — it stays whatever width the user dragged to, so a
+  bar pulled into a row stays a row, and a 2x2 holding three buttons keeps its empty slot.
+  `GridWindowSize` is the exact inverse of `ColumnsThatFit`, which is what makes the snap a
+  fixed point rather than something that shifts the layout it measured. `RequestSnap` only
+  records the size; it is applied by the *next* frame's `SetNextWindowSize`, and only while the
+  left mouse button is up — `Begin` has already settled the current frame's size by the time
+  the layout is known, and resizing mid-drag fights the user for the window edge.
 
 - **Mutations are deferred to the end of the frame.** Menu handlers append a closure to a
   `pending` list that runs after the draw loop, so a bar or button is never removed out from
