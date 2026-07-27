@@ -1,6 +1,7 @@
 local BaseClass = require("cabby.classes.baseClass")
 local Priorities = require("cabby.classes.priorities")
 
+local BuffState = require("cabby.states.buffState")
 local SpellDpsState = require("cabby.states.spellDpsState")
 
 ---A magician is its pet and its nukes, plus everything it hands out. The nukes have a home now;
@@ -12,7 +13,8 @@ local Magician = BaseClass.new({
     key = "Magician",
     shortName = "MAG",
     states = {
-        { state = SpellDpsState, priority = Priorities.dps - 1 }
+        { state = SpellDpsState, priority = Priorities.dps - 1 },
+        { state = BuffState, priority = Priorities.buff }
     },
     unimplemented = {
         "the pet: summon the right elemental, gear it, send it in and call it off",

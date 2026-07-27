@@ -131,7 +131,7 @@ cabby/
   commandQueue.lua    service: runs command lines pushed from ImGui callbacks, a frame later
   character.lua       capability snapshot: which skills exist (primary/secondary/melee lists)
   status.lua          shared predicates (IsFacingTarget)
-  states/             baseState, followState, meleeState, spellDpsState, healState
+  states/             baseState, followState, meleeState, spellDpsState, healState, buffState
   classes/            priorities (the bands), baseClass (assembly), classes (the registry),
                       and one profile per EQ class
   commands/           the chat-command bus (see below), incl. the toggle/action command factories
@@ -188,7 +188,9 @@ priests heal, and so do the three hybrids that can (PAL, RNG, BST) — but a ban
 (`Priorities.heal + 5`), which is the whole reason the bands are numbers: a paladin's heal has to
 land below a cleric's, and that is only checkable if both name the same band. A druid or shaman in
 a group with no cleric should tighten to the full band, which needs the runtime priority
-adjustment that does not exist yet. Everything
+adjustment that does not exist yet. The twelve classes with a spellbook register **BuffState** at
+the buff band; the four with none (WAR, MNK, ROG, BER) do not, since a buff list holding nothing
+but clickies is not enough of a job to be a state. Everything
 narrower than "can this class do this at all" — does it have bash, does it have taunt discs —
 stays where it already is, in `character.lua` and the action registries.
 
@@ -227,6 +229,29 @@ The most developed subsystem. Three registration kinds, all carrying self-docume
 - **Slash commands** (`SlashCmd`): `mq.bind` wrappers (/chelp, /cself, /debug, /activechannels,
   /speak, /owners, /state, /cmenu, /restart).
 
+**Chat timestamps.** Some clients (RoF2 client-plus among them) stamp every chat line, and MQ
+feeds Blech the line as rendered — so `[23:39:30] Haedes tells you, 'followme'` is what the
+patterns actually see. Blech matches the *whole* line, which splits the patterns three ways, and
+the handling is different for each:
+
+- A pattern starting with `#1#` (tell, group, raid, and both raw events) still matches, but the
+  wildcard swallows the timestamp into the speaker capture. Since the first thing every handler
+  does is an ACL check, the symptom is a character that silently ignores its own owners — and, for
+  the group-invite event, one that actively `/disband`s every invitation it is sent.
+- `bct`'s `[#1#(msg)]` also still matches, because the timestamp's own `[` satisfies the leading
+  literal; it captures from inside it (`23:39:30] [Haedes`).
+- `bc`'s `<#1#>` cannot match at all, so those commands are not refused, they are never heard.
+
+So there are two fixes, and the second is narrower than it looks. `Speak.CleanSpeaker` takes the
+name back off the end of the capture (EQ names are letters, chat carries the first name alone),
+applied once in `protectChatHandler` — the wrapper every comm command and raw event already passes
+through, and slash commands deliberately do not, having no speaker. And
+`Speak.GetPhrasePatterns` registers a second, timestamped copy of a pattern **only where the plain
+one cannot match a stamped line**, which is `bc` alone. Giving one to the others would be actively
+harmful: the line would match both patterns, every command would run twice, and on a toggle that
+is two flips and no visible effect. `Speak.Respond` needs nothing — `GetRequestChannel` searches
+with `string.find` rather than anchoring, so it already tolerates the prefix.
+
 **Two command factories** cover the shapes every state needs, so a new state registers its
 commands instead of writing them (`commands/toggleCommand.lua`, `commands/actionCommand.lua`).
 
@@ -240,14 +265,16 @@ button, a chat order and the checkbox cannot disagree. Saying what changed is le
 which is where this codebase already prints it — printing in both places would report every flip
 twice and still leave the checkbox as the one path that says nothing. MeleeState registers `melee`,
 `stick`, `autoengage`, `tanking`, and `bashoverride` for characters that can bash; HealState
-registers `healing`, `healgroup` and `healpets`. Switches that have to call off work in progress
+registers `healing`, `healgroup` and `healpets`; BuffState registers `buffing`, `buffgroup`,
+`buffpets` and `buffcombat`. Switches that have to call off work in progress
 rather than only stopping new work go through the *state* rather than the config, so the
 checkboxes get the same behavior: `melee off` resets the state, `stick off` releases the stick
 Movement is still holding, and `healing off` interrupts the heal in the air.
 
 **Action lists are commands too** (`commands/actionCommand.lua`). Any state with configured action
 slots gets `<phrase> <on | off | toggle> <part of an action's name>` from the same factory —
-`action` for the melee lists, `healaction` for the heal list. Exact name wins; failing that every
+`action` for the melee lists, `healaction` for the heal list, `nukeaction` and `buffaction` for
+theirs. Exact name wins; failing that every
 slot whose name contains the fragment is switched together, so they end up agreeing rather than in
 opposite states. `/chelp action` lists those slots with their current state, which is also what the
 button editor's docs pane shows while the command is picked, and the choices it offers are the
@@ -415,9 +442,9 @@ reports the outcome when it lands; `/ccast` alone reports what casting is doing 
 cancels it. Settings (memorize gem, settle window, preparation budget) live in
 `configs/castingConfig.lua`, whose menu page also shows the live status.
 
-Callers today are `/ccast` and any configured action slot holding a spell, clicky or AA (see
-Action system below). The states that would use it on their own — heal, buff, cure, mez — do not
-exist yet.
+Callers today are `/ccast`, any configured action slot holding a spell, clicky or AA (see Action
+system below), and the three states that ask for casts directly: heal, spell dps and buff. Cure
+and mez do not exist yet.
 
 ## Action system (`actions/`)
 
@@ -619,6 +646,76 @@ progress. The order is `healnow` rather than `heal` because a registered phrase 
 longer line starting with it — a plain `heal` would fire on `healme`, `healing off` and every other
 switch in the family, complaining about spawn ids nobody typed. Worth knowing before naming the
 commands for the next state: **no registered phrase may be a prefix of another**.
+
+## Buff state (`states/buffState.lua`)
+
+The same shape as the heal state — one ordered list of slots, walked in order — asking the
+opposite question. Healing asks *who is worst off*; buffing asks *what is missing*, and the honest
+answer to that is only partly readable.
+
+**A buff slot is an action plus who it is for.** `buff_scope` (anyone / myself / anyone else) and
+`buff_classes` (the classes worth spending it on, empty meaning all of them). That second dial is
+what buffing needs and healing did not: clarity is for casters and strength is for melee, and a
+bot that cannot say so either wastes half its casts or grows a setting per buff line, which is
+what the macros it replaces did.
+
+**Everything else about a slot is read off the spell**, in the same spirit as the heal state
+reading group heals off `NeedsTarget`. The spell's target type says where it can be aimed — at
+me (`self`), at a pet (`pet`, `pet2`), at the whole group in one cast (`group v1/v2`), or at one
+person at a time — so a pet buff is for pets whatever the slot says, and scope is only offered
+where there is somebody to choose between. The spell's duration says how long what it lands
+lasts, and a slot whose spell has *no* duration is not a buff at all: the picker offers the whole
+beneficial half of the spellbook, heals included, so a heal ending up in a buff list is a mistake
+worth catching rather than one worth casting on a loop. The page says so on the row.
+
+**Three questions decide every pairing**, cheapest first:
+
+1. **Is it on them, and how long has it got?** `Me.Buff[x].Duration` for ourselves,
+   `Me.Pet.BuffDuration[x]` for the pet, `Spawn[id].CachedBuff[x].Duration` for anybody else —
+   all three in milliseconds. Under `rebuff_secs`, it is worth recasting; over, it is not. That
+   one dial is the whole of the timing model, and the escape hatch for anything more specific is
+   the slot's own Lua expression, as it is everywhere else.
+2. **Would it land?** `Spell.Stacks` / `StacksPet` / `StacksSpawn[id]`, which answer more than
+   "do they already have it": a better buff in the same line, or a buff too powerful for them to
+   take, both come back as no without a cast being spent to find out. For ourselves,
+   `Me.BlockedBuff` as well — a blocked buff reports as cast and never appears.
+3. **How long is that answer good for?** This is the part buffing has and healing does not.
+   Another player's buffs are visible only once the client has cached them, which happens when
+   they are *targeted*, and an empty cache is indistinguishable from a clean one —
+   `StacksSpawn` says yes to a spawn it knows nothing about. So the fact that we cast something is
+   sometimes the only record there is, and each (slot, spawn) pairing carries a time before it is
+   worth asking about again: the buff's own duration less the rebuff window after one lands, a few
+   seconds after one fails. It is not a give-up timer, and it is dropped wholesale by
+   `/cbuff refresh` or the Check Everybody Now button — which is what to reach for after somebody
+   has been dispelled. A cached entry ages by itself (it reports what is left *now*), so a stale
+   cache decays into "they need it" rather than lying about it.
+
+The order things are decided in, every pass that looks:
+
+1. **Reasons to hold.** Not during a fight (`in_combat`, off by default — buffing mid-fight spends
+   the mana the healing wants and holds the target away from what is being fought; a fight starting
+   also calls off the buff in the air), and not while running. The second is a choice rather than a
+   necessity: the casting service would happily wait to stand still, but it would wait holding a
+   target and a gem, and a state at the bottom of the chain can afford to ask again later. Bards
+   are exempt, since they sing on the move and the casting service knows it.
+2. **The first slot somebody is missing.** List order is the whole priority — unlike healing there
+   is nobody to rank, since everyone standing here is equally unbuffed, so the ordering that
+   matters is the one the user already gave. A group buff is cast as soon as one person in scope is
+   short of it, and covers the rest.
+
+Who is watched: this character, the group (`buffgroup`), this character's pet (`buffpets`, on by
+default — unlike healing a pet, a buff is cast once and lasts the session), and whoever asked
+(`buffnow <id>`, `buffme`), who does not have to be in the group at all. That last is the buff-bot
+case the old hail macros existed for: an order is not one cast but "give them everything they are
+missing", so it stays open until a run of casts goes quiet rather than ending on the first one.
+
+**This state gets its frames because follow yields.** At `Priorities.buff` it sits below following,
+which reports busy only while it is actually walking — so buffing happens exactly when the group is
+standing still, without any of the `- 1` band juggling the two dps states needed.
+
+`/cbuff` reports what it is doing and how many buffs each person is missing (worked out on demand;
+it is a whole pass over the list per person). `/cbuff off` calls off the buff in progress,
+`/cbuff refresh` forgets what was worked out about who has what.
 
 ## Config model
 

@@ -4,9 +4,10 @@ Companion to [ARCHITECTURE.md](ARCHITECTURE.md). Origin: design review 2026-07-1
 Vision: one script that bots any class/race — states for every band in the priority table
 (commands, passive, cure, heal, pull, mez, tank, dps, loot, anchor, follow, buff).
 
-Current coverage: Follow/Anchor/ClickZone, Melee, Spell DPS and Heal states, over a shared
-engagement (`combat.lua`); all sixteen classes load as profiles over those four (the nine melee
-classes melee, eleven cast damage, the three priests and three hybrids heal, everyone follows). The casting service and all five action types exist (Phase 3),
+Current coverage: Follow/Anchor/ClickZone, Melee, Spell DPS, Heal and Buff states, over a shared
+engagement (`combat.lua`); all sixteen classes load as profiles over those five (the nine melee
+classes melee, eleven cast damage, the three priests and three hybrids heal, the twelve with a
+spellbook buff, everyone follows). The casting service and all five action types exist (Phase 3),
 so an action list can hold a spell, clicky or AA and `/ccast` can fire anything by hand.
 Everything else below.
 
@@ -208,7 +209,11 @@ AA, and what it can be set to is read off the client rather than declared. What 
 
 Still open in this phase:
 
-- Buff-stacking model (`Spell.Stacks`, existing-buff checks) shared by buff/heal logic.
+- ~~Buff-stacking model (`Spell.Stacks`, existing-buff checks)~~ — **done**, and it landed inside
+  the buff state rather than as a shared layer (see Phase 4), because heal has no use for it:
+  `Stacks`/`StacksPet`/`StacksSpawn` plus the three duration reads answer "would it land" and "has
+  it nearly gone", which is a buff question start to finish. If cures or HoT tracking end up
+  wanting the same reads, that is when it earns being lifted out.
 - Songs: a bard's action list works, but nothing twists.
 - A rotation cannot memorize. `CastAction:IsReady` requires the gem, deliberately (see
   ARCHITECTURE.md); an action slot for a spell that is not on the bar therefore idles. Revisit
@@ -270,21 +275,63 @@ dps band always implied. What landed:
 - ~~**auto_engage moved**~~ to the combat config, taken across automatically from the melee
   section for characters that already had it set.
 
+**Buff: done** (`states/buffState.lua`, `configs/buffStateConfig.lua`,
+`ui/states/buffStateMenu.lua`; the model is described in ARCHITECTURE.md, "Buff state"). What
+landed:
+
+- ~~**The state**~~ — one ordered list of buff slots, each an action plus who it is for (anyone /
+  myself / anyone else) and which classes are worth spending it on. Where the spell can be aimed
+  (me, a pet, the group in one cast, one person at a time) and how long it lasts are read off the
+  spell rather than configured, so a pet buff is for pets whatever the slot says and a heal that
+  ends up in the list is caught rather than cast on a loop.
+- ~~**Knowing what is missing**~~ — duration first (`Me.Buff`, `Me.Pet.BuffDuration`,
+  `Spawn.CachedBuff`, all in milliseconds) against one `rebuff_secs` dial, then stacking
+  (`Stacks` / `StacksPet` / `StacksSpawn`, plus `BlockedBuff` for ourselves), which also answers
+  "a better buff is already there" and "too powerful for them" without spending a cast.
+- ~~**How long an answer is good for**~~ — the part healing did not need. Another player's buffs
+  are only visible once the client has cached them (targeting does it) and an empty cache reads as
+  a clean one, so each (slot, spawn) pairing carries a retry window: the buff's duration less the
+  rebuff window after one lands, seconds after one fails. Dropped wholesale by `/cbuff refresh`.
+- ~~**Restraint**~~ — not during a fight (and a fight starting calls off the buff in the air), not
+  while running, bards excepted. Buffing gets its frames because follow yields the moment it has
+  caught up, which is what makes `Priorities.buff` work without the `- 1` juggling the dps split
+  needed.
+- ~~**Commands**~~ — `buffnow <id | off>` and `buffme` as orders (an order is "everything they are
+  missing", so it stays open until the casts go quiet); `buffing`, `buffgroup`, `buffpets` and
+  `buffcombat` as switches; `buffaction` over the slots; `/cbuff` for status, `/cbuff refresh` to
+  forget what was worked out.
+- ~~**The page**~~ — status, the switches, the rebuff window and a Check Everybody Now button, the
+  slot list with its scope and class picker, and what each slot amounts to (where it aims, how long
+  it lasts, or why it will never fire).
+- ~~**Class profiles**~~ — the twelve classes with a spellbook at `Priorities.buff`, with the
+  matching `unimplemented` lines removed.
+- Verified off-client (85 checks: a buffed group left alone, list order deciding, scope and class
+  filtering both ways, group/pet/self aims and what each refuses, the rebuff window at both ends,
+  cached durations for other people, everything the stacking checks refuse, the retry window after
+  a landed and a failed cast and `Recheck` clearing it, the combat and moving holds with the bard
+  exemption, calling off for a fight and for a death, orders for somebody outside the group and
+  their expiry, and the config accessors) under LuaJIT and Lua 5.1. **In-game smoke test still
+  pending** — see Verify.
+
+Buff's own leftovers: other people's pets, buffs cast *because* of a moment rather than to keep
+them up (paragon, a group heal-over-time), twisting for bards, and any awareness of what the other
+buffers in the group have already cast.
+
 Still to come, per priority band: **Passive** (global pause; also a /cpause slash + comm command),
 **Cure** (detrimental scan → cure actions), **Pull** (target selection, pathing, leash,
 camp radius), **Mez** (add control, in-combat priority above dps), **Tank** (taunt/hate
 action lists already modeled in MeleeStateConfig; needs aggro-loss detection for "as
 needed" usage), **assist rules** (both dps states fight what `Combat` says; nothing yet says
 "fight what the main assist is fighting"),
-**Loot** (corpse scan, loot rules per item, master-loot coordination),
-**Buff** (self/group maintenance with stacking + rebuff timers).
+**Loot** (corpse scan, loot rules per item, master-loot coordination).
 Each new state = state module + config section + UI panel + comm commands, which is why
 the Phase 1 module contract comes first. Landing one is also a sweep over `classes/*.lua`:
 the per-class view of this list is each profile's `unimplemented` lines, and a state that
 exists moves from that list into the profile's `states` at its band.
 
 Heal's own leftovers, for when the bands around it exist: heal-over-time management (a HoT is
-wasted on someone about to be topped off, which needs buff tracking), rezzing, curing at the cure
+wasted on someone about to be topped off; the duration reads the buff state uses are the half of
+that which now exists), rezzing, curing at the cure
 band, and any awareness of what *other* healers are doing — two clerics on one tank both cast, and
 only the group coordination in Phase 5 can fix that.
 
@@ -336,7 +383,10 @@ backstab positioning; nothing asks for it).
 1. **MQ event multi-match**: does a line matching two registered events (command tell +
    tellToMe catchall) fire both callbacks? The `reregister`/"add last" hack implies ordering
    matters; confirm actual semantics and either dedupe in a single dispatcher or filter
-   command phrases out of tellToMe.
+   command phrases out of tellToMe. **Now load-bearing**: the timestamp handling below assumes
+   two matching patterns *would* fire twice, and is built to make sure no line can ever match
+   two. If it turns out MQ fires only the first, that assumption is merely conservative; if it
+   fires both, this is the thing keeping commands from running twice.
 2. `Switch("nearest")` behavior when no switch in zone (click-zone chain).
 3. `/stick loose` + `MaxRangeTo` interaction on emu client vs live-era plugin builds
    (relevant only until the Phase 2 stick replacement lands).
@@ -401,6 +451,31 @@ backstab positioning; nothing asks for it).
    `start below %` actually holding fire until the tank has aggro. Also confirm the auto_engage
    migration: a character with an existing config should keep whatever it had set, and its
    `MeleeState` section should come back without the key.
-14. In-game smoke of the 2026-07-18 Phase 0 fixes: fresh-config startup on a taunt-less
+14. **Buffing, in game — and cached buffs above all.** The whole "what is missing" model rests on
+   reads a simulated client cannot answer, and the load-bearing one is
+   `Spawn[id].CachedBuff[name]`: does it return anything at all on this emu client, and does a
+   group member's cache populate without our targeting them (the group window may or may not do
+   it)? If it never populates, `StacksSpawn` says yes to everybody — MQ's own implementation
+   returns "it stacks" for a spawn it has no buffs for — and the only thing stopping a rebuff loop
+   is the retry window, which means every group buff gets recast once per duration whether it
+   needed it or not. Worth watching for over a couple of hours before deciding whether the state
+   should target people to refresh their cache. Then, in rough order: `Me.Buff[x].Duration` and
+   `Me.Pet.BuffDuration[x]` really are milliseconds (both are timestamps in the source, but
+   `CachedBuff.Duration` is documented as ticks and is not); `Spell.MyDuration.TotalSeconds` reads
+   through `tonumber`; `Stacks` is false for a buff we already hold at full duration and true for
+   one that has faded; `Me.BlockedBuff` on a client that may have no blocked-buff window at all;
+   and a group v2 buff cast with nothing targeted. After that the behaviour: a cleric buffing a
+   fresh group from nothing (does it work down the list, does it stop, does `/cbuff` read right),
+   `buffme` from another window, `buffnow ${Target.ID}` on a stranger, and that a fight starting
+   really does call off the buff in the air.
+15. **Chat timestamps** (found in game 2026-07-26, fixed; see ARCHITECTURE.md "Chat timestamps").
+   A client that stamps every chat line broke the ACL on every command and killed the `bc`
+   channel outright. What to confirm now: an owner's command over each active channel, a
+   `bc` command specifically (it needed the second pattern), that no command runs *twice* on a
+   stamped line (a toggle is the giveaway — two flips look like nothing happening), and a group
+   invite from an owner being accepted rather than `/disband`ed. Also worth pasting one raw
+   stamped line of each channel into `scratchpad/test_chatpatterns.lua`, since the harness
+   currently assumes the `[...]` prefix shape rather than a captured sample.
+16. In-game smoke of the 2026-07-18 Phase 0 fixes: fresh-config startup on a taunt-less
    class, follow/stuck detection, add-new-action UI flow, `/activechannels <cmd> reset`,
    and the Cabby Alerts window (force an error to see alert + log + pause/resume).

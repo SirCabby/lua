@@ -24,6 +24,15 @@ local Classes = {
         SHM = "cabby.classes.shaman",
         WAR = "cabby.classes.warrior",
         WIZ = "cabby.classes.wizard"
+    },
+    ---@type string[] every EQ short name, grouped the way somebody picking classes thinks about
+    ---them (plate, melee, hybrid, priest, caster). `modules` is a map and has no order to offer.
+    shortNames = {
+        "WAR", "PAL", "SHD",
+        "MNK", "ROG", "BER",
+        "RNG", "BST", "BRD",
+        "CLR", "DRU", "SHM",
+        "ENC", "MAG", "NEC", "WIZ"
     }
 }
 

@@ -1,6 +1,7 @@
 local BaseClass = require("cabby.classes.baseClass")
 local Priorities = require("cabby.classes.priorities")
 
+local BuffState = require("cabby.states.buffState")
 local HealState = require("cabby.states.healState")
 local SpellDpsState = require("cabby.states.spellDpsState")
 
@@ -17,12 +18,12 @@ local Shaman = BaseClass.new({
     shortName = "SHM",
     states = {
         { state = SpellDpsState, priority = Priorities.dps - 1 },
-        { state = HealState, priority = Priorities.heal + 5 }
+        { state = HealState, priority = Priorities.heal + 5 },
+        { state = BuffState, priority = Priorities.buff }
     },
     unimplemented = {
         "slow, ahead of the damage rotations",
         "curing poison and disease",
-        "buff maintenance (the str/sta lines, haste) with stacking checks",
         "canni: trading health for mana when there is a moment for it"
     }
 })

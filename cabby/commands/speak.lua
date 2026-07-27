@@ -64,6 +64,44 @@ setmetatable(Speak, {
     end
 })
 
+---What a client-side chat timestamp looks like in front of a line: `[23:39:30] ` or
+---`[Sun Jul 26 23:39:30 2026] `. Some clients (RoF2 client-plus among them) put one on every
+---line, and MQ feeds Blech the line as rendered, so every pattern here has to cope with it being
+---there or not.
+local timestampPrefix = "[#*#] "
+
+---Take the speaker's name back out of a capture that may have swallowed a timestamp.
+---
+---Two shapes arrive, depending on where the pattern's first wildcard sits. A pattern that starts
+---with `#1#` captures the whole prefix (`[Sun Jul 26 23:39:30 2026] Haedes`), and `bct`'s
+---`[#1#(msg)]` captures from inside the timestamp's own bracket (`23:39:30] [Haedes`). Rather
+---than unpick either, take the name off the end: EQ names are letters, chat carries the first
+---name alone, and nothing else in these captures ends in a run of letters.
+---@param name string|nil as captured from the chat line
+---@return string|nil speaker
+function Speak.CleanSpeaker(name)
+    if name == nil then return nil end
+
+    local cleaned = tostring(name):match("(%a+)%s*$")
+    if cleaned == nil then return name end
+    return cleaned
+end
+
+---Whether a pattern needs a second, timestamped copy of itself registered alongside it.
+---
+---Only when the plain pattern *cannot* match a timestamped line, which is narrower than it
+---looks. A pattern starting with `#1#` matches anything, and one starting with `[` is satisfied
+---by the timestamp's own bracket -- both still fire, and `CleanSpeaker` puts the capture right.
+---Registering a variant for those would be actively harmful: the line would match both patterns
+---and every command would run twice, which on a toggle is two flips and no visible effect.
+---@param pattern string
+---@return boolean needsVariant
+local function NeedsTimestampVariant(pattern)
+    if pattern:sub(1, 3) == "#1#" then return false end
+    if pattern:sub(1, 1) == "[" then return false end
+    return true
+end
+
 --- to leverage tell-to channel types, submit string as "<channeltype> <to>"
 ---@param channels table channel types
 ---@return Speak|nil
@@ -182,7 +220,11 @@ function Speak.GetPhrasePatterns(channels)
         elseif not Speak.IsLocalType(channel) then
             -- a local channel has no chat line to listen for; registering its pattern as an
             -- event would only add a matcher that can never fire
-            table.insert(phrasePatterns, Speak.channelTypes[channel:lower()].phrasePattern)
+            local pattern = Speak.channelTypes[channel:lower()].phrasePattern
+            table.insert(phrasePatterns, pattern)
+            if NeedsTimestampVariant(pattern) then
+                table.insert(phrasePatterns, timestampPrefix .. pattern)
+            end
         end
     end
 

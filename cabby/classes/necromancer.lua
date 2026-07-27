@@ -1,6 +1,7 @@
 local BaseClass = require("cabby.classes.baseClass")
 local Priorities = require("cabby.classes.priorities")
 
+local BuffState = require("cabby.states.buffState")
 local SpellDpsState = require("cabby.states.spellDpsState")
 
 ---A necromancer is dots, a pet, and never dying. The rotation casts dots happily enough, but
@@ -11,7 +12,8 @@ local Necromancer = BaseClass.new({
     key = "Necromancer",
     shortName = "NEC",
     states = {
-        { state = SpellDpsState, priority = Priorities.dps - 1 }
+        { state = SpellDpsState, priority = Priorities.dps - 1 },
+        { state = BuffState, priority = Priorities.buff }
     },
     unimplemented = {
         "the pet: summon it, keep it up, send it in and call it off",

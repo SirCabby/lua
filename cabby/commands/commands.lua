@@ -59,6 +59,23 @@ local function protect(sourceKey, handler)
     end
 end
 
+---Wraps a handler that was reached from a chat line, which is every comm command and every raw
+---event -- but not a slash command, which has no speaker.
+---
+---These all arrive as `(line, speaker, ...)`: every pattern cabby registers captures the speaker
+---first, and the first thing every handler does with it is an ACL check. A client that stamps a
+---timestamp on each chat line gets that timestamp captured along with the name, so the check
+---fails against every owner and the character quietly ignores its own group. Cleaning it here
+---rather than in each handler is the difference between one rule and thirty places to forget it.
+---@param sourceKey string
+---@param handler function
+---@return function
+local function protectChatHandler(sourceKey, handler)
+    return protect(sourceKey, function(line, speaker, ...)
+        return handler(line, Speak.CleanSpeaker(speaker), ...)
+    end)
+end
+
 ---@param config Config
 ---@param owners Owners
 ---@param speak Speak
@@ -329,7 +346,7 @@ function Commands.RegisterCommEvent(command)
     if not TableUtils.ArrayContains(TableUtils.GetKeys(Commands._.registrations.commands.registeredCommands), command.command) then
         Commands._.registrations.commands.registeredCommands[command.command] = command
         Commands._.registrations.commands.byPhrase[StringUtils.Split(command.command)[1]:lower()] = command
-        command.wrappedEventFunction = protect("command:" .. StringUtils.Split(command.command)[1], command.eventFunction)
+        command.wrappedEventFunction = protectChatHandler("command:" .. StringUtils.Split(command.command)[1], command.eventFunction)
         command.registeredEvents = {}
         UpdateCommEvent(command)
     else
@@ -408,7 +425,7 @@ end
 function Commands.RegisterEvent(event)
     if not TableUtils.ArrayContains(TableUtils.GetKeys(Commands._.registrations.events.registeredEvents), event.id) then
         Commands._.registrations.events.registeredEvents[event.id] = event
-        event.wrappedEventFunction = protect("event:" .. event.id, event.eventFunction)
+        event.wrappedEventFunction = protectChatHandler("event:" .. event.id, event.eventFunction)
         mq.event(event.id:lower(), event.command, event.wrappedEventFunction)
     else
         print("Cannot re-register same event Id: ["..event.id:lower().."]")

@@ -1,6 +1,7 @@
 local BaseClass = require("cabby.classes.baseClass")
 local Priorities = require("cabby.classes.priorities")
 
+local BuffState = require("cabby.states.buffState")
 local SpellDpsState = require("cabby.states.spellDpsState")
 
 ---A wizard nukes, and the hard part is not nuking so hard it pulls the mob off the tank -- which
@@ -11,7 +12,8 @@ local Wizard = BaseClass.new({
     key = "Wizard",
     shortName = "WIZ",
     states = {
-        { state = SpellDpsState, priority = Priorities.dps - 1 }
+        { state = SpellDpsState, priority = Priorities.dps - 1 },
+        { state = BuffState, priority = Priorities.buff }
     },
     unimplemented = {
         "evacuating a group that is losing",

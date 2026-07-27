@@ -202,9 +202,28 @@ Menu.RegisterConfig = function(config)
     table.insert(Menu._.registrations.configs, config)
 end
 
+---Register a state, keeping the list in priority order -- strongest first, the order the state
+---machine walks them in, which is the order both the menu and `/state` list them in.
+---
+---States arrive in that order today only because `BaseClass` initializes the chain in priority
+---order; sorting here says so rather than leaving the display to depend on it. A state with no
+---band (one registered outside a class profile) sorts last.
 ---@param state BaseState
 Menu.RegisterState = function(state)
-    table.insert(Menu._.registrations.states, state)
+    local states = Menu._.registrations.states
+    local priority = state.priority or math.huge
+
+    -- insert before the first state weaker than this one, so states sharing a band keep the
+    -- order they registered in
+    local at = #states + 1
+    for i, registered in ipairs(states) do
+        if (registered.priority or math.huge) > priority then
+            at = i
+            break
+        end
+    end
+
+    table.insert(states, at, state)
 end
 
 return Menu

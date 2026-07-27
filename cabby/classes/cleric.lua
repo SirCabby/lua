@@ -1,6 +1,7 @@
 local BaseClass = require("cabby.classes.baseClass")
 local Priorities = require("cabby.classes.priorities")
 
+local BuffState = require("cabby.states.buffState")
 local HealState = require("cabby.states.healState")
 local SpellDpsState = require("cabby.states.spellDpsState")
 
@@ -15,11 +16,11 @@ local Cleric = BaseClass.new({
     shortName = "CLR",
     states = {
         { state = SpellDpsState, priority = Priorities.dps - 1 },
-        { state = HealState, priority = Priorities.heal }
+        { state = HealState, priority = Priorities.heal },
+        { state = BuffState, priority = Priorities.buff }
     },
     unimplemented = {
         "cure at the cure band",
-        "buff maintenance (symbol, aegis) with stacking checks and rebuff timers",
         "rez, in and out of combat",
         "the hammer pet, and knowing undead from everything else when picking a nuke"
     }

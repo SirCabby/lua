@@ -1,6 +1,7 @@
 local BaseClass = require("cabby.classes.baseClass")
 local Priorities = require("cabby.classes.priorities")
 
+local BuffState = require("cabby.states.buffState")
 local HealState = require("cabby.states.healState")
 local MeleeState = require("cabby.states.meleeState")
 local SpellDpsState = require("cabby.states.spellDpsState")
@@ -15,13 +16,13 @@ local Beastlord = BaseClass.new({
     states = {
         { state = HealState, priority = Priorities.heal + 5 },
         { state = SpellDpsState, priority = Priorities.dps - 1 },
-        { state = MeleeState, priority = Priorities.dps }
+        { state = MeleeState, priority = Priorities.dps },
+        { state = BuffState, priority = Priorities.buff }
     },
     unimplemented = {
-        "the pet: summon it, keep it alive and buffed, send it in and call it off with the attack orders",
+        "the pet: summon it, and send it in and call it off with the attack orders",
         "slow, as the group's second slower",
-        "the group buffs (haste, focus)",
-        "paragon and the mana line, once buffs exist"
+        "paragon: a group mana buff cast because somebody is low, which the buff state does not judge"
     }
 })
 
