@@ -40,6 +40,9 @@ local Priorities = {
     follow = 109,    -- stay with someone
 
     buff = 119,
+
+    -- what a character does with the frames nothing else wants. RestState is here: sitting to get
+    -- the pools back is worth doing only when everything above has passed on the frame
     misc = 129
 }
 

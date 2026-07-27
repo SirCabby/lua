@@ -61,7 +61,7 @@ This is a **priority-chain cooperative scheduler**: state order = priority; `Go(
 | 29 | Cure | 89 | Looting |
 | 39 | Heal | 99 | Anchor |
 | 49 | Pulling | 109 | Following |
-| 59 | Mez (in combat) | 119/129 | Buff / Misc |
+| 59 | Mez (in combat) | 119/129 | Buff / Rest (misc) |
 
 A bigger number is weaker. The gaps of ten are room for "the same job, but not as strongly":
 `Priorities.heal + 5` is a hybrid healing below the class that heals for a living. Classes
@@ -131,7 +131,8 @@ cabby/
   commandQueue.lua    service: runs command lines pushed from ImGui callbacks, a frame later
   character.lua       capability snapshot: which skills exist (primary/secondary/melee lists)
   status.lua          shared predicates (IsFacingTarget)
-  states/             baseState, followState, meleeState, spellDpsState, healState, buffState
+  states/             baseState, followState, meleeState, spellDpsState, healState, buffState,
+                      restState
   classes/            priorities (the bands), baseClass (assembly), classes (the registry),
                       and one profile per EQ class
   commands/           the chat-command bus (see below), incl. the toggle/action command factories
@@ -163,10 +164,11 @@ local Warrior = BaseClass.new({
 `BaseClass` merges the profile's states with the **common** ones, sorts by priority, and then
 inits and registers each in that order. Rules it enforces:
 
-- **Every class follows.** FollowState (which is also anchor and click-to-zone — one state,
-  one `Go()`) is the one job that has nothing to do with what the character is, so no profile
-  has to remember to ask for it. A profile naming the same state wins over the common entry,
-  priority and all, which is how a class moves follow somewhere else in its chain.
+- **Every class follows, and every class rests.** FollowState (which is also anchor and
+  click-to-zone — one state, one `Go()`) and RestState are the two jobs that have nothing to do
+  with what the character is, so no profile has to remember to ask for them. A profile naming the
+  same state wins over the common entry, priority and all, which is how a class moves follow
+  somewhere else in its chain.
 - **Ties keep declaration order.** `table.sort` is not stable, so entries carry their
   declaration index as the tie-break — two states sharing a band stay in the order written.
 - **A malformed profile fails loudly** at construction (no priority, an entry that is not a
@@ -269,7 +271,9 @@ registers `healing`, `healgroup` and `healpets`; BuffState registers `buffing`, 
 `buffpets` and `buffcombat`. Switches that have to call off work in progress
 rather than only stopping new work go through the *state* rather than the config, so the
 checkboxes get the same behavior: `melee off` resets the state, `stick off` releases the stick
-Movement is still holding, and `healing off` interrupts the heal in the air.
+Movement is still holding, `healing off` interrupts the heal in the air, and `resting off` stands
+the character up (through the command queue, since a checkbox calls the same setter).
+RestState registers `resting` and `restcombat`.
 
 **Action lists are commands too** (`commands/actionCommand.lua`). Any state with configured action
 slots gets `<phrase> <on | off | toggle> <part of an action's name>` from the same factory —
@@ -716,6 +720,59 @@ standing still, without any of the `- 1` band juggling the two dps states needed
 `/cbuff` reports what it is doing and how many buffs each person is missing (worked out on demand;
 it is a whole pass over the list per person). `/cbuff off` calls off the buff in progress,
 `/cbuff refresh` forgets what was worked out about who has what.
+
+## Rest state (`states/restState.lua`)
+
+Sitting to get health, mana and stamina back. The job is one sentence — sit while something is
+short, stand once nothing is — and what makes it work is *where* it sits rather than what it does.
+
+**It is the weakest state in the chain** (`Priorities.misc`, registered for every class by
+`BaseClass` alongside follow). That is the whole design: it runs on exactly the frames nobody else
+wants, which is what "at rest" means in practice — parked on an anchor, caught up behind whoever we
+follow, or standing around after a fight. Everything above it gets first refusal every pass, and
+the services take the character back without being asked: movement stands it up out of a sit when a
+task starts (the pause gate), and the casting service stands it up before a cast. So the state
+never has to argue for the character, and nothing above it has to know it exists.
+
+**Nothing is remembered about having sat down.** "Should I be sitting right now" is asked from the
+world every pass and read both directions: sitting when the answer turns yes, standing when it
+turns no. That is what makes it safe with no held mode to go stale, and it is also why it stands up
+out of a sit somebody else chose — there is no such thing here as *whose* sit it is, only whether
+sitting is right.
+
+Which pools are watched is read, not configured: health always, mana and stamina where the
+character has them (`MaxMana` of zero is what says there is no mana bar — read the other way round,
+a warrior would sit forever waiting on mana at 0%). Two thresholds decide the rest: `sit_below_pct`
+and `stand_at_pct`, both 100 by default, which is "sit for anything short of full, get up when
+nothing is". The pair is kept in order by the setters, because standing at less than we sit at is
+the one combination that oscillates — sit, read as rested on the next pass, stand, repeat.
+
+What holds it back, in the order it reports:
+
+1. **Being engaged.** A character in a fight has a fight to be in, whatever the settings say.
+2. **A cast in the air.** Usually moot — the casting priority floor has been starving this state
+   since the cast began — but a hand-cast from the player is not.
+3. **A fight it has not joined**, and this is the case worth naming. With `restcombat` on it *will*
+   sit through one, because a caster that has not engaged would rather fill its bar than start
+   something; but only while melee is off, since a character that walks into melee is one about to
+   be on its feet anyway, and one sitting in reach of the mob takes full hits while it gets up.
+   "Melee is off" is read out of the melee state's config section (`Status.IsMeleeEnabled`) rather
+   than off the module: a class that does not melee never loads `states/meleeState.lua`, and no
+   section is the same answer as off.
+
+Two smaller rules: a posture the state did not choose is left alone (feigning, mounted, ducking,
+hovering dead), so it only ever sits a standing character and stands a sitting one; and sitting
+waits on a short settle window after the character stops moving, because a group that pauses
+mid-run is not a rest and sitting for it buys a stand-up on the next step.
+
+`resting` and `restcombat` are the switches, `/crest` reports what it is doing and what each pool
+reads. Switching resting off stands the character up if it was resting — pushed through
+`CommandQueue`, since the menu checkbox calls the same setter and a game command from inside a
+render callback is the crash hazard the movement service is built around.
+
+The rest of the misc band is still empty: the out-of-combat regen discs, auto-food, and illusion and
+mount management from the MQ2Melee lines at the bottom of `meleeState.lua` are the obvious
+neighbours, and each is its own job rather than something to bolt onto this one.
 
 ## Config model
 

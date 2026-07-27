@@ -2,6 +2,7 @@ local Debug = require("utils.Debug.Debug")
 
 local FollowState = require("cabby.states.followState")
 local Priorities = require("cabby.classes.priorities")
+local RestState = require("cabby.states.restState")
 
 ---One entry in a class profile: a state singleton and where it sits in the priority chain.
 ---@class ClassStateEntry
@@ -25,17 +26,22 @@ local BaseClass = { key = "BaseClass" }
 
 ---The states every class registers, whatever it is.
 ---
----Following is the one job that has nothing to do with what the character can do -- a wizard
----follows the same way a warrior does -- so no class should have to remember to ask for it.
----FollowState is also the anchor and click-to-zone state; all three ride at the follow band
----because they are one state and one `Go()`.
+---Two jobs have nothing to do with what the character can do, so no class should have to remember
+---to ask for them. Following is the first -- a wizard follows the same way a warrior does; and
+---FollowState is also the anchor and click-to-zone state, all three at the follow band because
+---they are one state and one `Go()`. Resting is the second: sitting to get health, mana and
+---stamina back is worth doing for every class that has any of them, and the state reads which of
+---those this character actually has rather than being told.
 ---
 ---A class that wants one of these somewhere else in its chain declares it itself: a profile
 ---entry naming the same state wins over the common one, priority and all.
 ---@return ClassStateEntry[]
 local function CommonStates()
     return {
-        { state = FollowState, priority = Priorities.follow }
+        { state = FollowState, priority = Priorities.follow },
+        -- last of all, deliberately: resting is what a character does with the frames nothing
+        -- else wants, and everything above it gets first refusal every pass
+        { state = RestState, priority = Priorities.misc }
     }
 end
 

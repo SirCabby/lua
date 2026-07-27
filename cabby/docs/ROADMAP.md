@@ -317,6 +317,35 @@ Buff's own leftovers: other people's pets, buffs cast *because* of a moment rath
 them up (paragon, a group heal-over-time), twisting for bards, and any awareness of what the other
 buffers in the group have already cast.
 
+**Rest: done** (`states/restState.lua`, `configs/restStateConfig.lua`,
+`ui/states/restStateMenu.lua`; the model is described in ARCHITECTURE.md, "Rest state"). The first
+state at the misc band, and the first one whose whole design is *where* it sits rather than what it
+does. What landed:
+
+- ~~**The state**~~ — sit while health, mana or stamina is below the sit point, stand once all of
+  them are at or above the stand point. Which pools this character has is read (`MaxMana` of zero
+  is what says there is no mana bar) rather than configured, and nothing is remembered about having
+  sat down: "should I be sitting right now" is asked from the world every pass and answers both
+  directions, which is also why it stands up out of a sit somebody else chose.
+- ~~**Restraint**~~ — never while engaged, never with a cast in the air, and during a fight this
+  character has not joined only while `restcombat` is on *and* melee is off (a character that walks
+  into melee is one that is about to be on its feet anyway). A settle window keeps a group's
+  stop-and-go from turning into a sit per step.
+- ~~**A common state**~~ — registered for every class by `BaseClass`, like follow, at
+  `Priorities.misc`. It gets its frames because everything above it yields: parked on an anchor,
+  caught up behind whoever we follow, or standing around after a fight.
+- ~~**Commands**~~ — `resting` and `restcombat` as switches, `/crest` for status. Switching resting
+  off stands the character up through the command queue rather than from the caller's frame.
+- Verified off-client (68 checks: sitting for each pool and not for a mana bar that does not exist,
+  the two thresholds and the hysteresis between them, standing back up for full pools and for each
+  reason to be up, every posture it refuses to touch, the settle window, the command throttle, the
+  config guards on the threshold pair, and the switch standing the character up) under LuaJIT.
+  **In-game smoke test still pending** — see Verify.
+
+Rest's own leftovers are the rest of the misc band, and they are the MQ2Melee chores that have
+nowhere else to live: out-of-combat regen discs (Breather and friends), auto-food and drink,
+dropping illusions and mounts, and the AA-on/off management at the bottom of `meleeState.lua`.
+
 Still to come, per priority band: **Passive** (global pause; also a /cpause slash + comm command),
 **Cure** (detrimental scan → cure actions), **Pull** (target selection, pathing, leash,
 camp radius), **Mez** (add control, in-combat priority above dps), **Tank** (taunt/hate
@@ -479,3 +508,13 @@ backstab positioning; nothing asks for it).
 16. In-game smoke of the 2026-07-18 Phase 0 fixes: fresh-config startup on a taunt-less
    class, follow/stuck detection, add-new-action UI flow, `/activechannels <cmd> reset`,
    and the Cabby Alerts window (force an error to see alert + log + pause/resume).
+17. **Resting, in game.** The client reads it leans on, first: does `Me.State` return `SIT` and
+   `STAND` on this emu client (and `FEIGN` for a feigning monk), does `/sit on` sit rather than
+   toggle, and does `Me.CombatState` say `COMBAT` for a character standing next to a fight it has
+   not joined — that last one decides whether `restcombat` means anything at all. Then the
+   behaviour: med a caster to full on an anchor and watch it stand up; start following and confirm
+   the movement service stands it up on its own rather than the two fighting over the posture; let
+   a heal go out mid-rest (the priority floor should starve this state, and the cast's own
+   stand-up should not read as a reason to sit again the moment it lands); and watch a stop-and-go
+   run to see whether two seconds of settling is the right length. On a melee: `melee off` should
+   let it med through a fight it is not in, and `melee on` should stop it.
