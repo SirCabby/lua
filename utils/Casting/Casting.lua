@@ -31,8 +31,11 @@ local CastTask = require("utils.Casting.CastTask")
 ---    from an ImGui button or a chat event handler without running EQ commands mid-frame, which
 ---    is a crash-to-desktop hazard.
 ---
----What it deliberately does not do: retry. A fizzle or a resist is reported to the caller, and
----the caller decides whether casting again is still the right thing to do.
+---What it deliberately does not do: retry a cast that was *spent*. A fizzle or a resist is
+---reported to the caller, and the caller decides whether casting again is still the right thing
+---to do. Waiting is not the same as retrying, and preparation -- targeting, standing still,
+---memorizing -- never gives up: each of those is a wait for something that will change, and the
+---only thing that ends one is the caller no longer wanting the cast.
 ---@class Casting
 local Casting = {
     author = "judged",
@@ -47,11 +50,12 @@ local Casting = {
         memGem = 0,
         ---how long "stopped moving" has to hold before a cast is safe to start
         settleMs = 250,
-        ---budget for everything before the cast is fired: targeting, standing still, memorizing
-        prepareTimeoutMs = 5000,
-        ---how long to wait on a gem that is nearly off cooldown before refusing the cast
+        ---how long to wait on a gem that is nearly off cooldown before refusing the cast. Not a
+        ---give-up like the ones that used to be here: "on cooldown" is a real answer, and this is
+        ---only the grace that absorbs the sub-second recovery between two casts
         readyWaitMs = 1500,
-        memorizeTimeoutMs = 15000,
+        ---how long before an unanswered /memspell is issued again
+        memorizeRetryMs = 15000,
         ---how long after a completed cast a "resisted"/"unaffected" line still belongs to it
         lateWindowMs = 2000
     },
@@ -240,9 +244,8 @@ function Casting.Cast(subject, options)
         onDone = options.onDone,
         gem = resolveGem(options.gem),
         settleMs = Casting.settings.settleMs,
-        prepareTimeoutMs = Casting.settings.prepareTimeoutMs,
         readyWaitMs = Casting.settings.readyWaitMs,
-        memorizeTimeoutMs = Casting.settings.memorizeTimeoutMs,
+        memorizeRetryMs = Casting.settings.memorizeRetryMs,
         mayStopMovement = Casting._.mayStopMovement
     })
 
@@ -411,6 +414,37 @@ end
 ---@return boolean isCasting true when the cast in progress belongs to this owner
 function Casting.IsCastingFor(owner)
     return Casting.GetOwner() == owner
+end
+
+---Could a behavior at this priority take the cast in progress off whoever has it?
+---
+---The answer callers need before deciding they have nothing to do: "something is casting" is not
+---a reason for a *stronger* behavior to stand down, only a weaker one. Same comparison `Cast`
+---makes, exposed so a caller can ask before it asks.
+---@param priority number|nil
+---@return boolean canPreempt false when nothing is casting, or when this could not take it
+function Casting.CanPreempt(priority)
+    local incumbent = Casting._.task or Casting._.pending
+    if incumbent == nil then return false end
+    return comparable(priority) < comparable(incumbent.priority)
+end
+
+---Whether something must not move the character right now.
+---
+---The priority floor keeps *weaker* behaviors from running at all, but the behavior that is
+---level with the cast — a melee rotation firing a spell out of its own action list — keeps its
+---turn and would happily re-stick to the target it is fighting, which is the one thing that
+---loses the cast it just asked for. So anything that moves the character asks this first.
+---
+---A cast weaker than the asker does not hold it back: a buff that cannot be cast while the
+---group is running is a buff that fails and says so, not a reason to stop following.
+---@param priority? number the asker's priority; omit to ask about any cast at all
+---@return boolean isHoldingStill
+function Casting.IsHoldingStill(priority)
+    local task = Casting._.task
+    if task == nil or not task:RequiresStillness() then return false end
+    if priority == nil then return true end
+    return comparable(task.priority) <= comparable(priority)
 end
 
 ---The priority nothing weaker may run at while a cast is in progress.

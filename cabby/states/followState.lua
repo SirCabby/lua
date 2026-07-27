@@ -4,7 +4,7 @@ local Debug = require("utils.Debug.Debug")
 local Geometry = require("utils.Movement.Geometry")
 local Movement = require("utils.Movement.Movement")
 local StringUtils = require("utils.StringUtils.StringUtils")
-local TableUtils = require("utils.TableUtils.TableUtils")
+local Time = require("utils.Time.Time")
 local Timer = require("utils.Time.Timer")
 
 local ChelpDocs = require("cabby.commands.chelpDocs")
@@ -14,16 +14,15 @@ local Menu = require("cabby.ui.menu")
 local Speak = require("cabby.commands.speak")
 local UserInput = require("cabby.utils.userinput")
 
-local function passive()
-    return false
-end
-
 -- how close the movement service holds us to the follow target
 local followDistance = 10
 -- and how close we have to be before we stop hogging the frame from lower priority states
 local keepCloseDistance = 12
 -- how close to an anchor still counts as being parked on it
 local anchorRadius = 15
+-- how long to leave a failed attempt at clicking through a zone line alone. Without it, a door
+-- that will not take us anywhere is clicked again on the pass after each failure, forever.
+local clickZoneRetryMs = 15000
 
 ---@class FollowState : BaseState
 local FollowState = {
@@ -38,9 +37,7 @@ local FollowState = {
     },
     _ = {
         isInit = false,
-        currentAction = passive,
-        currentActionTimer = nil,
-        lastLoc = { x = 0, y = 0, z = 0, zoneId = 0 },
+        -- who we were told to follow
         followTarget = "",
         -- 0 while we are holding the target by name (see FollowTargetSpawn), the spawn id we
         -- are holding them by otherwise
@@ -48,26 +45,25 @@ local FollowState = {
         -- which command put us on this target, so that what the follow says about it later
         -- (waiting, stuck) is said wherever that command is configured to speak
         followCommand = "",
+        -- the spawn the movement service is following, re-resolved whenever it is not following
         followSpawnId = 0,
-        checkingStuck = false,
-        checkingRetry = false,
-        anchor = {
-            x = 0,
-            y = 0
-        },
-        followActions = {
-            findFollowTarget = passive,
-            keepClose = passive
-        },
-        clickZoneActions = {
-            findingSwitch = passive,
-            clickingSwitch = passive,
-            waitingToZone = passive
-        },
-        anchorActions = {
-            stayingAtAnchor = passive
-        }
+        -- where we were told to stand
+        anchor = { set = false, x = 0, y = 0 },
+        -- Progress through clicking a zone line: the door has been clicked and the zone is
+        -- coming, which is not something a fresh look at the world can reconstruct. The one
+        -- piece of held state here that is not an order.
+        clickZone = { step = nil, timer = nil, lastFailedMs = 0 },
+        -- stuck detection, which is a measurement rather than a decision
+        stuck = { checking = false, timer = nil, lastLoc = { x = 0, y = 0, z = 0, zoneId = 0 } },
+        waitingReported = false
     }
+}
+
+---Steps of the click-zone procedure, in order.
+local clickZoneSteps = {
+    findingSwitch = "findingSwitch",
+    clickingSwitch = "clickingSwitch",
+    waitingToZone = "waitingToZone"
 }
 
 ---@param str string
@@ -76,28 +72,46 @@ local function DebugLog(str)
 end
 
 local function UpdateLastLoc()
-    FollowState._.lastLoc.x = mq.TLO.Me.X()
-    FollowState._.lastLoc.y = mq.TLO.Me.Y()
-    FollowState._.lastLoc.z = mq.TLO.Me.Z()
-    FollowState._.lastLoc.zoneId = mq.TLO.Zone.ID()
+    local lastLoc = FollowState._.stuck.lastLoc
+    lastLoc.x = mq.TLO.Me.X()
+    lastLoc.y = mq.TLO.Me.Y()
+    lastLoc.z = mq.TLO.Me.Z()
+    lastLoc.zoneId = mq.TLO.Zone.ID()
 end
 
+---Stop following, and forget everything measured about doing it.
+local function ClearFollowOrder()
+    FollowState._.followTarget = ""
+    FollowState._.followTargetId = 0
+    FollowState._.followSpawnId = 0
+    FollowState._.stuck.checking = false
+    FollowState._.waitingReported = false
+    Movement.StopFor(FollowState.key)
+end
+
+---Stop holding a spot.
+local function ClearAnchorOrder()
+    FollowState._.anchor = { set = false, x = 0, y = 0 }
+    Movement.StopFor(FollowState.key)
+end
+
+---Forget every order and everything measured about carrying one out.
 local function Reset()
-    FollowState._.currentAction = passive
-    FollowState._.currentActionTimer = Timer.new(0)
-    FollowState._.lastLoc = { x = 0, y = 0, z = 0, zoneId = 0 }
     FollowState._.followTarget = ""
     FollowState._.followTargetId = 0
     FollowState._.followCommand = FollowState.eventIds.followMe
     FollowState._.followSpawnId = 0
-    FollowState._.checkingStuck = false
-    FollowState._.checkingRetry = false
-    FollowState._.anchor.x = 0
-    FollowState._.anchor.y = 0
+    FollowState._.anchor = { set = false, x = 0, y = 0 }
+    FollowState._.clickZone = { step = nil, timer = nil, lastFailedMs = 0 }
+    FollowState._.stuck = { checking = false, timer = nil, lastLoc = { x = 0, y = 0, z = 0, zoneId = 0 } }
+    FollowState._.waitingReported = false
 end
 
+
+
 local function CloseToLastLoc()
-    return mq.TLO.Math.Distance(tostring(FollowState._.lastLoc.y) .. "," .. tostring(FollowState._.lastLoc.x) .. "," .. tostring(FollowState._.lastLoc.z))() < 30
+    local lastLoc = FollowState._.stuck.lastLoc
+    return mq.TLO.Math.Distance(tostring(lastLoc.y) .. "," .. tostring(lastLoc.x) .. "," .. tostring(lastLoc.z))() < 30
 end
 
 ---Whoever we are following, whether or not they are currently around: an invalid spawn
@@ -122,211 +136,149 @@ local function FollowTargetInReachId()
     return mq.TLO.Spawn("pc radius 200 los " .. FollowState._.followTarget).ID()
 end
 
-FollowState._.followActions.findFollowTarget = function()
-    -- Found target, begin follow mode
-    local followSpawnId = FollowTargetInReachId()
-    if followSpawnId ~= nil and followSpawnId > 0 then
-        FollowState._.checkingRetry = false
-        FollowState._.followSpawnId = followSpawnId
-        Movement.Follow(followSpawnId, { distance = followDistance, owner = FollowState.key })
-        FollowState._.currentAction = FollowState._.followActions.keepClose
-        FollowState._.currentActionTimer = Timer.new(5000)
-        return true
-    end
+---Say, once, that we are waiting on the follow target rather than every pass.
+---@param message string
+local function ReportWaiting(message)
+    if FollowState._.waitingReported then return end
+    FollowState._.waitingReported = true
+    Commands.GetCommandSpeak(FollowState._.followCommand):speak(message)
+end
 
-    -- Nothing to follow, so stop following (but leave anyone else's movement alone)
-    Movement.StopFor(FollowState.key)
-
-    local inZone = FollowTargetSpawn().Name() ~= nil
-
-    -- A target held by spawn id is not coming back once that id stops resolving -- it died,
-    -- despawned, or we left the zone it was in -- so there is nothing here to wait for
-    if not inZone and FollowState._.followTargetId > 0 then
-        Commands.GetCommandSpeak(FollowState._.followCommand):speak("Follow target [" .. FollowState._.followTarget .. "] is gone, stopping follow")
-        Reset()
+---Are we stuck trying to get to the follow target?
+---
+---A measurement, not a decision: it compares where we are against where we were, and the only
+---thing it decides is whether to give up on this attempt and go back to looking.
+---@return boolean isStuck
+local function CheckStuck()
+    -- we have escaped the bubble of lastloc, so things are going fine
+    if not CloseToLastLoc() then
+        UpdateLastLoc()
+        FollowState._.stuck.checking = false
         return false
     end
 
-    -- No target nearby, notify about waiting
-    if not FollowState._.checkingRetry then
-        local speak = Commands.GetCommandSpeak(FollowState._.followCommand)
-        if inZone then
-            speak:speak("Follow target [" .. FollowState._.followTarget .. "] out of range, waiting...")
-        else
-            DebugLog("Follow target [" .. FollowState._.followTarget .. "] no longer appears to be in the zone, waiting...")
-        end
+    -- first pass in one place: start the clock and remember where "here" was
+    if not FollowState._.stuck.checking then
+        FollowState._.stuck.timer = Timer.new(5000)
+        UpdateLastLoc()
+        FollowState._.stuck.checking = true
+        return false
     end
-    FollowState._.checkingRetry = true
 
-    -- waiting to find follow target, allow lower tier action
+    if FollowState._.stuck.timer:timer_expired() and CloseToLastLoc() then
+        return true
+    end
+
     return false
 end
 
-FollowState._.followActions.keepClose = function()
+---Whether clicking through a zone line is worth trying: not while we have just failed at it.
+---@return boolean
+local function MayClickZone()
+    return Time.current_time() - FollowState._.clickZone.lastFailedMs >= clickZoneRetryMs
+end
+
+---Start clicking through a zone line. Progress from here is held, because the world cannot tell
+---us that the door has been clicked and the zone is on its way.
+local function BeginClickZone()
+    FollowState._.clickZone.step = clickZoneSteps.findingSwitch
+    FollowState._.clickZone.timer = Timer.new(10000)
+end
+
+---@param failed boolean whether the procedure gave up rather than finishing
+local function EndClickZone(failed)
+    FollowState._.clickZone.step = nil
+    FollowState._.clickZone.timer = nil
+    FollowState._.clickZone.lastFailedMs = failed and Time.current_time() or 0
+end
+
+---One pass of following whoever we were told to follow.
+---
+---Everything it decides is decided here, from the world: whether they are in the zone, whether we
+---are close enough, whether a follow is running, and whether it is getting anywhere. What it
+---keeps is what it cannot ask for again -- who we were told to follow.
+---@return boolean isBusy
+local function Follow()
     local targetSpawn = FollowTargetSpawn()
 
-    -- Follow target not in zone? Go back to finding target or attempt zoning
     if targetSpawn.Name() == nil then
-        -- their breadcrumb trail outlives them leaving; walk it out first, which puts us at
-        -- the zone line (or their corpse) before we decide what to do about it
+        -- Their breadcrumb trail outlives them leaving; walk it out first, which puts us at the
+        -- zone line (or their corpse) before we decide what to do about it.
         if Movement.IsFollowing(FollowState._.followSpawnId) then
             return true
         end
 
-        -- Only a player walks out through a zone line. Anything held by spawn id stopped
-        -- existing rather than went somewhere, so there is no zone to chase it into --
-        -- findFollowTarget calls that follow off.
-        if FollowState._.followTargetId == 0 then
-            local corpse = mq.TLO.Spawn("corpse " .. FollowState._.followTarget)
-            if corpse.Name() == nil or corpse.Distance() > 100 then
-                -- target zoned without dying, check for nearby switch
-                local switchDistance = mq.TLO.Switch("nearest").Distance()
-                if switchDistance ~= nil and switchDistance < 100 then
-                    FollowState._.currentAction = FollowState._.clickZoneActions.findingSwitch
-                    return true
-                end
+        -- A target held by spawn id is not coming back once that id stops resolving -- it died,
+        -- despawned, or we left the zone it was in -- so there is nothing here to wait for.
+        if FollowState._.followTargetId > 0 then
+            Commands.GetCommandSpeak(FollowState._.followCommand):speak(
+                "Follow target [" .. FollowState._.followTarget .. "] is gone, stopping follow")
+            ClearFollowOrder()
+            return false
+        end
+
+        -- Only a player walks out through a zone line. If they are not lying dead next to us,
+        -- assume they zoned and go through after them.
+        local corpse = mq.TLO.Spawn("corpse " .. FollowState._.followTarget)
+        if corpse.Name() == nil or corpse.Distance() > 100 then
+            local switchDistance = mq.TLO.Switch("nearest").Distance()
+            if switchDistance ~= nil and switchDistance < 100 and MayClickZone() then
+                BeginClickZone()
+                return true
             end
         end
 
-        FollowState._.currentAction = FollowState._.followActions.findFollowTarget
-        return true
-    end
-
-    -- If we're close the follow task parks itself, so let lower tier actions have the frame
-    local targetDistance = targetSpawn.Distance3D()
-    if targetDistance ~= nil and targetDistance < keepCloseDistance then
-        UpdateLastLoc()
-        FollowState._.checkingStuck = false
-
-        -- we're close and waiting, allow lower tier action
+        Movement.StopFor(FollowState.key)
+        ReportWaiting("Follow target [" .. FollowState._.followTarget .. "] is not here, waiting...")
+        -- nothing to do but wait, so let lower tier actions have the frame
         return false
     end
 
-    -- Follow ended, failed, or something with higher priority took movement over. Either
-    -- way we are no longer following our target, so go pick them back up.
+    -- Close enough: the follow task parks itself, and so do we
+    local targetDistance = targetSpawn.Distance3D()
+    if targetDistance ~= nil and targetDistance < keepCloseDistance then
+        UpdateLastLoc()
+        FollowState._.stuck.checking = false
+        FollowState._.waitingReported = false
+        return false
+    end
+
+    -- Not close enough, so a follow should be running. It will not be on the first pass, after a
+    -- zone, or when something with higher priority took movement over.
     if not Movement.IsFollowing(FollowState._.followSpawnId) then
-        FollowState._.currentAction = FollowState._.followActions.findFollowTarget
-        return true
-    end
-
-    -- We are still following our target, are we stuck trying to follow?
-
-    -- We have escaped the bubble of lastloc, things are good
-    if not CloseToLastLoc() then
-        UpdateLastLoc()
-        FollowState._.checkingStuck = false
-        FollowState._.currentActionTimer:reset()
-
-        -- we are mid-running, don't allow other things to interfere
-        return true
-    end
-
-    -- We're not at our target yet, let's see if we're stuck in the same area for too long
-
-    -- Signal the first time through loop to setup the timer and reference loc
-    if not FollowState._.checkingStuck then
-        FollowState._.currentActionTimer = Timer.new(5000)
-        UpdateLastLoc()
-        FollowState._.checkingStuck = true
-        return true
-    end
-
-    -- If we've timed out in this position, abort
-    if FollowState._.currentActionTimer:timer_expired() then
-        if CloseToLastLoc() then
-            Commands.GetCommandSpeak(FollowState._.followCommand):speak("I got stuck while following [" .. FollowState._.followTarget .. "], waiting...")
-            FollowState._.currentAction = FollowState._.followActions.findFollowTarget
-        else
-            -- Not stuck, reset stuck check
-            FollowState._.checkingStuck = false
+        local followSpawnId = FollowTargetInReachId()
+        if followSpawnId == nil or followSpawnId <= 0 then
+            Movement.StopFor(FollowState.key)
+            ReportWaiting("Follow target [" .. FollowState._.followTarget .. "] out of range, waiting...")
+            return false
         end
+
+        FollowState._.waitingReported = false
+        FollowState._.followSpawnId = followSpawnId
+        FollowState._.stuck.checking = false
+        Movement.Follow(followSpawnId, { distance = followDistance, owner = FollowState.key })
+        return true
     end
+
+    if CheckStuck() then
+        Commands.GetCommandSpeak(FollowState._.followCommand):speak(
+            "I got stuck while following [" .. FollowState._.followTarget .. "], waiting...")
+        Movement.StopFor(FollowState.key)
+        FollowState._.followSpawnId = 0
+        FollowState._.stuck.checking = false
+        return true
+    end
+
+    -- mid-run: nothing weaker should start moving us somewhere else
     return true
 end
 
-FollowState._.clickZoneActions.findingSwitch = function()
-    Movement.StopFor(FollowState.key)
+---One pass of standing where we were told to stand.
+---@return boolean isBusy
+local function HoldAnchor()
+    if not FollowState._.anchor.set then return false end
 
-    local switchDistance = mq.TLO.Switch("nearest").Distance()
-    if switchDistance ~= nil and switchDistance < 100 then
-        if switchDistance > 25 then
-            local switchY = mq.TLO.Switch("nearest").Y()
-            local switchX = mq.TLO.Switch("nearest").X()
-            if switchY ~= nil and switchX ~= nil then
-                Movement.MoveToLoc(switchY, switchX, { distance = 20, timeoutMs = 10000, owner = FollowState.key })
-            end
-            FollowState._.currentAction = FollowState._.clickZoneActions.clickingSwitch
-        else
-            UpdateLastLoc()
-            mq.cmd("/invoke ${Switch[nearest].Target}")
-            mq.cmd("/click left switch")
-            FollowState._.currentAction = FollowState._.clickZoneActions.waitingToZone
-        end
-        FollowState._.currentActionTimer = Timer.new(10000)
-    else
-        Commands.GetCommandSpeak(FollowState.eventIds.clickZone):speak("Failed to click zone, could not find nearby switch")
-        if FollowState._.followTarget ~= "" then
-            FollowState._.currentAction = FollowState._.followActions.findFollowTarget
-        else
-            Reset()
-            return false
-        end
-    end
-    return true
-end
-
-FollowState._.clickZoneActions.clickingSwitch = function()
-    -- We found it, click and start waiting for zone
-    local switchDistance = mq.TLO.Switch("nearest").Distance()
-    if switchDistance ~= nil and switchDistance < 25 then
-        UpdateLastLoc()
-        mq.cmd("/invoke ${Switch[nearest].Target}")
-        mq.cmd("/click left switch")
-        FollowState._.currentActionTimer = Timer.new(10000)
-        FollowState._.currentAction = FollowState._.clickZoneActions.waitingToZone
-        return true
-    end
-
-    -- If we've timed out in this position, abort
-    if FollowState._.currentActionTimer:timer_expired() then
-        Commands.GetCommandSpeak(FollowState.eventIds.clickZone):speak("I failed to navigate to click zone. Waiting...")
-        if FollowState._.followTarget ~= "" then
-            FollowState._.currentAction = FollowState._.followActions.findFollowTarget
-        else
-            Reset()
-            return false
-        end
-    end
-    return true
-end
-
-FollowState._.clickZoneActions.waitingToZone = function()
-    -- Arrived at zone, continue following
-    if FollowState._.lastLoc.zoneId ~= mq.TLO.Zone.ID() then
-        if FollowState._.followTarget ~= "" then
-            FollowState._.currentAction = FollowState._.followActions.findFollowTarget
-        else
-            Reset()
-            return false
-        end
-        return true
-    end
-
-    -- If we've timed out in this position, abort
-    if FollowState._.currentActionTimer:timer_expired() then
-        Commands.GetCommandSpeak(FollowState.eventIds.clickZone):speak("I failed to click into the zone. Waiting...")
-        if FollowState._.followTarget ~= "" then
-            FollowState._.currentAction = FollowState._.followActions.findFollowTarget
-        else
-            Reset()
-            return false
-        end
-    end
-    return true
-end
-
-FollowState._.anchorActions.stayingAtAnchor = function()
-    -- already walking back to the anchor, let it finish
+    -- already walking back to it, let that finish
     if Movement.IsMovingTo() and Movement.IsOwnedBy(FollowState.key) then
         return true
     end
@@ -340,7 +292,74 @@ FollowState._.anchorActions.stayingAtAnchor = function()
         Movement.MoveToLoc(FollowState._.anchor.y, FollowState._.anchor.x, { owner = FollowState.key })
         return true
     end
+
     return false
+end
+
+---One pass of the click-zone procedure: find the door, walk to it, click it, wait for the zone.
+---
+---This is the one place in this state that holds a mode, because it is the one thing the world
+---cannot describe: a door that has been clicked looks exactly like one that has not.
+---@return boolean isBusy
+local function ClickZone()
+    local step = FollowState._.clickZone.step
+
+    if step == clickZoneSteps.waitingToZone then
+        if FollowState._.stuck.lastLoc.zoneId ~= mq.TLO.Zone.ID() then
+            EndClickZone(false)
+            return true
+        end
+
+        if FollowState._.clickZone.timer:timer_expired() then
+            Commands.GetCommandSpeak(FollowState.eventIds.clickZone):speak("I failed to click into the zone. Waiting...")
+            EndClickZone(true)
+        end
+        return true
+    end
+
+    local switchDistance = mq.TLO.Switch("nearest").Distance()
+
+    if step == clickZoneSteps.clickingSwitch then
+        if switchDistance ~= nil and switchDistance < 25 then
+            UpdateLastLoc()
+            mq.cmd("/invoke ${Switch[nearest].Target}")
+            mq.cmd("/click left switch")
+            FollowState._.clickZone.step = clickZoneSteps.waitingToZone
+            FollowState._.clickZone.timer = Timer.new(10000)
+            return true
+        end
+
+        if FollowState._.clickZone.timer:timer_expired() then
+            Commands.GetCommandSpeak(FollowState.eventIds.clickZone):speak("I failed to navigate to click zone. Waiting...")
+            EndClickZone(true)
+        end
+        return true
+    end
+
+    -- findingSwitch
+    Movement.StopFor(FollowState.key)
+
+    if switchDistance == nil or switchDistance >= 100 then
+        Commands.GetCommandSpeak(FollowState.eventIds.clickZone):speak("Failed to click zone, could not find nearby switch")
+        EndClickZone(true)
+        return true
+    end
+
+    if switchDistance > 25 then
+        local switchY = mq.TLO.Switch("nearest").Y()
+        local switchX = mq.TLO.Switch("nearest").X()
+        if switchY ~= nil and switchX ~= nil then
+            Movement.MoveToLoc(switchY, switchX, { distance = 20, timeoutMs = 10000, owner = FollowState.key })
+        end
+        FollowState._.clickZone.step = clickZoneSteps.clickingSwitch
+    else
+        UpdateLastLoc()
+        mq.cmd("/invoke ${Switch[nearest].Target}")
+        mq.cmd("/click left switch")
+        FollowState._.clickZone.step = clickZoneSteps.waitingToZone
+    end
+    FollowState._.clickZone.timer = Timer.new(10000)
+    return true
 end
 
 ---Begin following whatever this character has targeted.
@@ -383,18 +402,19 @@ function FollowState.StartFollowingTarget()
     -- exists as this spawn (see FollowTargetSpawn)
     FollowState._.followTargetId = target.Type() == "PC" and 0 or targetId
     FollowState._.followCommand = FollowState.eventIds.followTarget
-    FollowState._.currentAction = FollowState._.followActions.findFollowTarget
-    FollowState._.checkingRetry = false
+    FollowState._.followSpawnId = 0
+    FollowState._.waitingReported = false
+    -- being told to follow somebody cancels being told to stand somewhere
+    ClearAnchorOrder()
     return nil
 end
 
 ---Stop following and hand back the movement we were using, leaving a move somebody else has
 ---since started alone. Safe to call from a render callback, same as StartFollowingTarget.
+---Stop following and hand back the movement we were using, leaving a move somebody else has
+---since started alone.
 function FollowState.StopFollowing()
-    if Movement.IsFollowing(FollowState._.followSpawnId) then
-        Movement.StopFor(FollowState.key)
-    end
-    Reset()
+    ClearFollowOrder()
 end
 
 ---@diagnostic disable-next-line: duplicate-set-field
@@ -409,8 +429,9 @@ function FollowState.Init()
                 FollowState._.followTarget = speaker
                 FollowState._.followTargetId = 0
                 FollowState._.followCommand = FollowState.eventIds.followMe
-                FollowState._.currentAction = FollowState._.followActions.findFollowTarget
-                FollowState._.checkingRetry = false
+                FollowState._.followSpawnId = 0
+                FollowState._.waitingReported = false
+                ClearAnchorOrder()
             else
                 DebugLog("Ignoring followme of speaker [" .. speaker .. "]")
             end
@@ -475,7 +496,7 @@ function FollowState.Init()
         local function event_ClickZone(_, speaker)
             if Commands.GetCommandOwners(FollowState.eventIds.clickZone):HasPermission(speaker) then
                 DebugLog("Clickzone speaker [" .. speaker .. "]")
-                FollowState._.currentAction = FollowState._.clickZoneActions.findingSwitch
+                BeginClickZone()
             else
                 DebugLog("Ignoring clickzone speaker [" .. speaker .. "]")
             end
@@ -494,26 +515,15 @@ function FollowState.Init()
 
                 -- disable anchor
                 if #args == 1 and args[1]:lower() == "off" then
-                    FollowState._.anchor.x = 0
-                    FollowState._.anchor.y = 0
-                    if FollowState._.followTarget ~= "" then
-                        FollowState._.currentAction = FollowState._.followActions.findFollowTarget
-                    else
-                        FollowState._.currentAction = passive
-                    end
+                    ClearAnchorOrder()
                 else
                     local spawn = mq.TLO.Spawn("pc radius 200 " .. speaker)
                     if (spawn.ID() or 0) > 0 then
-                        FollowState._.anchor.x = spawn.X()
-                        FollowState._.anchor.y = spawn.Y()
-                        FollowState._.currentAction = FollowState._.anchorActions.stayingAtAnchor
+                        FollowState._.anchor = { set = true, x = spawn.X(), y = spawn.Y() }
+                        -- being told to stand somewhere cancels being told to follow somebody
+                        ClearFollowOrder()
                     else
                         Commands.GetCommandSpeak(FollowState.eventIds.anchor):speak("Anchor target [" .. speaker .. "] out of range, aborting...")
-                        if FollowState._.followTarget ~= "" then
-                            FollowState._.currentAction = FollowState._.followActions.findFollowTarget
-                        else
-                            FollowState._.currentAction = passive
-                        end
                     end
                 end
             else
@@ -539,9 +549,31 @@ function FollowState.Init()
     end
 end
 
+---One pass: a procedure in progress first, then whichever order is standing.
+---@return boolean isBusy
 ---@diagnostic disable-next-line: duplicate-set-field
 function FollowState.Go()
-    return FollowState._.currentAction()
+    -- Clicking through a zone line is the one thing here that is genuinely part-way done rather
+    -- than a decision to re-make, so it comes first and finishes before anything else is asked.
+    if FollowState._.clickZone.step ~= nil then
+        return ClickZone()
+    end
+
+    -- Following and anchoring are contradictory orders, so only one of them is ever standing:
+    -- whichever was asked for last cancelled the other when it arrived. That is what makes
+    -- "which am I doing" something to read rather than something to remember.
+    if FollowState._.followTarget ~= "" then return Follow() end
+    if FollowState._.anchor.set then return HoldAnchor() end
+
+    return false
+end
+
+---@return string description of what this state is doing, for the page and /state
+function FollowState.Describe()
+    if FollowState._.clickZone.step ~= nil then return "Clicking to Zone" end
+    if FollowState._.followTarget ~= "" then return "Following" end
+    if FollowState._.anchor.set then return "Anchoring" end
+    return "Standby"
 end
 
 ---@diagnostic disable-next-line: duplicate-set-field
@@ -582,15 +614,7 @@ function FollowState.BuildMenu()
         ImGui.Text("Current Action")
 
         ImGui.TableNextColumn()
-        local currentTask = "Standby"
-        if TableUtils.ArrayContains(TableUtils.GetValues(FollowState._.anchorActions), FollowState._.currentAction) then
-            currentTask = "Anchoring"
-        elseif TableUtils.ArrayContains(TableUtils.GetValues(FollowState._.followActions), FollowState._.currentAction) then
-            currentTask = "Following"
-        elseif TableUtils.ArrayContains(TableUtils.GetValues(FollowState._.clickZoneActions), FollowState._.currentAction) then
-            currentTask = "Clicking to Zone"
-        end
-        ImGui.Text(currentTask)
+        ImGui.Text(FollowState.Describe())
 
         ImGui.TableNextRow()
         ImGui.TableNextColumn()

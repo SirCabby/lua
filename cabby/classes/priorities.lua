@@ -28,7 +28,10 @@ local Priorities = {
     -- in combat --
     mez = 59,        -- add control, above dps so a new add is handled before the next swing
     tank = 69,       -- taunt / grab aggro
-    dps = 79,        -- melee and spell rotations
+    -- melee and spell rotations. SpellDpsState registers at `dps - 1` and MeleeState at `dps`:
+    -- the melee state reports busy for as long as it is engaged, so a rotation below it would
+    -- never get a frame, while a rotation above it only takes one when it actually casts
+    dps = 79,
 
     -- out of combat --
     loot = 89,

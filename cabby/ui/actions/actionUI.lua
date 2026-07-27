@@ -11,9 +11,14 @@ local EditAction = require("cabby.ui.actions.editAction")
 ---@class ActionUI
 local ActionUI = {
     _ = {
-        actions = {} -- { liveaction = editAction }
+        actions = {}, -- { liveaction = editAction }
+        filters = {}  -- { liveaction = <what was typed into that picker's filter box> }
     }
 }
+
+---A spellbook runs to hundreds of entries, so past this many the picker grows a filter box.
+---Skills and disciplines never reach it and are left alone.
+local filterThreshold = 12
 
 local actionTypes = {
     [ActionType.Edit] =           "<Select Type>",
@@ -38,6 +43,35 @@ local orderedValueTypes = {
     Action.valueTypes.Raw,
     Action.valueTypes.Minimum
 }
+
+---What this type can be picked from. Every one of these lists is discovered from the client
+---(`cabby.character`), so it answers "what does this character have" at the moment the combo is
+---opened rather than what it had at login.
+---@param actionType string
+---@param availableActions AvailableActions
+---@return table choices array of ActionType
+local function ChoicesFor(actionType, availableActions)
+    if actionType == ActionType.Ability then return availableActions.abilities or {} end
+    if actionType == ActionType.Discipline then return availableActions.discs or {} end
+    if actionType == ActionType.Spell then return availableActions.spells or {} end
+    if actionType == ActionType.AA then return availableActions.aas or {} end
+    if actionType == ActionType.Item then return availableActions.items or {} end
+    return {}
+end
+
+---What a picked action is called in the list.
+---
+---A spell that is not on the spell bar is worth saying out loud: an action slot only fires what
+---is memorized, so a slot holding an unmemorized spell is configured correctly and will still
+---never go off, which is otherwise a silent puzzle.
+---@param action ActionType
+---@return string label
+local function ChoiceLabel(action)
+    if action.IsMemorized ~= nil and not action:IsMemorized() then
+        return action:Name() .. "  (not memorized)"
+    end
+    return action:Name()
+end
 
 ---@param liveAction Action
 ---@return EditAction editAction
@@ -65,7 +99,12 @@ end
 ---@param liveAction Action
 ---@param actions table
 ---@param availableActions AvailableActions
-ActionUI.ActionControl = function(liveAction, actions, availableActions)
+---@param extras? table `{ height = number, draw = fun(liveAction) }` -- controls belonging to the
+---state that owns this list rather than to the action itself. A heal slot's threshold is one:
+---which heal this is, is an action; who it is for and how hurt they have to be, is healing.
+---Like the Enabled switch, and unlike everything staged behind Save, these write straight to the
+---live action -- they are dials you reach for while watching a fight go badly.
+ActionUI.ActionControl = function(liveAction, actions, availableActions, extras)
     local width = ImGui.GetContentRegionAvail()
     local editAction = GetEditAction(liveAction)
     local actionIndex = TableUtils.ArrayIndexOf(actions, liveAction)
@@ -79,6 +118,9 @@ ActionUI.ActionControl = function(liveAction, actions, availableActions)
         else
             height = 64
         end
+    end
+    if extras ~= nil then
+        height = height + (extras.height or 0)
     end
 
     local childFlags = bit32.bor(ImGuiChildFlags.Border, ImGuiChildFlags.AutoResizeX)
@@ -145,24 +187,47 @@ ActionUI.ActionControl = function(liveAction, actions, availableActions)
         end
         ImGui.SameLine()
         ImGui.SetNextItemWidth(200)
-        if ImGui.BeginCombo("##name" .. actionIndex, editAction.name) then
-            local actionChoices = {}
-            if editAction.actionType == ActionType.Ability then
-                actionChoices = availableActions.abilities
-            elseif editAction.actionType == ActionType.Discipline then
-                actionChoices = availableActions.discs
+        if ImGui.BeginCombo("##name" .. actionIndex, editAction.name or "") then
+            local actionChoices = ChoicesFor(editAction.actionType, availableActions)
+            local filter = ActionUI._.filters[liveAction] or ""
+
+            if #actionChoices > filterThreshold then
+                -- A spellbook is not a list anyone scrolls. The box starts empty and focused
+                -- every time the combo opens, so it is a place to type rather than one more
+                -- piece of state to remember to clear.
+                if ImGui.IsWindowAppearing() then
+                    filter = ""
+                    ActionUI._.filters[liveAction] = filter
+                    ImGui.SetKeyboardFocusHere()
+                end
+
+                ImGui.SetNextItemWidth(190)
+                local typed, changed = ImGui.InputText("##filter" .. actionIndex, filter)
+                if changed then
+                    filter = typed
+                    ActionUI._.filters[liveAction] = typed
+                end
+                ImGui.Separator()
             end
 
+            local needle = filter:lower()
+            local shown = 0
             for _, action in ipairs(actionChoices) do
                 ---@type ActionType
                 action = action
 
                 local name = action:Name()
-
-                local _, pressed = ImGui.Selectable(name, editAction.name == action:Name())
-                if pressed then
-                    editAction.name = action:Name()
+                if needle == "" or name:lower():find(needle, 1, true) ~= nil then
+                    shown = shown + 1
+                    local _, pressed = ImGui.Selectable(ChoiceLabel(action), editAction.name == name)
+                    if pressed then
+                        editAction.name = name
+                    end
                 end
+            end
+
+            if shown < 1 then
+                ImGui.TextDisabled(#actionChoices > 0 and "Nothing matches" or "Nothing available")
             end
 
             ImGui.EndCombo()
@@ -223,8 +288,13 @@ ActionUI.ActionControl = function(liveAction, actions, availableActions)
         ImGui.SameLine()
         if ImGui.Button("X", 24, 22) then
             ActionUI._.actions[liveAction] = nil
+            ActionUI._.filters[liveAction] = nil
             table.remove(actions, actionIndex)
             Global.configStore:SaveConfig()
+        end
+
+        if extras ~= nil and extras.draw ~= nil then
+            extras.draw(liveAction)
         end
 
         ---- EDITING ----

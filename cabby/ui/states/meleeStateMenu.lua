@@ -1,10 +1,14 @@
 local mq = require("mq")
 
+local AAs = require("cabby.actions.aas")
 local ActionUI = require("cabby.ui.actions.actionUI")
 local AvailableActions = require("cabby.actions.availableActions")
 local Character = require("cabby.character")
+local Combat = require("cabby.combat")
+local CombatConfig = require("cabby.configs.combatConfig")
 local CommonUI = require("cabby.ui.commonUI")
 local Disciplines = require("cabby.actions.disciplines")
+local Items = require("cabby.actions.items")
 local MeleeStateConfig = require("cabby.configs.meleeStateConfig")
 local Skills = require("cabby.actions.skills")
 
@@ -67,24 +71,14 @@ function MeleeStateMenu.BuildMenu(meleeState)
         ImGui.Text("Current Action")
 
         ImGui.TableNextColumn()
-        local currentTask = "Standby"
-        local attacking = false
-        if meleeState._.currentAction == meleeState._.meleeActions.attackTarget then
-            currentTask = "Attacking: " .. tostring(meleeState._.currentTargetID)
-            attacking = true
-        end
-        ImGui.Text(currentTask)
+        ImGui.Text(meleeState.IsAttacking() and "Attacking" or "Standby")
 
         ImGui.TableNextRow()
         ImGui.TableNextColumn()
-        ImGui.Text("Attack Target")
+        ImGui.Text("Fighting")
 
         ImGui.TableNextColumn()
-        local targetName = "<NONE>"
-        if attacking then
-            targetName = mq.TLO.Spawn(meleeState._.currentTargetID).Name()
-        end
-        ImGui.Text(targetName)
+        ImGui.Text(Combat.Describe())
 
         ImGui.EndTable()
     end
@@ -110,9 +104,9 @@ function MeleeStateMenu.BuildMenu(meleeState)
         ImGui.SameLine()
         ---@type boolean
         local clicked, result
-        result, clicked = ImGui.Checkbox("Auto-Engage", MeleeStateConfig:GetAutoEngage())
+        result, clicked = ImGui.Checkbox("Auto-Engage", CombatConfig.GetAutoEngage())
         if clicked then
-            MeleeStateConfig.SetAutoEngage(result)
+            CombatConfig.SetAutoEngage(result)
         end
 
         ImGui.Dummy(0, 0)
@@ -139,26 +133,28 @@ function MeleeStateMenu.BuildMenu(meleeState)
         ImGui.Dummy(0, 0)
         ImGui.SameLine()
 
-        local attackDisabled = mq.TLO.Target() == nil
+        -- Both of these are the engagement, not this state: backing off means the character
+        -- stops fighting the thing, and a paladin that stops swinging but keeps nuking is not
+        -- what the button says. Combat runs no game commands, which is what makes pressing them
+        -- from inside a render callback safe -- the old Attack button ran /mqtarget from here.
+        local attackDisabled = mq.TLO.Target.ID() == nil
         if attackDisabled then
             ImGui.BeginDisabled(true)
         end
         if ImGui.Button("Attack", 60, 23) then
-            local targetId = mq.TLO.Target.ID()
-            meleeState.EngageTargetId(targetId)
-            meleeState.StickToCurrentTarget(meleeState.GetSpawnMeleeRange(targetId))
+            Combat.Engage(mq.TLO.Target.ID(), "the Attack button")
         end
         if attackDisabled then
             ImGui.EndDisabled()
         end
 
         ImGui.SameLine()
-        local backOffDisabled = meleeState._.currentAction ~= meleeState._.meleeActions.attackTarget
+        local backOffDisabled = not Combat.IsEngaged()
         if backOffDisabled then
             ImGui.BeginDisabled(true)
         end
         if ImGui.Button("Back Off", 70, 23) then
-            meleeState.Reset()
+            Combat.Disengage("the Back Off button")
         end
         if backOffDisabled then
             ImGui.EndDisabled()
@@ -256,6 +252,7 @@ function MeleeStateMenu.BuildMenu(meleeState)
                             availableActions.abilities = { Skills.taunt }
                         end
                         availableActions.discs = Disciplines.taunt
+                        availableActions.aas = AAs.taunt
 
                         if ImGui.Button("Add##" .. tostring(actions), 50, 23) then
                             local newAction = {}
@@ -286,6 +283,7 @@ function MeleeStateMenu.BuildMenu(meleeState)
                         local actions = MeleeStateConfig.GetHateActions()
                         local availableActions = AvailableActions.new()
                         availableActions.discs = Disciplines.hate
+                        availableActions.aas = AAs.hate
 
                         if ImGui.Button("Add##" .. tostring(actions), 50, 23) then
                             local newAction = {}
@@ -325,6 +323,12 @@ function MeleeStateMenu.BuildMenu(meleeState)
             local availableActions = AvailableActions.new()
             availableActions.abilities = Character.meleeAbilities
             availableActions.discs = Disciplines.melee
+            -- AAs and clickies but no spells: the epic click at 80% health is exactly what this
+            -- list replaced (see the MQ2Melee lines at the bottom of meleeState.lua), while a
+            -- spell rotation belongs to the state built for one. A heal in here would be a
+            -- second, worse heal state.
+            availableActions.aas = AAs.all
+            availableActions.items = Items.all
 
             if ImGui.Button("Add##" .. tostring(actions), 50, 23) then
                 local newAction = {}

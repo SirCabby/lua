@@ -1,25 +1,19 @@
 local mq = require("mq")
 
+local Casting = require("utils.Casting.Casting")
 local Debug = require("utils.Debug.Debug")
 local Movement = require("utils.Movement.Movement")
 local Timer = require("utils.Time.Timer")
-local StringUtils = require("utils.StringUtils.StringUtils")
 
 local Action = require('cabby.actions.action')
-local ChelpDocs = require("cabby.commands.chelpDocs")
-local Command = require("cabby.commands.command")
-local Commands = require("cabby.commands.commands")
+local ActionCommand = require("cabby.commands.actionCommand")
+local Combat = require("cabby.combat")
 local MeleeStateConfig = require("cabby.configs.meleeStateConfig")
 local MeleeStateMenu = require("cabby.ui.states.meleeStateMenu")
 local Menu = require("cabby.ui.menu")
 local Skills = require("cabby.actions.skills")
 local Status = require('cabby.status')
 local ToggleCommand = require("cabby.commands.toggleCommand")
-local UserInput = require("cabby.utils.userinput")
-
-local function passive()
-    return false
-end
 
 -- How long "As Needed" waits between tanking actions so they fire one at a time
 local sequentialActionDelayMs = 1500
@@ -28,11 +22,12 @@ local sequentialActionDelayMs = 1500
 local MeleeState = {
     key = "MeleeState",
     eventIds = {
-        attack = "attack",
+        -- `attack` and `autoengage` are not here: what this character is fighting belongs to
+        -- `cabby.combat`, because a wizard fights the same mob with no melee state to keep it in
+        --
         -- the switches the Melee State page draws as checkboxes, each also sayable and so also
         -- bindable to a hotbar button
         action = "action",
-        autoEngage = "autoengage",
         bashOverride = "bashoverride",
         melee = "melee",
         stick = "stick",
@@ -40,15 +35,10 @@ local MeleeState = {
     },
     _ = {
         isInit = false,
-        currentAction = passive,
-        currentActionTimer = nil,
-        currentTargetID = 0,
+        retargetTimer = nil,
+        stickTargetId = 0,
         tauntTimer = Timer.new(sequentialActionDelayMs),
-        hateTimer = Timer.new(sequentialActionDelayMs),
-        meleeActions = {
-            checkForCombat = passive,
-            attackTarget = passive
-        }
+        hateTimer = Timer.new(sequentialActionDelayMs)
     }
 }
 
@@ -90,19 +80,34 @@ function MeleeState.GetSpawnMeleeRange(id)
     return math.min(14, maxRangeTo - 3)
 end
 
----@param range number
-function MeleeState.StickToCurrentTarget(range)
-    if MeleeStateConfig.GetStick() then
-        Movement.Stick(MeleeState._.currentTargetID, { distance = range, owner = MeleeState.key })
-    end
+---Who this state is, when it asks the casting service for something: its band decides whether
+---it may interrupt another cast, and what gets held back while its own runs.
+---@return table request
+function MeleeState.CastRequest()
+    return {
+        owner = MeleeState.key,
+        priority = MeleeState.priority,
+        targetId = Combat.GetTargetId()
+    }
 end
 
----@param id number
-function MeleeState.EngageTargetId(id)
-    mq.cmd("/mqtarget npc id " .. tostring(id))
-    MeleeState._.currentTargetID = id
-    MeleeState._.currentAction = MeleeState._.meleeActions.attackTarget
-    MeleeState._.currentActionTimer = Timer.new(500)
+---@param range number
+function MeleeState.StickToCurrentTarget(range)
+    if not MeleeStateConfig.GetStick() then return end
+
+    -- A cast we are level with is one of our own action slots, and sticking is exactly what
+    -- would lose it: the character is standing still waiting for the cast bar and we would walk
+    -- them back into range. Nothing is lost by waiting -- the attack action re-sticks on the
+    -- frame after the cast ends.
+    if Casting.IsHoldingStill(MeleeState.priority) then return end
+
+    MeleeState._.stickTargetId = Combat.GetTargetId()
+    Movement.Stick(MeleeState._.stickTargetId, { distance = range, owner = MeleeState.key })
+end
+
+---@return number targetId what this state is fighting, which is whatever Combat says
+function MeleeState.GetTargetId()
+    return Combat.GetTargetId()
 end
 
 local function DoPrimaryCombatAction()
@@ -114,14 +119,14 @@ local function DoPrimaryCombatAction()
         primaryAction = MeleeStateConfig.GetPrimaryCombatAbility()
     end
 
-    if primaryAction:IsReady() then
-        primaryAction:DoAction()
+    if primaryAction:IsReady(MeleeState.CastRequest()) then
+        primaryAction:DoAction(MeleeState.CastRequest())
     end
 
     if mq.TLO.Me.Class.ShortName() == "MNK" then
         local secondaryAction = MeleeStateConfig.GetSecondaryCombatAbility()
-        if secondaryAction:IsReady() then
-            secondaryAction:DoAction()
+        if secondaryAction:IsReady(MeleeState.CastRequest()) then
+            secondaryAction:DoAction(MeleeState.CastRequest())
         end
     end
 end
@@ -143,8 +148,8 @@ local function DoTankingActionList(actions, usage, timer)
         if Action.IsEnabled(action) then
             local actionType = Action.GetActionType(action)
 
-            if actionType ~= nil and actionType:IsReady() and Action.GetLuaResult(action) then
-                actionType:DoAction()
+            if actionType ~= nil and actionType:IsReady(MeleeState.CastRequest()) and Action.GetLuaResult(action) then
+                actionType:DoAction(MeleeState.CastRequest())
 
                 -- "As Needed" walks the list one action at a time with a short delay between
                 if asNeeded then
@@ -163,32 +168,31 @@ local function DoTankingActions()
     DoTankingActionList(MeleeStateConfig.GetHateActions(), MeleeStateConfig.GetHateUsage(), MeleeState._.hateTimer)
 end
 
-MeleeState._.meleeActions.checkForCombat = function()
-    -- Am I under attack?
-    if MeleeStateConfig:GetAutoEngage() and mq.TLO.Me.CombatState() == "COMBAT" then
-        for i = 1, 20 do
-            local xtarget = mq.TLO.Me.XTarget(i)
-            if xtarget.TargetType() == "Auto Hater" and xtarget.ID() > 0 then
-                MeleeState.EngageTargetId(xtarget.ID())
-                return true
-            end
+---One pass of meleeing whatever we are fighting: get on it, get to it, and swing.
+---
+---Everything it decides is decided here, from the engagement and the client, every pass. There is
+---no "I am attacking" mode: the fight ending, the target changing, or a heal taking the client's
+---target away are all just what the next pass reads.
+---@return boolean isBusy
+local function melee()
+    local targetId = Combat.GetTargetId()
+    if targetId == 0 then
+        -- let go of anything we were holding onto for a fight that is over
+        if MeleeState._.stickTargetId ~= 0 then
+            MeleeState._.stickTargetId = 0
+            Movement.StopFor(MeleeState.key)
         end
-    end
-    return false
-end
-MeleeState._.currentAction = MeleeState._.meleeActions.checkForCombat
-
-MeleeState._.meleeActions.attackTarget = function()
-    -- Not on target? If timed out re-aquire target
-    if mq.TLO.Target.ID() ~= MeleeState._.currentTargetID then
-        if MeleeState._.currentActionTimer:timer_expired() then
-            MeleeState.Reset()
-        end
-        return true
+        return false
     end
 
-    if mq.TLO.Target.Dead() then
-        MeleeState.Reset()
+    -- Swinging needs the client on the target, which casting a heal at a group member takes away
+    -- from us. Ask again on a timer rather than every frame: /mqtarget is a game command and the
+    -- server answers when it answers.
+    if mq.TLO.Target.ID() ~= targetId then
+        if MeleeState._.retargetTimer:timer_expired() then
+            mq.cmd("/mqtarget npc id " .. tostring(targetId))
+            MeleeState._.retargetTimer = Timer.new(500)
+        end
         return true
     end
 
@@ -200,13 +204,13 @@ MeleeState._.meleeActions.attackTarget = function()
 
     -- FixCombatState issues commands, and mq.cmd yields the frame, so the target validated
     -- above can be gone by the time we get here. Read distance once and bail if it is; the
-    -- next pulse falls into the re-aquire branch and lets the timer decide whether to reset.
+    -- next pass picks it up again.
     local distance = mq.TLO.Target.Distance()
     if distance == nil then return true end
 
-    local range = MeleeState.GetSpawnMeleeRange(MeleeState._.currentTargetID)
+    local range = MeleeState.GetSpawnMeleeRange(targetId)
 
-    if MeleeStateConfig.GetStick() and not Movement.IsSticking(MeleeState._.currentTargetID) and distance < MeleeStateConfig.GetEngageDistance() and mq.TLO.Target.LineOfSight() then
+    if MeleeStateConfig.GetStick() and not Movement.IsSticking(targetId) and distance < MeleeStateConfig.GetEngageDistance() and mq.TLO.Target.LineOfSight() then
         MeleeState.StickToCurrentTarget(range)
     end
 
@@ -226,8 +230,8 @@ MeleeState._.meleeActions.attackTarget = function()
             if Action.IsEnabled(action) then
                 local actionType = Action.GetActionType(action)
 
-                if actionType ~= nil and actionType:IsReady() and Action.GetLuaResult(action) then
-                    actionType:DoAction()
+                if actionType ~= nil and actionType:IsReady(MeleeState.CastRequest()) and Action.GetLuaResult(action) then
+                    actionType:DoAction(MeleeState.CastRequest())
                 end
             end
         end
@@ -236,77 +240,18 @@ MeleeState._.meleeActions.attackTarget = function()
     return true
 end
 
+---@return boolean isAttacking whether this state is fighting something right now
+function MeleeState.IsAttacking()
+    return Combat.IsEngaged()
+end
+
+---Stop meleeing, without deciding anything about the fight itself: whether we are still engaged
+---is Combat's answer, and calling this off is not the same as calling that off.
 function MeleeState.Reset()
-    MeleeState._.currentAction = MeleeState._.meleeActions.checkForCombat
-    MeleeState._.currentTargetID = 0
-    MeleeState._.currentActionTimer = Timer.new(0)
+    MeleeState._.retargetTimer = Timer.new(0)
+    MeleeState._.stickTargetId = 0
     -- only our own stick; a higher priority behavior may have taken movement over since
     Movement.StopFor(MeleeState.key)
-end
-
----@param words table
----@param index number first word to take
----@return string text those words back as one string
-local function JoinFrom(words, index)
-    local rest = {}
-    for wordIndex = index, #words do
-        rest[#rest+1] = words[wordIndex]
-    end
-    return StringUtils.Join(rest, " ")
-end
-
----Read what an `action` order is asking for. The switch comes first because the name cannot:
----action names run to several words ("Firestorm of Fists Rk. II"), so everything after the switch
----is name. A name with no switch in front of it flips whatever that slot is now, which is what a
----hotbar button wants to be.
----@param args string everything said after the phrase
----@return string? switch "on", "off" or "toggle"; nil when the order names nothing to switch
----@return string? name what to match against the configured slots
-local function ReadActionOrder(args)
-    local words = StringUtils.Split(StringUtils.TrimFront(args or ""))
-    if #words < 1 then return nil, nil end
-
-    local first = words[1]:lower()
-    local switch
-    if first == "toggle" or first == "flip" then
-        switch = "toggle"
-    elseif UserInput.IsTrue(first) then
-        switch = "on"
-    elseif UserInput.IsFalse(first) then
-        switch = "off"
-    end
-
-    if switch ~= nil then
-        -- a switch and nothing else says what to do without saying what to do it to
-        if #words < 2 then return nil, nil end
-        return switch, JoinFrom(words, 2)
-    end
-
-    return "toggle", JoinFrom(words, 1)
-end
-
----Which configured slots an order is about. An exact name wins outright; failing that, any slot
----whose name contains what was said, so a button can be bound with `off firestorm` rather than
----the whole of "Firestorm of Fists Rk. II".
----@param name string
----@return table matches array of { label = string, action = Action }
-local function FindActionSlots(name)
-    name = name:lower()
-    local exact, partial = {}, {}
-
-    for _, list in ipairs(MeleeStateConfig.GetActionLists()) do
-        for _, action in ipairs(list.actions) do
-            local actionName = tostring(action.name or ""):lower()
-            if actionName == name then
-                exact[#exact+1] = { label = list.label, action = action }
-            elseif actionName:find(name, 1, true) ~= nil then
-                partial[#partial+1] = { label = list.label, action = action }
-            end
-        end
-    end
-
-    if #exact > 0 then return exact end
-    return partial
 end
 
 ---@diagnostic disable-next-line: duplicate-set-field
@@ -317,59 +262,6 @@ function MeleeState.Init()
         MeleeStateConfig.Init()
 
         Menu.RegisterState(MeleeState)
-
-        local attackDocs = ChelpDocs.new(function() return {
-            "(attack <id>) Tells listener(s) to attack spawn with <id>",
-            "(attack off) Tells listener(s) to call off attacks"
-        } end )
-        local function event_Attack(_, speaker, args)
-            -- permission first: a speaker we take no orders from should cost us nothing, not
-            -- even the complaints below
-            if not Commands.GetCommandOwners(MeleeState.eventIds.attack):HasPermission(speaker) then
-                DebugLog("Ignoring MeleeAttack speaker [" .. speaker .. "]")
-                return
-            end
-
-            args = StringUtils.Split(StringUtils.TrimFront(args))
-
-            -- these used to return silently, which is indistinguishable from a broken script
-            -- when the order came from a hotbar button that was never given a target
-            if #args < 1 then
-                print("(attack) No target given. Usage: attack <spawn id>, or `attack off` to call it off.")
-                return
-            end
-
-            if UserInput.IsFalse(args[1]:lower()) then
-                MeleeState.Reset()
-                return
-            end
-
-            local targetId = tonumber(args[1])
-            if targetId == nil then
-                print("(attack) [" .. args[1] .. "] is not a spawn id. Usage: attack <spawn id>")
-                return
-            end
-
-            if mq.TLO.SpawnCount("id " .. tostring(targetId) .. " radius 400 los")() < 1 then
-                print("(attack) Nothing in range and in sight with id [" .. tostring(targetId) .. "]")
-                return
-            end
-
-            DebugLog("MeleeAttack speaker [" .. speaker .. "] targetId: [ " .. targetId .. "]")
-            MeleeState.EngageTargetId(targetId)
-            MeleeState.StickToCurrentTarget(MeleeState.GetSpawnMeleeRange(targetId))
-        end
-        Commands.RegisterCommEvent(Command.new(MeleeState.eventIds.attack, event_Attack, attackDocs)
-            :WithArgs({
-                required = true,
-                hint = "a spawn id, or off",
-                default = "${Target.ID}",
-                choices = function() return {
-                    { label = "Whatever I have targeted", args = "${Target.ID}" },
-                    -- a button that calls the attack off should not be labelled "attack"
-                    { label = "Call off the attack", args = "off", name = "Back off" }
-                } end
-            }))
 
         -- Every switch on the Melee State page, as something that can also be said -- and so
         -- bound to a hotbar button, since the button editor offers every registered command. They
@@ -397,15 +289,6 @@ function MeleeState.Init()
 
         ToggleCommand.Register({
             key = MeleeState.key,
-            phrase = MeleeState.eventIds.autoEngage,
-            summary = "Turns engaging whatever attacks us on or off",
-            about = { "Off waits to be told what to attack: an (attack <id>) order, or the menu's Attack button." },
-            get = MeleeStateConfig.GetAutoEngage,
-            set = MeleeStateConfig.SetAutoEngage
-        })
-
-        ToggleCommand.Register({
-            key = MeleeState.key,
             phrase = MeleeState.eventIds.tanking,
             summary = "Turns the tanking action lists (taunts and hate) on or off",
             about = { "The lists keep their own usage settings; this is the master switch over both." },
@@ -425,135 +308,24 @@ function MeleeState.Init()
             })
         end
 
-        local actionDocs = ChelpDocs.new(function()
-            local lines = {
-                "(action) Switches one of the configured melee actions on or off",
-                " -- Usage: action <on | off | toggle> <part of the action's name>",
-                " -- Or: action <part of the action's name>, to flip whatever it is now",
-                " -- Example: action off firestorm",
-                " -- Enough of the name to pick the action out is enough, and case does not",
-                "    matter. Every slot the name matches is switched together.",
-                " -- Configured slots (Melee State page, Tanking and Melee tabs):"
-            }
-
-            local anyConfigured = false
-            for _, list in ipairs(MeleeStateConfig.GetActionLists()) do
-                for _, action in ipairs(list.actions) do
-                    anyConfigured = true
-                    lines[#lines+1] = "    " .. list.label .. ": " .. tostring(action.name) ..
-                        " [" .. (Action.IsEnabled(action) and "on" or "off") .. "]"
-                end
-            end
-            if not anyConfigured then
-                lines[#lines+1] = "    <none configured yet>"
-            end
-
-            return lines
-        end )
-        local function event_Action(_, speaker, args)
-            if not Commands.GetCommandOwners(MeleeState.eventIds.action):HasPermission(speaker) then
-                DebugLog("Ignoring action speaker [" .. speaker .. "]")
-                return
-            end
-
-            local switch, name = ReadActionOrder(args)
-            if switch == nil or name == nil then
-                print("(action) Nothing named to switch. Usage: action <on | off | toggle> <part of the action's name>")
-                return
-            end
-
-            local matches = FindActionSlots(name)
-            if #matches < 1 then
-                print("(action) No configured action matches [" .. name .. "]. /chelp action lists them.")
-                return
-            end
-
-            -- one value for all of them, taken from the first, so a name fragment that catches
-            -- more than one slot leaves those slots agreeing rather than in opposite states
-            local value = switch == "on"
-            if switch == "toggle" then
-                value = not Action.IsEnabled(matches[1].action)
-            end
-
-            for _, match in ipairs(matches) do
-                Action.SetEnabled(match.action, value)
-                print("(action) " .. match.label .. ": " .. tostring(match.action.name) ..
-                    " [" .. (value and "on" or "off") .. "]")
-            end
-        end
-        ---What the button editor offers as arguments for this command: every action slot this
-        ---character has configured, each of the three ways it can be switched. This is what makes
-        ---the command bindable without knowing how a discipline is spelled -- the alternative is
-        ---typing part of "Firestorm of Fists Rk. II" from memory into a text field.
-        ---
-        ---Read when it is offered rather than built once, so a slot added or renamed on the Melee
-        ---State page is offered here on the next frame. Slots still being filled in have no name to
-        ---switch by and are left out.
-        ---@return table choices
-        local function ActionArgChoices()
-            -- `suffix` is for the button's name, not for the command: a button that flips a
-            -- discipline wants to be called after the discipline, and one that only ever turns it
-            -- on or off wants to say which
-            local switches = {
-                { args = "toggle", group = "Toggle", suffix = "" },
-                { args = "on", group = "Turn on", suffix = " on" },
-                { args = "off", group = "Turn off", suffix = " off" }
-            }
-
-            local choices = {}
-            for _, switch in ipairs(switches) do
-                for _, list in ipairs(MeleeStateConfig.GetActionLists()) do
-                    for _, action in ipairs(list.actions) do
-                        local name = tostring(action.name or "")
-                        if name ~= "" and name:lower() ~= "none" then
-                            choices[#choices+1] = {
-                                label = list.label .. ": " .. name,
-                                args = switch.args .. " " .. name,
-                                group = switch.group,
-                                name = name .. switch.suffix
-                            }
-                        end
-                    end
-                end
-            end
-            return choices
-        end
-
-        ---What a button carrying this command shows: the state of the slots it names, when they
-        ---have one between them.
-        ---@param args string
-        ---@return boolean? state
-        local function ReadActionState(args)
-            local _, name = ReadActionOrder(args)
-            if name == nil then return nil end
-
-            local matches = FindActionSlots(name)
-            if #matches < 1 then return nil end
-
-            local state = Action.IsEnabled(matches[1].action)
-            for _, match in ipairs(matches) do
-                -- slots that do not agree have no one state to show
-                if Action.IsEnabled(match.action) ~= state then return nil end
-            end
-            return state
-        end
-
-        Commands.RegisterCommEvent(Command.new(MeleeState.eventIds.action, event_Action, actionDocs)
-            :WithArgs({
-                required = true,
-                hint = "on, off or toggle, then part of the action's name",
-                choices = ActionArgChoices
-            })
-            :WithState(ReadActionState))
+        -- the same command every state with an action list wants, registered from one place
+        ActionCommand.Register({
+            key = MeleeState.key,
+            phrase = MeleeState.eventIds.action,
+            summary = "Switches one of the configured melee actions on or off",
+            where = "Melee State page, Tanking and Melee tabs",
+            getActionLists = MeleeStateConfig.GetActionLists
+        })
 
         MeleeState.Reset()
         MeleeState._.isInit = true
     end
 end
 
+---@return boolean isBusy
 ---@diagnostic disable-next-line: duplicate-set-field
 function MeleeState.Go()
-    return MeleeState._.currentAction()
+    return melee()
 end
 
 MeleeState.IsTargetInCombatAbilityRange = function()
@@ -569,7 +341,8 @@ end
 
 ---Switching the state off has to call off what it was doing, not just stop it being asked for
 ---another turn: the stick it started is Movement's now and would go on holding range on the
----target we were just told to stop fighting.
+---target we were just told to stop fighting. What it does *not* do is call off the fight -- a
+---paladin told to stop swinging is still fighting the same mob with spells.
 ---@diagnostic disable-next-line: duplicate-set-field
 MeleeState.SetEnabled = function(isEnabled)
     MeleeStateConfig.SetEnabled(isEnabled)

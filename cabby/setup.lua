@@ -3,8 +3,9 @@ local mq = require("mq")
 local Config = require("utils.Config.Config")
 local Debug = require("utils.Debug.Debug")
 
-require("cabby.character")
 local CabbyCasting = require("cabby.casting")
+local Character = require("cabby.character")
+local Combat = require("cabby.combat")
 local Classes = require("cabby.classes.classes")
 local CommandConfig = require("cabby.configs.commandConfig")
 local CommandQueue = require("cabby.commandQueue")
@@ -136,6 +137,8 @@ function Setup:Init(configFilePath, stateMachine)
     -- thing that talks to the keys -- then releases them in that same frame rather than the next
     CabbyCasting.Init(stateMachine)
     CabbyMovement.Init(stateMachine) -- states expect the movement service to exist before they register
+    Character.Init(stateMachine) -- watches for level-ups, AA purchases and bag changes
+    Combat.Init(stateMachine) -- what we are fighting; every state that fights reads it
     ClassSetup(stateMachine)
 
     HotbarsUI.Init()

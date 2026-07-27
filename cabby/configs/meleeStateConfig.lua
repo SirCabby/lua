@@ -6,6 +6,9 @@ local Actions = require("cabby.actions.actions")
 local Character = require("cabby.character")
 local Skills = require("cabby.actions.skills")
 
+---Settings for meleeing something. What that something *is* lives in `cabby.configs.combatConfig`
+----- `auto_engage` moved there when the engagement stopped being a melee idea, and is taken across
+---from this section automatically for characters that already had it set.
 ---@class MeleeStateConfig : BaseConfig
 local MeleeStateConfig = {
     key = "MeleeState",
@@ -40,11 +43,6 @@ local function initAndValidate()
 
     if configRoot.stick == nil then
         configRoot.stick = true
-        taint = true
-    end
-
-    if configRoot.auto_engage == nil then
-        configRoot.auto_engage = true
         taint = true
     end
 
@@ -154,18 +152,6 @@ function MeleeStateConfig.SetEnabled(enable)
     getConfigSection().enabled = enable == true
     Global.configStore:SaveConfig()
     print("MeleeState is Enabled: [" .. tostring(enable) .. "]")
-end
-
----@return boolean isEnabled
-function MeleeStateConfig.GetAutoEngage()
-    return getConfigSection().auto_engage
-end
-
----@param enable boolean
-function MeleeStateConfig.SetAutoEngage(enable)
-    getConfigSection().auto_engage = enable == true
-    Global.configStore:SaveConfig()
-    print("MeleeState Auto-Engage is Enabled: [" .. tostring(enable) .. "]")
 end
 
 ---@return boolean enable

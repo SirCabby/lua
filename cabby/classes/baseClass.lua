@@ -156,6 +156,9 @@ function BaseClass.new(profile)
 
         for _, entry in ipairs(chain) do
             Debug.Log(BaseClass.key, "Registering " .. StateName(entry.state) .. " at priority " .. tostring(entry.priority))
+            -- a state has to know its own band to ask anything that arbitrates by priority for
+            -- something -- a cast, above all -- and only the profile knows what that band is
+            entry.state.priority = entry.priority
             entry.state.Init()
             -- the priority goes to the state machine as well as deciding the order here: a
             -- priority gate (casting, so far) needs to know what it is starving

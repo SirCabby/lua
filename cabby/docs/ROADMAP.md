@@ -4,10 +4,11 @@ Companion to [ARCHITECTURE.md](ARCHITECTURE.md). Origin: design review 2026-07-1
 Vision: one script that bots any class/race — states for every band in the priority table
 (commands, passive, cure, heal, pull, mez, tank, dps, loot, anchor, follow, buff).
 
-Current coverage: Follow/Anchor/ClickZone and Melee states; all sixteen classes load, but
-only as profiles over those two states (the nine melee classes melee, everyone follows);
-melee-only action types (Skill, Discipline). The casting service exists (Phase 3) but no state
-uses it yet — `/ccast` is the only caller. Everything else below.
+Current coverage: Follow/Anchor/ClickZone, Melee, Spell DPS and Heal states, over a shared
+engagement (`combat.lua`); all sixteen classes load as profiles over those four (the nine melee
+classes melee, eleven cast damage, the three priests and three hybrids heal, everyone follows). The casting service and all five action types exist (Phase 3),
+so an action list can hold a spell, clicky or AA and `/ccast` can fire anything by hand.
+Everything else below.
 
 ---
 
@@ -57,6 +58,18 @@ per-line file reopen; timers are wall-clock (decision to ratify or change).
 
 In rough order (details in ARCHITECTURE.md "Target architecture"):
 
+0. ~~**States decide every pass**~~ — **done**, and audited across all four: `Go()` reads the
+   world, decides, acts, releases, and no state carries a mode as a substitute for deciding.
+   MeleeState, SpellDpsState and HealState were restructured onto it; FollowState followed, where
+   `_.currentAction` had been doing three jobs at once (which order is in force, a sub-decision
+   that was derivable from `Movement.IsFollowing`, and genuine click-zone progress). Splitting
+   them turned up two bugs the shape had been hiding: a failed click-zone was restarted on the
+   very next pass forever, and `anchor off` left the state pointing at the anchor it had just
+   dropped. Following and anchoring now cancel each other outright, as the contradictory orders
+   they are, which removed the last piece of remembered "which am I doing" — with only one order
+   ever standing, that is something to read again. Held state is now only the orders we were given
+   and progress through a procedure the world cannot describe. This is what makes the missing give-up paths safe: a state that
+   re-derives its own answer every pass cannot be wedged by one that failed.
 1. ~~Crash barrier + **error surfacing**~~ — **done** (initial version; see Phase 0 barrier
    note). Remaining polish: route through the Phase 1 Logger once it exists.
 2. Loop cadence: base delay now 25 ms (**done**); still to do: per-state throttles so
@@ -145,9 +158,15 @@ ARCHITECTURE.md ("Casting"). What landed:
   Late "resisted"/"did not take hold" lines refine a result already reported as a success.
 - ~~**By hand**~~ — `/ccast <name> [item | alt | gem<#>] [targetid|<#>]`, plus a Casting config
   page showing live status.
-- **Deliberately not done**: retries. A fizzle is reported to the caller, which decides whether
-  casting again still makes sense — a macro loops because it has nowhere else to put that
-  decision; a state machine does.
+- **Deliberately not done**: retrying a cast that was *spent*. A fizzle or a resist is reported to
+  the caller, which decides whether casting again still makes sense — a macro loops because it has
+  nowhere else to put that decision; a state machine does. Waiting, on the other hand, is not
+  giving up: preparation (targeting, standing still, memorizing, waiting out a hand cast) retries
+  indefinitely, since each of those is a wait for something that changes. The five second
+  preparation ceiling that shipped first was removed outright once it was clear it bought churn
+  rather than the freed priority chain it was meant to buy — the callers re-requested immediately
+  anyway, so it was a setting that was wrong whenever it was used. The `notStill` and `busy`
+  outcomes went with it, and old configs have the key taken back out on init.
 - Verified off-client against a simulated client (104 checks: the happy path, waiting to stand
   still and giving up, movement arbitration both ways, fizzle, interrupt, preemption and refusal
   by priority, the queued-request case, no mana, no target, out of range, no line of sight,
@@ -155,28 +174,119 @@ ARCHITECTURE.md ("Casting"). What landed:
   while preparing, bard songs, `StopFor`, and the state machine's gate) under LuaJIT and Lua 5.1.
   **In-game smoke test still pending** — see Verify.
 
+**Discovery and the cast action types: done.** An action slot can hold a spell, a clicky or an
+AA, and what it can be set to is read off the client rather than declared. What landed:
+
+- ~~**`ActionType` for Spell / Item / AA**~~ — one module (`actions/castAction.lua`), since the
+  three differ only in what `CastSubject` already knows. `DoAction(request)` asks the casting
+  service and returns; `request` carries `{ owner, priority, targetId }`, and `BaseClass` now
+  writes each state's band onto the state so it has a priority to pass.
+- ~~**Discovery**~~ — `actions/spells.lua` (the 720-slot book, holes and all, bucketed
+  beneficial/detrimental, sorted newest rank first), `actions/aas.lua` (walks the AA group id
+  space, activated only, bucketed taunt/hate by the AA's own spell SPAs), `actions/items.lua`
+  (clickies in worn slots and bags). `Actions.Get` resolves all five types through these, so a
+  slot naming something the character no longer has comes back nil rather than misfiring.
+- ~~**Refresh triggers**~~ — `character.lua` is a service now: a cheap signature (level, AA
+  points spent, free inventory) checked every five seconds, re-reading only the registry that
+  moved, plus `/crefresh` for what a signature cannot see (an even item swap, a spell scribed
+  over another). Discovery still happens once at require time, which is where the config
+  sections read it from.
+- ~~**Offering them**~~ — the melee action lists offer this character's spells, AAs and clickies
+  (and the tanking lists its taunt/hate AAs, alongside the discs they already had). The picker
+  grew a filter box for lists past a dozen entries and marks spells that are not memorized,
+  since an action slot only fires what is on the bar.
+- ~~**The stick that would ruin the cast**~~ — `Casting.IsHoldingStill(priority)` plus a guard in
+  `MeleeState.StickToCurrentTarget`. The priority floor starves everything *weaker* than a cast,
+  but the rotation that asked for it keeps its turn, and walking back into melee range is
+  exactly what loses it.
+- Verified off-client (54 checks: sparse-book scanning and sort order, activated-only AA scanning
+  and SPA buckets, clickies in gear and bags with duplicates collapsed, `Actions.Get` for every
+  type including the stale-config case, the readiness gates one at a time, a fired action
+  reaching the service with its owner and band, `IsHoldingStill` in all three directions,
+  signature-driven partial refresh, the five-second throttle, and the even-swap case a full
+  refresh exists for) under LuaJIT and Lua 5.1. **In-game smoke test still pending.**
+
 Still open in this phase:
 
-- Implement `ActionType` for **Spell / AA / Item** over the service (`Actions.Get` resolves them;
-  ActionUI already has the slots but the name picker has nothing to offer for those types).
-- Extend `character.lua` discovery: spellbook/memmed gems, AAs, clickies, songs; refresh
-  triggers (level/skill-up events, gear swap, respec) instead of load-time-only snapshot.
 - Buff-stacking model (`Spell.Stacks`, existing-buff checks) shared by buff/heal logic.
+- Songs: a bard's action list works, but nothing twists.
+- A rotation cannot memorize. `CastAction:IsReady` requires the gem, deliberately (see
+  ARCHITECTURE.md); an action slot for a spell that is not on the bar therefore idles. Revisit
+  if configuring one turns out to be a common mistake rather than a rare one.
 
 ## Phase 4 — The planned states
 
-Per priority band: **Passive** (global pause; also a /cpause slash + comm command),
-**Heal** (self + group + role targets, HP thresholds, emergency vs topping),
+**Heal: done** (`states/healState.lua`, `configs/healStateConfig.lua`,
+`ui/states/healStateMenu.lua`; the model is described in ARCHITECTURE.md, "Heal state"). What
+landed:
+
+- ~~**The state**~~ — one ordered list of heal slots, each an action plus the health it is for and
+  who it is for (anyone / the tank / myself / anyone else). An order first, then a group heal when
+  enough of the group is hurt, then whoever is worst off; group heals stand down while anyone is
+  below the emergency point.
+- ~~**Reconsidering a heal in the air**~~ — called off when the target dies or leaves, climbs back
+  above the threshold that triggered it, or somebody else drops into an emergency.
+- ~~**Commands**~~ — `healnow <id | off>` and `healme` (which acts on whoever said it, the "patch me"
+  of the old cleric macros) as orders; `healing`, `healgroup` and `healpets` as switches;
+  `healaction` over the configured slots; `/cheal` for status. All of them are hotbar-bindable
+  because they are ordinary registered commands: `healnow` offers the target, self and call-off as
+  argument choices, and the switches read their own state back so a button carrying one is drawn
+  as that switch.
+- ~~**The page**~~ — status, who is being watched and their health, the switches, the emergency
+  point, and the slot list with its per-slot threshold and scope. `ActionUI.ActionControl` grew an
+  `extras` hook for the per-slot controls that belong to the state rather than to the action.
+- ~~**The command factory**~~ — the `action` command moved out of MeleeState into
+  `commands/actionCommand.lua`, so both states register the same thing instead of one copying the
+  other.
+- ~~**Class profiles**~~ — CLR/DRU/SHM at the heal band (druid and shaman one step lower until
+  runtime priority adjustment exists), PAL/RNG/BST at `Priorities.heal + 5`, with the matching
+  `unimplemented` lines removed.
+- Verified off-client (54 checks: a healthy group left alone, worst-off-first selection, scope
+  filtering in both directions, group heals with and without enough hurt, emergency standing down
+  a group heal, called-off heals for all three reasons, the settle window and its emergency
+  exemption, orders ahead of the state's own judgment, `healme` resolving the speaker, an order
+  for a healthy target refused, the switches and the shared action command reaching the config)
+  under LuaJIT and Lua 5.1. **In-game smoke test still pending** — see Verify.
+
+**Spell DPS: done** (`states/spellDpsState.lua`, its config and page), and with it the split the
+dps band always implied. What landed:
+
+- ~~**The engagement came out of the melee state**~~ — `combat.lua` holds what we are fighting,
+  because `attack <id>` has to mean the same thing to a warrior and a wizard and only one of them
+  has a melee state. It owns the `attack` order, the `autoengage` switch and `/cattack`, drops a
+  target that dies or leaves, and sweeps the extended target window (throttled) to pick one up.
+  It runs no game commands, which fixed a latent crash hazard: the Attack button used to run
+  `/mqtarget` from inside the ImGui render callback.
+- ~~**A rotation state**~~ — an ordered list like the melee one, with three restraints that are
+  all about not making a fight worse: `start below %` (let the tank land something first),
+  `stop below %` (no four second cast on a mob that dies in two) and a mana floor. It registers at
+  `dps - 1`, above melee, because the melee state reports busy for as long as it is engaged.
+- ~~**Spells left the melee list**~~ — that list offers skills, discs, AAs and clickies, which is
+  what the MQ2Melee lines it replaced actually did.
+- ~~**`Casting.CanPreempt`**~~ — the split surfaced a real bug: `CastAction:IsReady` refused
+  whenever *anything* was casting, so a stronger state could never take a weaker cast over
+  through the action layer, and a heal could not interrupt a nuke. Callers now pass their band to
+  `IsReady` as well as to `DoAction`.
+- ~~**auto_engage moved**~~ to the combat config, taken across automatically from the melee
+  section for characters that already had it set.
+
+Still to come, per priority band: **Passive** (global pause; also a /cpause slash + comm command),
 **Cure** (detrimental scan → cure actions), **Pull** (target selection, pathing, leash,
 camp radius), **Mez** (add control, in-combat priority above dps), **Tank** (taunt/hate
 action lists already modeled in MeleeStateConfig; needs aggro-loss detection for "as
-needed" usage), **DPS** (melee exists; add caster rotations + assist-at-% rules),
+needed" usage), **assist rules** (both dps states fight what `Combat` says; nothing yet says
+"fight what the main assist is fighting"),
 **Loot** (corpse scan, loot rules per item, master-loot coordination),
 **Buff** (self/group maintenance with stacking + rebuff timers).
 Each new state = state module + config section + UI panel + comm commands, which is why
 the Phase 1 module contract comes first. Landing one is also a sweep over `classes/*.lua`:
 the per-class view of this list is each profile's `unimplemented` lines, and a state that
 exists moves from that list into the profile's `states` at its band.
+
+Heal's own leftovers, for when the bands around it exist: heal-over-time management (a HoT is
+wasted on someone about to be topped off, which needs buff tracking), rezzing, curing at the cure
+band, and any awareness of what *other* healers are doing — two clerics on one tank both cast, and
+only the group coordination in Phase 5 can fix that.
 
 Two of these are already half-written elsewhere and only need the state around them:
 **Tank** (MeleeState's taunt/hate lists run on a timer; what is missing is aggro-loss
@@ -216,9 +326,10 @@ backstab positioning; nothing asks for it).
   `Spawn(...)` queries 2–3× per frame), XTarget scan throttling.
 - **Docs for users**: /chelp exists; needs a README quickstart (install, plugins, first-run
   config, command tour).
-- **Tests for cabby layer**: none today. Highest-value first targets: command parsing
-  (slash arg paths — several Phase 0 bugs live there), Owners ACL, config init/migration,
-  follow stuck-detection math.
+- **Tests for cabby layer**: off-client harnesses now cover casting, discovery and the action
+  types, the heal state, the follow state (including its stuck detection and the click-zone
+  procedure), and the wiring. Still uncovered and worth doing next: command parsing (slash arg
+  paths — several Phase 0 bugs live there), the Owners ACL, and config init/migration.
 
 ## Verify (assumptions to test in-game)
 
@@ -261,6 +372,35 @@ backstab positioning; nothing asks for it).
    resist wording differs between live and emu builds, and MQ2Cast carries both), that
    `Spell.MyCastTime` reads as milliseconds through `tonumber`, and that `/keypress back` cancels
    autorun without upsetting the movement service's own key bookkeeping.
-11. In-game smoke of the 2026-07-18 Phase 0 fixes: fresh-config startup on a taunt-less
+11. **Discovery, in game.** `/crefresh` on a caster and a melee: do the counts look right, and
+   how long does it take (the AA scan walks 5000 group ids — if that is slow enough to notice,
+   the bound or the approach needs revisiting, and if a known AA is *missing* the bound is too
+   low). Then: does `Me.AltAbility[groupId].Passive` filter what it should on emu, does
+   `item.Clicky.SpellID` find clickies in bags as well as worn gear, and does `Me.Book` return
+   the sparse book this assumes rather than a packed list. After that, configure a spell in a
+   melee action list on a hybrid and watch a fight: the rotation should cast when the spell is
+   memorized and idle when it is not, the stick should pause for the cast rather than fighting
+   it, and melee should resume the frame the cast ends. Finally, gain a level and buy an AA and
+   confirm the service picks both up within five seconds without a `/crefresh`.
+12. **Healing, in game.** On a cleric with a couple of slots configured: does the state pick the
+   person you would have picked, and the heal you would have used? Watch the reported reasons on
+   `/cheal` while a fight goes badly. Specifically worth confirming, since they are the parts a
+   simulated client cannot answer: that `Group.Member[#].Spawn.PctHPs` tracks fast enough that the
+   settle window is the right length (too short and heals double up, too long and a tank dies
+   waiting), that `MainTank` is set the way the group actually plays, that a called-off heal
+   really does free the priority chain the same frame, and that a heal on a member out of line of
+   sight is refused by the slot rather than by the client. Then the orders: `healnow ${Target.ID}`
+   from a hotbar button, and `healme` spoken by a tank in another window — and while you are
+   there, confirm the prefix rule the naming assumes (a phrase also matching longer lines that
+   start with it) actually holds, since Verify item 1 has never been answered.
+13. **The dps split, in game.** On a hybrid (a paladin is the clearest): does `attack <id>` start
+   both the swinging and the casting, does `melee off` leave the spells running, and does `nuke
+   off` leave the swinging? Then the ordering that the split depends on — the rotation should get
+   its cast in without the melee state starving it, and a heal should interrupt a nuke rather
+   than waiting for it. On a wizard: `attack ${Target.ID}` with no melee state anywhere, and
+   `start below %` actually holding fire until the tank has aggro. Also confirm the auto_engage
+   migration: a character with an existing config should keep whatever it had set, and its
+   `MeleeState` section should come back without the key.
+14. In-game smoke of the 2026-07-18 Phase 0 fixes: fresh-config startup on a taunt-less
    class, follow/stuck detection, add-new-action UI flow, `/activechannels <cmd> reset`,
    and the Cabby Alerts window (force an error to see alert + log + pause/resume).

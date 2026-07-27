@@ -22,6 +22,8 @@ cabby.lua
        ├─ CommandQueue.Init  — registers the command queue service (what UI presses run through)
        ├─ CabbyCasting.Init  — registers the casting service, its priority gate + /ccast
        ├─ CabbyMovement.Init — registers the movement service + /cmove
+       ├─ Character.Init     — registers the discovery service + /crefresh
+       ├─ Combat.Init        — registers the engagement service, /cattack + the attack order
        ├─ ClassSetup         — this character's class module assembles + registers its states
        ├─ HotbarsUI.Init()   — ImGui shell for the hotbar windows
        └─ Menu.Init()        — ImGui shell (must be last)
@@ -29,17 +31,25 @@ cabby.lua
 ```
 
 **Main loop** (`stateMachine.lua`, one pass is `Frame()`): `mq.doevents()` → pulse registered
-**services** → walk registered states in registration order → first enabled state whose `Go()`
-returns `true` ("busy") wins the frame; everything below it is starved → `mq.delay(25)`.
+**services** → walk registered states in registration order until one returns `true` →
+`mq.delay(25)` → start again from the top.
+
+Read the return value as *"start the loop again"* rather than *"I win"*. A state returns `true`
+when nothing weaker should act until what it started has resolved; the pass ends there and the
+next one re-evaluates from the strongest state down, so everything **above** it is reconsidered
+immediately. Returning `false` means "nothing for me to do" and the walk continues down. States
+fall through until one of them finds something worth doing.
 
 **Services** run every frame regardless of which state is busy (`RegisterService`, anything
 with `key` + `Pulse()` and optionally `Stop()`). They are for work that cannot wait for its
-requesting state to get another turn. Three exist: **Movement**, which has to release its keys
+requesting state to get another turn. Five exist: **Movement**, which has to release its keys
 on the frame its task ends rather than whenever FollowState next runs; **Casting**, whose whole
 point is that the caster is starving everything below it while the cast runs, so the cast has to
-progress without a turn of its own; and **CommandQueue** (`commandQueue.lua`), which runs command
+progress without a turn of its own; **CommandQueue** (`commandQueue.lua`), which runs command
 lines pushed to it by callers that must not run commands themselves — every ImGui callback,
-hotbar buttons above all.
+hotbar buttons above all; **Character** (`character.lua`), which watches for the character
+gaining a level, an AA or a bag of clickies and re-reads what it can do; and **Combat**
+(`combat.lua`), which holds what we are fighting for the several states that fight it.
 
 This is a **priority-chain cooperative scheduler**: state order = priority; `Go()` returning
 `false` yields to lower states. The priority bands live in `classes/priorities.lua`:
@@ -67,11 +77,41 @@ registered without one is never starved, since there is no way to judge it. Cast
 gate today, and anything else that commits the character for longer than a frame belongs here
 too.
 
-**States are mini-FSMs.** Each state keeps a `_.currentAction` function pointer; action
-functions do one frame of work, mutate `currentAction` to transition, and return busy/yield.
-Example: FollowState's actions are `findFollowTarget → keepClose` plus a click-zone chain
-(`findingSwitch → clickingSwitch → waitingToZone`) and `stayingAtAnchor`. Timers
-(`utils.Time.Timer`, wall-clock ms) drive stuck detection and timeouts.
+**Every state keeps the same contract** — written out in full in `states/baseState.lua`, which is
+the thing to read before writing one. In short, `Go()` is one pass of:
+
+1. **a quick check** of what should be happening, made from the world every pass and never from a
+   mode left over from the last one (expensive reads throttled and cached, since this runs at the
+   top of the chain forty times a second);
+2. **starting the action without waiting for it** — anything that takes time is requested from the
+   service that owns it (casting, movement) and polled on later passes, so nothing in a state ever
+   blocks;
+3. **releasing**, `true` to end the pass and start again from the top, `false` to hand the turn
+   down.
+
+Held state is only what cannot be re-derived, and it comes in two kinds:
+
+- **The order we were given** — who to follow, where the anchor is, what we are fighting. Nothing
+  in the world can tell you these; somebody said them. Keep the *order*, though, not a conclusion
+  drawn from it: FollowState briefly held a `job` field saying whether following or anchoring was
+  in force, and it turned out to be unnecessary once conflicting orders cancel each other (a
+  follow and an anchor contradict, so the newer one clears the older) — with only one order ever
+  standing, which one it is went back to being something to read.
+- **Progress through a procedure the world cannot describe** — a clicked door looks exactly like
+  an unclicked one, so FollowState's click-zone chain keeps its step.
+
+Everything else is read fresh, and what is held is confirmed or dropped every pass. Mode is not
+held state; it is a decision, and decisions are re-made — "am I following them right now" is
+`Movement.IsFollowing`, not something to remember.
+
+This is what makes the chain robust without timeouts rescuing it: no failure path can wedge a
+state that re-derives its own answer every pass. A cast that cannot get started, a move that will
+not finish, a target that will not take — each is looked at again on the very next pass and
+dropped as soon as it stops being the right thing to do. The services have no give-up timers
+because they would be rescuing a problem that cannot happen.
+
+Timers (`utils.Time.Timer`, wall-clock ms) throttle expensive reads and pace retries; they do not
+decide anything.
 
 **States are singletons**, not instances: a module table with `Init/Go/IsEnabled/SetEnabled/
 BuildMenu`. `BaseState` documents this contract but is *not* a real metatable base — the
@@ -83,19 +123,21 @@ BuildMenu`. `BaseState` documents this contract but is *not* a real metatable ba
 cabby/
   cabby.lua           entry; defines global `Global` { tracing (FlowTracer), configStore }
   setup.lua           plugin checks, config init order, class dispatch (16-way if/elseif)
+  character.lua       service: what this character has, discovered and kept current
+  combat.lua          service: what this character is fighting; every state that fights reads it
   stateMachine.lua    priority-chain loop + per-frame services + priority gates (instance class)
   movement.lua        wiring only: registers the movement service and /cmove
   casting.lua         wiring only: casting service, its priority gate, movement arbiter, /ccast
   commandQueue.lua    service: runs command lines pushed from ImGui callbacks, a frame later
   character.lua       capability snapshot: which skills exist (primary/secondary/melee lists)
   status.lua          shared predicates (IsFacingTarget)
-  states/             baseState, followState, meleeState
+  states/             baseState, followState, meleeState, spellDpsState, healState
   classes/            priorities (the bands), baseClass (assembly), classes (the registry),
                       and one profile per EQ class
-  commands/           the chat-command bus (see below)
+  commands/           the chat-command bus (see below), incl. the toggle/action command factories
   configs/            per-domain config modules (see below)
   actions/            ActionType interface + implementations + registries
-  ui/                 ImGui menu shell + per-domain panels
+  ui/                 ImGui menu shell + per-domain panels (states/, actions/, hotbars)
   utils/ (sibling)    Movement/ and Casting/ (see below), Time/Timer/StopWatch, Config,
                       Debug/FlowTracer, FileSystem, Json, PriorityQueue (unused), Stack,
                       StringUtils, TableUtils
@@ -136,10 +178,17 @@ inits and registers each in that order. Rules it enforces:
   register. A bot that quietly follows the group around and never casts is worse than a loud
   failure, not better.
 
-Which classes register **MeleeState** is the only capability judgment made here: the nine
-melee classes (WAR, PAL, SHD, MNK, ROG, BER, RNG, BST, BRD) do; the priests and casters do
-not, because a cleric that walks into melee instead of healing is worse than one that stands
-still. A shaman played as a melee on emu adds the entry to its own profile. Everything
+Which states a class registers is the only capability judgment made here. The nine melee classes
+(WAR, PAL, SHD, MNK, ROG, BER, RNG, BST, BRD) melee; the priests and casters do not, because a
+cleric that walks into melee instead of healing is worse than one that stands still. A shaman
+played as a melee on emu adds the entry to its own profile. The eleven classes that can hurt
+something with a spell register **SpellDpsState** a band above melee, which for a hybrid means
+both. The three
+priests heal, and so do the three hybrids that can (PAL, RNG, BST) — but a band lower
+(`Priorities.heal + 5`), which is the whole reason the bands are numbers: a paladin's heal has to
+land below a cleric's, and that is only checkable if both name the same band. A druid or shaman in
+a group with no cleric should tighten to the full band, which needs the runtime priority
+adjustment that does not exist yet. Everything
 narrower than "can this class do this at all" — does it have bash, does it have taunt discs —
 stays where it already is, in `character.lua` and the action registries.
 
@@ -178,6 +227,9 @@ The most developed subsystem. Three registration kinds, all carrying self-docume
 - **Slash commands** (`SlashCmd`): `mq.bind` wrappers (/chelp, /cself, /debug, /activechannels,
   /speak, /owners, /state, /cmenu, /restart).
 
+**Two command factories** cover the shapes every state needs, so a new state registers its
+commands instead of writing them (`commands/toggleCommand.lua`, `commands/actionCommand.lua`).
+
 **Settings are commands too** (`commands/toggleCommand.lua`). A setting the menu draws as a
 checkbox is also registered as a one-word comm command over that same setting — `stick off`,
 `tanking on`, or the phrase by itself to flip whatever it is now. The factory writes the help
@@ -187,14 +239,19 @@ holds no state: `get`/`set` are the config's own accessors, the ones the checkbo
 button, a chat order and the checkbox cannot disagree. Saying what changed is left to the setter,
 which is where this codebase already prints it — printing in both places would report every flip
 twice and still leave the checkbox as the one path that says nothing. MeleeState registers `melee`,
-`stick`, `autoengage`, `tanking`, and `bashoverride` for characters that can bash, plus `action
-<on | off | toggle> <part of an action's name>` over the configured action slots (exact name wins;
-failing that every slot whose name contains the fragment is switched together, so they end up
-agreeing rather than in opposite states). `/chelp action` lists those slots with their current
-state, which is also what the button editor's docs pane shows while the command is picked. Two of
-these switches have to call off work in progress rather than only stopping new work: `melee off`
-resets the state and `stick off` releases the stick Movement is still holding, both through
-`MeleeState` rather than the config, so the checkboxes get the same behavior.
+`stick`, `autoengage`, `tanking`, and `bashoverride` for characters that can bash; HealState
+registers `healing`, `healgroup` and `healpets`. Switches that have to call off work in progress
+rather than only stopping new work go through the *state* rather than the config, so the
+checkboxes get the same behavior: `melee off` resets the state, `stick off` releases the stick
+Movement is still holding, and `healing off` interrupts the heal in the air.
+
+**Action lists are commands too** (`commands/actionCommand.lua`). Any state with configured action
+slots gets `<phrase> <on | off | toggle> <part of an action's name>` from the same factory —
+`action` for the melee lists, `healaction` for the heal list. Exact name wins; failing that every
+slot whose name contains the fragment is switched together, so they end up agreeing rather than in
+opposite states. `/chelp action` lists those slots with their current state, which is also what the
+button editor's docs pane shows while the command is picked, and the choices it offers are the
+slots configured *right now*, each of the three ways they can be switched.
 
 **The local ("self") channel.** `Speak.channelTypes.self` is a channel that never touches chat.
 `Commands.Dispatch(line)` hands a comm phrase straight to its registered handler with our own
@@ -320,23 +377,47 @@ Rules that matter when adding a caller:
   line that usually never comes, the service refines the recorded result for a couple of seconds
   afterwards — so a caller that cares about resists reads `GetResult` on the frame *after* it
   first goes terminal.
+- **A behavior level with the cast still has to be asked.** The floor starves everything
+  *weaker*, but the state that asked — a melee rotation firing a spell out of its own action
+  list — keeps its turn, and re-sticking to the mob is exactly what loses the cast it just
+  requested. `Casting.IsHoldingStill(priority)` is the question anything that moves the
+  character asks first; MeleeState's stick goes through it. A cast weaker than the asker does
+  not hold it back, because a buff that cannot be cast while the group is running is a buff that
+  fails and says so, not a reason to stop following.
 - **It never retries.** A fizzle or an interrupt is reported and the caller decides whether
   casting again is still the right thing to do; by then the mob may be dead or the heal no longer
   needed. MQ2Cast loops internally because a macro has nowhere else to put that decision. A state
   machine does.
 - Preparation runs as far as it can in one frame (the steps chain until one has to wait on the
   client), so a character standing still with the spell memorized casts on the frame it was asked
-  to. Everything that waits is bounded: one budget for the whole preparation
-  (`prepareTimeoutMs`), and a cast that never appears on the client is reported as
-  `didNotStart` rather than holding the chain open.
+  to.
+- **Preparing does not give up, and there is no setting to make it.** Waiting to stand still,
+  waiting to get on target, waiting on a memorize, waiting for a hand cast to finish — every one
+  is a wait for something that will change, and the retry *is* the command: `/mqtarget` and
+  `/memspell` are re-issued rather than failed on a timer. There was a five second budget once,
+  justified as freeing the priority chain. It did not do that: both callers re-request the moment
+  a cast fails, so the chain below was starved in five second bursts either way, while each new
+  attempt threw away the settling the last one had done. What actually ends a cast that is going
+  nowhere is the caller no longer wanting it — a decision only the caller can make, and both of
+  them make it (HealState drops a heal the moment the target no longer needs it; SpellDpsState
+  drops one when the target dies). A cast stuck on the same reason for thirty seconds says so once
+  in chat rather than waiting silently.
+
+  Two things that look like give-ups are not: `notReady` after a short grace is the answer to "the
+  gem is on cooldown", which is a real no rather than a not-yet, and the in-flight timeouts below
+  are faults rather than waits.
+- What *is* bounded is everything after the command goes out, because those are faults rather than
+  waits: a cast that never appears on the client is `didNotStart`, and a cast bar that never
+  closes is `timedOut`.
 
 `/ccast <name> [item | alt | gem<#>] [targetid|<#>]` drives it by hand, at the commands band, and
 reports the outcome when it lands; `/ccast` alone reports what casting is doing and `/ccast off`
 cancels it. Settings (memorize gem, settle window, preparation budget) live in
 `configs/castingConfig.lua`, whose menu page also shows the live status.
 
-Nothing calls the service on its own yet — the states that would (heal, buff, cure, mez) do not
-exist, and the Spell/AA/Item `ActionType`s are still the gap described below.
+Callers today are `/ccast` and any configured action slot holding a spell, clicky or AA (see
+Action system below). The states that would use it on their own — heal, buff, cure, mez — do not
+exist yet.
 
 ## Action system (`actions/`)
 
@@ -349,11 +430,26 @@ exist, and the Spell/AA/Item `ActionType`s are still the gap described below.
 - **Discipline** (`discipline.lua`): combat abilities via `/disc`; `disciplines.lua` scans
   `Me.CombatAbility(1..200)` at require time and buckets by SPA (92/192 → hate) and target
   type (Single → melee). (`taunt` bucket exists but is never populated — bug.)
-- **AA / Item / Spell**: enum values and UI plumbing exist (`actionType.lua`, `actionUI.lua`)
-  but `Actions.Get` only resolves Ability and Discipline, so an action slot still cannot hold a
-  spell. What was missing underneath — the casting service — now exists (see Casting above);
-  what is left is an `ActionType` apiece over it, plus the character discovery that would let the
-  action UI *offer* a spell, AA or clicky to pick from.
+- **Spell / Item / AA** (`castAction.lua`): one module for all three, because what separates
+  them already lives in `CastSubject` (which TLO says it is ready, which command fires it,
+  whether it has to be memorized). What is left over is the same for each — and it is not
+  casting: `DoAction(request)` hands a request to the casting service and returns, so the frame
+  carries on while the cast takes its three seconds. The `request` (`{ owner, priority,
+  targetId }`) is how the caller says who it is; `MeleeState.CastRequest()` builds one from its
+  own band, which the class profile wrote onto the state at registration.
+
+  `IsReady(request)` is deliberately stricter than the cast's own checks, because a rotation walks
+  its whole list every frame and each item on it would otherwise raise the priority floor, starve
+  the states below, and then fail: not without the mana, not without a target in range, and — for
+  spells — **not unless it is memorized**. The request matters twice over: `targetId` is who the
+  range and line of sight are judged against (a heal is chosen for a group member nobody has
+  targeted yet), and `priority` is what decides whether a cast already in flight means "not now".
+  A cast in flight normally does — but a caller that outranks whoever is casting is exactly who
+  should take it over (`Casting.CanPreempt`), and answering "not now" to them would put the
+  priority chain's whole point out of reach: a heal could never interrupt a nuke. The casting
+  service *can* memorize, and anything asking for one specific cast should let it, but a
+  rotation that stops to memorize mid-fight stops for eight seconds. The picker marks which
+  spells are on the bar so a slot that will never fire is visible while it is being configured.
 
 **Action** (`action.lua`) is the *persisted config shape* for a user-configured action slot:
 `{ name, actionType, enabled, luaEnabled, lua, end_type, end_threshold }`. `luaEnabled`
@@ -372,8 +468,157 @@ later could put back the value captured when the row was first drawn — includi
 came from a hotbar button. `enabled` absent means on, which is how slots saved before the switch
 existed, and slots that were just added, come forward.
 
-`character.lua` is the capability layer: which skills/discs this character actually has,
-snapshotted at load (refresh triggers are a known gap: level-ups, gear swaps, respecs).
+### Discovery (`character.lua` + the registries)
+
+What a character *has* is read from the client, never declared: the same shadowknight has
+different discs at 45 and at 70, and a different bag of clickies after every trip to the bazaar.
+Each kind has a registry that answers `Get(name)` and `Refresh()`, and holds the shared instance
+for each thing (so one disc's cooldown timer is one timer, however many lists it appears in):
+
+| Registry | Where it comes from | Buckets |
+|---|---|---|
+| `skills.lua` | static list, filtered by `Me.Ability` | facing, targeted, primary, secondary, melee |
+| `disciplines.lua` | `Me.CombatAbility(1..200)` | taunt (SPA 199), hate (SPA 92/192), melee (Single) |
+| `spells.lua` | `Me.Book(1..720)` | beneficial, detrimental; sorted by level, newest rank first |
+| `aas.lua` | `Me.AltAbility(groupId)` over the id space | taunt, hate, by the AA's own spell SPAs |
+| `items.lua` | worn slots 0-22 and bags 23-34 | clickies only (`Clicky`, not `Spell`) |
+
+Three things about this are worth knowing before changing it:
+
+- **The spellbook has holes.** A spell sits on the page the player put it on, so an empty slot
+  says nothing about the ones after it — the whole 720-slot array is read every time.
+- **AAs cannot be listed.** `Me.AltAbility[#]` answers for one *group id* and returns nothing
+  for one this character does not own, so finding them means walking the id space (bounded at
+  5000). That single scan is the reason discovery is not on a timer.
+- **Only `Clicky` counts** for items. An item's `Spell` is whatever spell is attached to it,
+  which for most gear is a proc or a worn effect that clicking does nothing for.
+
+`character.lua` owns all of it and keeps it current as a service: a cheap signature — level, AA
+points spent, free inventory — is read every five seconds, and only the registry that signature
+says has moved is re-read (a level brings discs and spells, an AA purchase brings AAs, a change
+in bag space brings clickies). `/crefresh` re-reads everything, which is what covers the cases
+the signature cannot see: an even item swap, or a spell scribed over another.
+
+Everything downstream reads through these. `Actions.Get(type, name)` resolves a configured slot
+against them and returns nil when the character no longer has the thing, which is what makes a
+stale config harmless rather than an error; the action editor offers exactly what they hold, with
+a filter box once a list passes a dozen entries, because a spellbook is not something anyone
+scrolls.
+
+## Combat (`combat.lua`) — what we are fighting
+
+One target, whoever put it there, and everything that fights reads it. It was a field on the
+melee state until a wizard needed one too: `attack <id>` has to mean the same thing to a warrior
+and a wizard, and only one of them has a melee state to keep it in.
+
+It holds no opinion about *how* to fight. The melee state gets on target and swings, the spell dps
+state casts at it, a tank state will taunt it — and each decides for itself about range, whether
+it is worth it, and when to give up. What Combat does is narrow:
+
+- **Keeps the engagement honest.** The pulse drops a target that is dead or gone, which is how
+  every state finds out the fight is over at the same moment.
+- **Picks one up.** With `autoengage` on, an extended-target sweep (throttled to 250 ms, and only
+  while the client says we are in combat) engages whatever is on us. `Auto Hater` is the client's
+  own word for "this is fighting you", which beats anything we could work out ourselves.
+- **Owns the `attack` order** and the `autoengage` switch, and reports on `/cattack`.
+
+**It issues no game commands**, which is what makes `Combat.Engage` safe to call from an ImGui
+button. The Attack button used to call `MeleeState.EngageTargetId`, which ran `/mqtarget` from
+inside the render callback — the crash-to-desktop hazard the movement service is built around.
+Targeting is now the melee state's business, done from its own pulse, because swinging is what
+needs the client's target; a cast targets through the casting service.
+
+## The two dps states
+
+`Priorities.dps` is one band and two jobs, so it is two states: **MeleeState** walks into range
+and swings, **SpellDpsState** casts from where it stands. They were one state until spells could
+be cast at all, and splitting them is what stops a state called Melee from being where a wizard's
+nukes live.
+
+**SpellDpsState registers at `dps - 1`, above the melee state.** MeleeState reports busy for as
+long as it is engaged — there is always another swing coming — so a rotation below it would never
+get a frame. Above it, the rotation takes the frame only when it actually starts a cast and
+yields the rest of the time, which is what the `- 1` in the bands was described for. A hybrid runs
+both: paladin, ranger, beastlord and shadow knight all register the pair.
+
+What each one holds:
+
+| | MeleeState | SpellDpsState |
+|---|---|---|
+| Gets on target | yes, `/mqtarget` from its own pulse | no, the casting service targets |
+| Movement | sticks, at the configured engage distance | none; it casts from where it is |
+| Actions offered | skills, discs, AAs, clickies | detrimental spells, AAs, clickies |
+| Holds back for | nothing — swinging is free | target above `start below %`, below `stop below %`, mana under the floor |
+| Switch | `melee` | `nuke` |
+| Action command | `action` | `nukeaction` |
+
+The restraints on the spell side are all the same idea: a caster with none pulls the mob off the
+tank, runs itself out of mana, and spends a four second cast on something that dies in two.
+`start below %` is the cheapest aggro management there is — wait for the tank to land something.
+Anything more specific than those three numbers goes in a slot's Lua predicate, which is the
+escape hatch the action list already had.
+
+Both states fight whatever `Combat` says, so `attack <id>` starts both, `attack off` ends both,
+and `melee off` on a paladin stops the swinging while the spells carry on.
+
+## Heal state (`states/healState.lua`)
+
+The first state built on the casting service, and the first one whose job is a *choice* rather
+than a sequence: who is worst off, which heal suits them, and whether the heal already in the air
+is still the right one. The casting does not belong to it — it asks the casting service and polls
+the result — and neither does holding the rest of the chain back, which the priority floor does
+for it.
+
+**One ordered list of heal slots decides everything.** A slot is an action (a spell, an AA or a
+clicky) plus the health it is *for* (`hp_threshold` — use it on someone at or below this) and who
+it is for (`heal_scope`: anyone, the tank, myself, anyone else). Walking that list in order and
+taking the first slot that fits is how every heal macro since AFCleric has chosen a heal; what is
+different is that one mechanism covers what those macros spelled out one setting at a time. A slot
+at 85% scoped to the tank is TankHealPoint. A slot at 50% scoped to yourself is SelfHealPoint. A
+group heal at 60% is DivArbPoint. There is no separate setting for any of them, and a class the
+author never thought about needs no new setting either.
+
+The order things are decided in, every pulse:
+
+1. **An order first** (`healnow <id>`, `healme`). Someone asking outranks the state's own judgment —
+   that is the point of being able to ask — so the slots are read only for *which* heal suits
+   them: scope still applies, the health the slot was written for does not. A target already at
+   full health is refused out loud rather than healed, and an order that cannot be acted on within
+   ten seconds is dropped rather than landing long after it mattered.
+2. **A group heal**, when enough of the group is at or below the slot's threshold (`group_min`).
+   Whether a slot *is* a group heal is read off the spell (`NeedsTarget` is false for Group v1/v2),
+   not configured — a group heal is what it is, and asking the user to say so is one more thing to
+   get wrong. Skipped entirely while anyone is below the emergency point: three people at 60% is
+   what a group heal is for, and one person at 15% is not, however many others are scuffed.
+3. **Whoever is worst off**, with the first slot whose scope and threshold fit them.
+
+**A heal in the air is reconsidered every pulse.** It is called off when the target dies or leaves,
+when they climb back above the threshold that triggered it (plus a margin, so a heal landing from
+elsewhere at exactly the trigger point does not make us throw ours away), or when somebody *else*
+drops below the emergency point. Calling off costs the mana already spent and saves the seconds
+that matter; MQ2Cast's own docs pitch this as the reason a cast returns control immediately.
+
+Two smaller rules worth knowing:
+
+- **A heal that lands is not immediately cast again.** The client can take a moment to report the
+  new health, and without a settle window the next pulse reads the old number and casts the same
+  heal at someone who no longer needs it. Anyone below the emergency point is exempt — chain
+  healing a tank at 20% is the entire job.
+- **Only memorized spells are used**, because that is what `CastAction:IsReady` requires of every
+  action slot (see Action system). A heal that stops to memorize stops for eight seconds.
+
+Who is watched: this character, the group (`healgroup`), and this character's pet (`healpets`, off
+by default — a pet is cheaper to summon than the mana spent keeping it up). Members who are out of
+zone or offline are skipped rather than counted as healthy, since a missing member counted as a
+full one is a quiet way to get the group-heal count wrong. The tank is whoever holds that role in
+the group window; nothing else assigns one yet, so a group with no Main Tank set has no
+tank-scoped heals firing, and the Heal State page says so.
+
+`/cheal` reports what it is doing and everyone it is watching; `/cheal off` calls off the heal in
+progress. The order is `healnow` rather than `heal` because a registered phrase also matches every
+longer line starting with it — a plain `heal` would fire on `healme`, `healing off` and every other
+switch in the family, complaining about spawn ids nobody typed. Worth knowing before naming the
+commands for the next state: **no registered phrase may be a prefix of another**.
 
 ## Config model
 

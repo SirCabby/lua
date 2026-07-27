@@ -10,8 +10,9 @@ local mq = require("mq")
 ---
 ---Outcomes fall into three groups, and the group is what a caller acts on:
 ---
----- **refused** -- the cast never left the ground. Nothing was spent; try again when whatever
----  it complained about changes.
+---- **refused** -- the cast never left the ground. Nothing was spent, and it is a real answer
+---  rather than a "not yet": the waits (standing still, getting on target, memorizing) have no
+---  outcome because they never give up.
 ---- **broken** -- the cast started and was lost. Mana is gone and the gem is on its recast.
 ---- **late** -- the cast completed and the spell landed without doing anything (resisted,
 ---  immune, blocked by a better buff). These lines arrive *after* the cast bar closes, which
@@ -30,14 +31,11 @@ local CastOutcome = {
     wrongTarget = "wrongTarget",
     outOfRange = "outOfRange",
     cannotSee = "cannotSee",
-    notStill = "notStill",
     notStanding = "notStanding",
     silenced = "silenced",
     stunned = "stunned",
     distracted = "distracted",
-    invisible = "invisible",
     wrongPlace = "wrongPlace",
-    busy = "busy",
     didNotStart = "didNotStart",
 
     -- broken: started and lost
@@ -65,14 +63,11 @@ local descriptions = {
     wrongTarget = "wrong kind of target",
     outOfRange = "target out of range",
     cannotSee = "cannot see the target",
-    notStill = "could not stand still",
     notStanding = "not standing",
     silenced = "silenced",
     stunned = "stunned",
     distracted = "too distracted to cast",
-    invisible = "invisible",
     wrongPlace = "the spell does not work here",
-    busy = "already casting something else",
     didNotStart = "the cast never started",
     fizzled = "fizzled",
     interrupted = "interrupted",

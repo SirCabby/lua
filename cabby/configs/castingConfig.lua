@@ -10,9 +10,9 @@ local Menu = require("cabby.ui.menu")
 
 ---Settings for the casting service, and the page that shows what it is doing.
 ---
----The service keeps its own defaults (`utils.Casting.Casting.settings`); this owns the two or
----three a user has a reason to change and pushes them down. Everything else in there is a
----timeout nobody sensibly tunes.
+---The service keeps its own defaults (`utils.Casting.Casting.settings`); this owns the two a user
+---has a reason to change and pushes them down. Everything else in there is a timing nobody
+---sensibly tunes.
 ---@class CastingConfig : BaseConfig
 local CastingConfig = {
     key = "CastingConfig",
@@ -38,8 +38,7 @@ local function pushSettings()
     Casting.Configure({
         -- 0 is the service's "last gem" too, so this passes straight through
         memGem = configRoot.mem_gem,
-        settleMs = configRoot.settle_ms,
-        prepareTimeoutMs = configRoot.prepare_timeout_ms
+        settleMs = configRoot.settle_ms
     })
 end
 
@@ -63,8 +62,13 @@ local function initAndValidate()
         taint = true
     end
 
-    if configRoot.prepare_timeout_ms == nil then
-        configRoot.prepare_timeout_ms = 5000
+    -- This was once a ceiling on how long a cast could spend getting started. It is gone: every
+    -- part of preparing is a wait for something that changes, and giving up only threw away the
+    -- waiting already done -- whoever asked for the cast re-asked on the next frame anyway. Take
+    -- the key out rather than leaving it in the file looking like it still does something.
+    if configRoot.prepare_timeout_ms ~= nil then
+        DebugLog("Removing the preparation ceiling; casts now keep trying until called off")
+        configRoot.prepare_timeout_ms = nil
         taint = true
     end
 
@@ -109,18 +113,6 @@ end
 ---@param milliseconds number
 function CastingConfig.SetSettleMs(milliseconds)
     getConfigSection().settle_ms = math.max(math.min(math.floor(milliseconds), 2000), 0)
-    Global.configStore:SaveConfig()
-    pushSettings()
-end
-
----@return number prepareTimeoutMs
-function CastingConfig.GetPrepareTimeoutMs()
-    return getConfigSection().prepare_timeout_ms
-end
-
----@param milliseconds number
-function CastingConfig.SetPrepareTimeoutMs(milliseconds)
-    getConfigSection().prepare_timeout_ms = math.max(math.min(math.floor(milliseconds), 30000), 1000)
     Global.configStore:SaveConfig()
     pushSettings()
 end
@@ -170,14 +162,6 @@ function CastingConfig.BuildMenu()
     end
     ImGui.SameLine()
     CommonUI.HelpMarker("How long the character has to have been stopped before a cast is started. A character that has only just stopped is still moving as far as the server is concerned, and the cast is lost.")
-
-    ImGui.SetNextItemWidth(120)
-    local prepare, prepareChanged = ImGui.DragInt("Give up preparing after (ms)", CastingConfig.GetPrepareTimeoutMs(), 100, 1000, 30000)
-    if prepareChanged then
-        CastingConfig.SetPrepareTimeoutMs(prepare)
-    end
-    ImGui.SameLine()
-    CommonUI.HelpMarker("Budget for everything before the cast is fired: getting on target, standing still, memorizing. A cast that cannot get there in this long is reported as failed rather than holding the priority chain open forever.")
 end
 
 ---@diagnostic disable-next-line: duplicate-set-field

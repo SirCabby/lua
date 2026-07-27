@@ -1,4 +1,8 @@
 local BaseClass = require("cabby.classes.baseClass")
+local Priorities = require("cabby.classes.priorities")
+
+local HealState = require("cabby.states.healState")
+local SpellDpsState = require("cabby.states.spellDpsState")
 
 ---A shaman slows first and heals second, and the slow has to land before the tank has taken the
 ---damage that made it necessary -- which puts it above the damage rotations rather than at the
@@ -11,12 +15,15 @@ local BaseClass = require("cabby.classes.baseClass")
 local Shaman = BaseClass.new({
     key = "Shaman",
     shortName = "SHM",
+    states = {
+        { state = SpellDpsState, priority = Priorities.dps - 1 },
+        { state = HealState, priority = Priorities.heal + 5 }
+    },
     unimplemented = {
         "slow, ahead of the damage rotations",
-        "healing, weaker than a cleric's, tightening when no cleric is in the group",
         "curing poison and disease",
         "buff maintenance (the str/sta lines, haste) with stacking checks",
-        "dots, and canni for mana"
+        "canni: trading health for mana when there is a moment for it"
     }
 })
 

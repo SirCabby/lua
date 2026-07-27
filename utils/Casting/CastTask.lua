@@ -38,6 +38,15 @@ setmetatable(CastTask, {
 ---still and nothing to watch for.
 local instantCastMs = 100
 
+---How often a target that will not take, or a memorize that did not land, is asked for again.
+---Re-issuing the command is the retry; there is nothing else to try.
+local retryIntervalMs = 2000
+
+---How long the same "waiting for..." can hold before it is worth saying out loud. Not a failure:
+---a cast that cannot get started is usually waiting for something that will change, and the one
+---thing worse than waiting is waiting silently.
+local stuckNoticeMs = 30000
+
 ---@param str string
 local function DebugLog(str)
     Debug.Log(CastTask.key, str)
@@ -56,7 +65,7 @@ end
 --- priority: number, that owner's place in the priority chain; smaller is stronger
 --- targetId: number, target this spawn before casting
 --- gem: number, memorize into this gem when the spell is not already memorized
---- settleMs / prepareTimeoutMs / readyWaitMs / memorizeTimeoutMs: timings, all defaulted
+--- settleMs / readyWaitMs / memorizeRetryMs: timings, all defaulted
 --- mayStopMovement: fun(priority, movementOwner): boolean -- may this cast cancel the movement
 ---   task that is running? Defaults to yes; the host installs the real policy.
 ---@return CastTask
@@ -76,9 +85,8 @@ function CastTask.new(subject, options)
         targetId = options.targetId,
         gem = options.gem,
         settleMs = options.settleMs or 250,
-        prepareTimeoutMs = options.prepareTimeoutMs or 5000,
         readyWaitMs = options.readyWaitMs or 1500,
-        memorizeTimeoutMs = options.memorizeTimeoutMs or 15000,
+        memorizeRetryMs = options.memorizeRetryMs or 15000,
         mayStopMovement = options.mayStopMovement or function() return true end,
 
         status = CastStatus.preparing,
@@ -89,18 +97,19 @@ function CastTask.new(subject, options)
         stopOutcome = nil,
 
         startedMs = Time.current_time(),
-        prepareDeadlineMs = nil,
         stepDeadlineMs = nil,
+        stuckReason = nil,
+        stuckSinceMs = nil,
+        stuckReported = false,
         immobilizer = nil,
-        requiresStillness = false,
+        -- assumed until validate works out the cast time: a caller asking "may I move" before
+        -- the first pulse should be told no, not maybe
+        requiresStillness = true,
         targetedAtMs = nil,
         memorizedAtMs = nil,
         firedAtMs = nil,
-        fireWaitDeadlineMs = nil,
         castTimeMs = 0
     }
-
-    self._.prepareDeadlineMs = self._.startedMs + self._.prepareTimeoutMs
 
     return self
 end
@@ -179,6 +188,12 @@ local function validate(self)
     end
 
     self._.castTimeMs = subject:CastTimeMs()
+    -- Bards sing on the move, and an instant cast has no bar to lose. Worked out here rather
+    -- than at the hold-still step because callers ask whether this cast pins the character down
+    -- (`RequiresStillness`) from the moment it is accepted.
+    local isBardSong = subject:IsSpell() and mq.TLO.Me.Class.ShortName() == "BRD"
+    self._.requiresStillness = not isBardSong and self._.castTimeMs > instantCastMs
+
     return advance(self, self.AcquireTarget)
 end
 
@@ -194,14 +209,14 @@ local function acquireTarget(self)
             return finish(self, CastOutcome.noTarget, "spawn " .. tostring(targetId) .. " is not here")
         end
 
+        -- Ask again on a timer rather than giving up. The spawn is here (checked above), so the
+        -- target either took and the client has not caught up, or something transient ate it;
+        -- both are answered by asking again, and neither is answered by failing.
         local now = Time.current_time()
-        if self._.targetedAtMs == nil then
+        if self._.targetedAtMs == nil or now - self._.targetedAtMs >= retryIntervalMs + ping() then
             self._.targetedAtMs = now
-            self._.stepDeadlineMs = now + 2000 + ping()
             DebugLog("Targeting spawn " .. tostring(targetId) .. " to cast " .. subject:Describe())
             mq.cmdf("/mqtarget id %d", targetId)
-        elseif now > (self._.stepDeadlineMs or 0) then
-            return finish(self, CastOutcome.noTarget, "could not target spawn " .. tostring(targetId))
         end
 
         return waiting(self, "targeting spawn " .. tostring(targetId))
@@ -236,12 +251,9 @@ end
 local function holdStill(self)
     local subject = self._.subject
 
-    local isBardSong = subject:IsSpell() and mq.TLO.Me.Class.ShortName() == "BRD"
-    if isBardSong or self._.castTimeMs <= instantCastMs then
-        self._.requiresStillness = false
+    if not self._.requiresStillness then
         return advance(self, self.Memorize)
     end
-    self._.requiresStillness = true
 
     -- Cancel the movement that is running, if this cast outranks whoever asked for it. A task
     -- we may not cancel is not fatal: a follow that has caught up is holding position with the
@@ -252,22 +264,11 @@ local function holdStill(self)
     end
 
     if self._.immobilizer == nil then
-        self._.immobilizer = Immobilizer.new({
-            settleMs = self._.settleMs,
-            -- one budget for the whole preparation, so a cast cannot spend the settle timeout
-            -- and then the memorize timeout on top of it
-            timeoutMs = math.max(self._.prepareDeadlineMs - Time.current_time(), 250)
-        })
+        self._.immobilizer = Immobilizer.new({ settleMs = self._.settleMs })
     end
 
-    local result = self._.immobilizer:Pulse()
-    if result == Immobilizer.results.settled then
+    if self._.immobilizer:Pulse() == Immobilizer.results.settled then
         return advance(self, self.Memorize)
-    end
-
-    if result == Immobilizer.results.timedOut then
-        return finish(self, CastOutcome.notStill, "still moving after " ..
-            tostring(self._.prepareTimeoutMs) .. "ms")
     end
 
     return waiting(self, self._.immobilizer:Reason() or "waiting to stand still")
@@ -281,22 +282,19 @@ local function memorize(self)
         return advance(self, self.Fire)
     end
 
-    local now = Time.current_time()
-    if self._.memorizedAtMs == nil then
-        local gem = self._.gem
-        if gem == nil or gem < 1 then
-            return finish(self, CastOutcome.notMemorized, "no gem to memorize into")
-        end
-
-        self._.memorizedAtMs = now
-        self._.stepDeadlineMs = now + self._.memorizeTimeoutMs
-        DebugLog("Memorizing " .. subject:Name() .. " into gem " .. tostring(gem))
-        subject:Memorize(gem)
-        return waiting(self, "memorizing " .. subject:Name())
+    local gem = self._.gem
+    if gem == nil or gem < 1 then
+        return finish(self, CastOutcome.notMemorized, "no gem to memorize into")
     end
 
-    if now > (self._.stepDeadlineMs or 0) then
-        return finish(self, CastOutcome.notMemorized)
+    -- Memorizing is slow and can be refused outright (moving, or a spellbook that will not open),
+    -- and the client says nothing either way. Ask again rather than failing: the reasons it did
+    -- not take are the reasons that pass.
+    local now = Time.current_time()
+    if self._.memorizedAtMs == nil or now - self._.memorizedAtMs >= self._.memorizeRetryMs then
+        self._.memorizedAtMs = now
+        DebugLog("Memorizing " .. subject:Name() .. " into gem " .. tostring(gem))
+        subject:Memorize(gem)
     end
 
     return waiting(self, "memorizing " .. subject:Name())
@@ -311,17 +309,10 @@ local function fire(self)
     end
 
     -- Something is already casting and it is not us, since we have not fired yet: a hand cast,
-    -- or the cast this one is replacing still winding down from its /stopcast. Worth a short
-    -- wait for the second case, because a cast that preempted another one failing instantly on
-    -- the interrupt it caused would be absurd.
+    -- or the cast this one is replacing still winding down from its /stopcast. Wait for it. The
+    -- alternative is failing on a cast that is about to end anyway, and being told to start over
+    -- -- back through targeting and standing still -- for the sake of a second's impatience.
     if mq.TLO.Me.Casting.ID() ~= nil then
-        local now = Time.current_time()
-        if self._.fireWaitDeadlineMs == nil then
-            self._.fireWaitDeadlineMs = now + 1000
-        end
-        if now > self._.fireWaitDeadlineMs then
-            return finish(self, CastOutcome.busy)
-        end
         return waiting(self, "waiting for the cast in progress to end")
     end
 
@@ -411,6 +402,32 @@ CastTask.Fire = fire
 CastTask.ConfirmStart = confirmStart
 CastTask.InFlight = inFlight
 
+---A cast that keeps waiting on the same thing is not failing, but it is worth mentioning.
+---
+---Nothing here gives up: waiting to stand still, waiting to get on target and waiting on a
+---memorize are all waits for something that changes, and the caller re-asking would only throw
+---away the waiting already done. The cost is that a genuinely stuck cast holds its priority floor
+---quietly, so it says so once instead.
+---@param self CastTask
+local function noticeIfStuck(self)
+    if CastStatus.IsTerminal(self._.status) then return end
+
+    local reason = self._.reason
+    if reason ~= self._.stuckReason then
+        self._.stuckReason = reason
+        self._.stuckSinceMs = Time.current_time()
+        self._.stuckReported = false
+        return
+    end
+
+    if reason == nil or self._.stuckReported then return end
+    if Time.current_time() - (self._.stuckSinceMs or 0) < stuckNoticeMs then return end
+
+    self._.stuckReported = true
+    print("(Casting) Still " .. tostring(reason) .. " for " .. self._.subject:Describe() ..
+        " -- it will keep trying; /ccast off to call it off")
+end
+
 ---One frame of the cast. **Main loop only** -- this is where every game command is issued.
 ---@return string status one of CastStatus
 function CastTask:Pulse()
@@ -440,11 +457,6 @@ function CastTask:Pulse()
         return self._.status
     end
 
-    if self._.status == CastStatus.preparing and Time.current_time() > self._.prepareDeadlineMs then
-        finish(self, CastOutcome.timedOut, "gave up preparing: " .. tostring(self._.reason))
-        return self._.status
-    end
-
     -- Run steps until one says it is waiting on the client. The guard is a runaway backstop and
     -- nothing more: there are seven steps and each one only ever names a later one.
     local guard = 0
@@ -453,6 +465,7 @@ function CastTask:Pulse()
         if not self._.step(self) then break end
     end
 
+    noticeIfStuck(self)
     return self._.status
 end
 
@@ -505,6 +518,14 @@ end
 ---@return string|nil reason what it is waiting on, or why it ended
 function CastTask:Reason()
     return self._.reason
+end
+
+---Whether this cast pins the character down. False for bard songs and instant casts, which can
+---be run on the move, and for a cast that is already over.
+---@return boolean requiresStillness
+function CastTask:RequiresStillness()
+    if CastStatus.IsTerminal(self._.status) then return false end
+    return self._.requiresStillness
 end
 
 ---@return CastSubject subject

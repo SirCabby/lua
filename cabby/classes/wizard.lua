@@ -1,14 +1,19 @@
 local BaseClass = require("cabby.classes.baseClass")
+local Priorities = require("cabby.classes.priorities")
 
----A wizard nukes, and the hard part is not nuking so hard it pulls the mob off the tank. Until
----the caster foundation exists a wizard can follow the group and nothing else -- it is the
----emptiest shell of the sixteen, and deliberately does not register the melee state.
+local SpellDpsState = require("cabby.states.spellDpsState")
+
+---A wizard nukes, and the hard part is not nuking so hard it pulls the mob off the tank -- which
+---is what the spell dps state's "start below %" is for. It deliberately does not register the
+---melee state: a wizard in melee range is a dead wizard.
 ---@type BaseClass
 local Wizard = BaseClass.new({
     key = "Wizard",
     shortName = "WIZ",
+    states = {
+        { state = SpellDpsState, priority = Priorities.dps - 1 }
+    },
     unimplemented = {
-        "the nuke rotation, held back so it does not out-aggro the tank",
         "evacuating a group that is losing",
         "ports on request"
     }

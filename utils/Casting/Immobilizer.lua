@@ -12,6 +12,10 @@ local Time = require("utils.Time.Time")
 ---and we have been stopped for a settle window on top of that. MQ2Cast waits half a second
 ---after speed reaches zero for the same reason.
 ---
+---There is no giving up in here, and no timing out: not being able to stand still is a wait for
+---something that will change, and this has no standing to decide how long that is worth. The
+---caller does, and does it by calling the cast off.
+---
 ---This module only answers the question. Cancelling whatever *asked* the character to move
 ---belongs to the caller, which is the only thing that knows whether it is allowed to
 ---(`CastTask` weighs the cast's priority against the movement task's owner). The one exception
@@ -22,8 +26,7 @@ local Immobilizer = {
     key = "Immobilizer",
     results = {
         settled = "settled",
-        waiting = "waiting",
-        timedOut = "timedOut"
+        waiting = "waiting"
     }
 }
 Immobilizer.__index = Immobilizer
@@ -36,13 +39,16 @@ setmetatable(Immobilizer, {
 
 local standRetryMs = 1000
 
+---How often the autorun-cancelling tap is repeated while something outside this script is still
+---moving the character.
+local tapIntervalMs = 3000
+
 ---@param str string
 local function DebugLog(str)
     Debug.Log(Immobilizer.key, str)
 end
 
----@param options? table settleMs: how long stopped is stopped (default 250), timeoutMs: give up
----after this long (default 4000)
+---@param options? table settleMs: how long stopped is stopped (default 250)
 ---@return Immobilizer
 function Immobilizer.new(options)
     options = options or {}
@@ -51,13 +57,11 @@ function Immobilizer.new(options)
 ---@diagnostic disable-next-line: inject-field
     self._ = {
         settleMs = options.settleMs or 250,
-        timeoutMs = options.timeoutMs or 4000,
-        startedMs = Time.current_time(),
         -- nil means "has not been seen moving", so a character already standing still settles
         -- on the first pulse instead of paying the window for nothing
         lastMovingMs = nil,
         lastStandMs = 0,
-        tappedBack = false,
+        lastTapMs = 0,
         reason = nil
     }
 
@@ -95,11 +99,12 @@ function Immobilizer:Pulse()
         self._.lastMovingMs = now
 
         -- Something is moving us that this script is not holding a key for: autorun, or EQ's
-        -- own /follow. One tap of a movement key cancels both, and it is the same trick
-        -- MQ2Cast uses before a cast. Once per attempt -- if a tap did not stop it, tapping
-        -- again every frame will not either, and the timeout below is the honest answer.
-        if not Locomotion.IsMoving() and not self._.tappedBack then
-            self._.tappedBack = true
+        -- own /follow. One tap of a movement key cancels both, and it is the same trick MQ2Cast
+        -- uses before a cast. Every few seconds rather than every frame -- a tap that did not
+        -- work will not work any better repeated forty times a second, but a cast that waits
+        -- indefinitely should keep asking rather than give up after one try.
+        if not Locomotion.IsMoving() and now - self._.lastTapMs >= tapIntervalMs then
+            self._.lastTapMs = now
             DebugLog("Moving with no key of ours held; tapping back to cancel autorun")
             mq.cmd("/keypress back")
         end
@@ -114,10 +119,6 @@ function Immobilizer:Pulse()
     else
         self._.reason = nil
         return Immobilizer.results.settled
-    end
-
-    if now - self._.startedMs >= self._.timeoutMs then
-        return Immobilizer.results.timedOut
     end
 
     return Immobilizer.results.waiting
