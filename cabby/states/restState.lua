@@ -26,6 +26,18 @@ local settleMs = 2000
 ---nothing but spam.
 local commandRetryMs = 1000
 
+---How long a posture command of ours stays credited to us. The server answers a `/sit` or a
+---`/stand` inside a ping; one that has not shown up by now did not take, and holding on to it any
+---longer means crediting this state with the next posture change the *person playing* makes.
+local commandAckMs = 2000
+
+---How long a stand this state did not order holds it off sitting down again. Something else put
+---the character on its feet -- the person playing it, or a service that needed it standing to cast
+---or to move -- and answering that with a `/sit` on the next frame is how a script ends up
+---wrestling its owner. It is a debounce and not a give-up: nothing stops being tried, it just
+---stops being answered instantly.
+local standGraceMs = 5000
+
 ---Getting the pools back up, at the bottom of the chain.
 ---
 ---The job is one sentence -- sit while something is short, stand once nothing is -- and the whole
@@ -36,17 +48,23 @@ local commandRetryMs = 1000
 ---(movement out of a sit, the casting service before a cast), so this state never has to argue for
 ---the character back.
 ---
----**Nothing is remembered about having sat down.** "Should I be sitting right now" is asked from
----the world every pass and answers both directions: sitting down when the answer turns yes, and
----standing up when it turns no -- because the pools came back, because a fight started, or because
----a cast is going out. That is also why it stands up out of a sit somebody else chose: there is no
----such thing here as *whose* sit it is, only whether sitting is right.
+---**"Should I be sitting right now" is asked from the world every pass**, and answers both
+---directions: sitting down when the answer turns yes, and standing up when it turns no -- because
+---the pools came back, because a fight started, or because a cast is going out.
 ---
----What holds it back, in the order it reports them: being engaged (a character in a fight has a
----fight to be in), a cast in the air, and -- while the client says the fight is on and we are not
----in it -- the `in_combat` setting, plus melee being on. That last pair is the case worth naming:
----a caster that has not engaged would rather fill its bar than start something, and a character
----that walks into melee is a character that is about to be on its feet anyway.
+---**The one thing it remembers is whose sit this is**, because it is the one thing the world will
+---not tell it. A sit this state did not sit down belongs to somebody else and is left alone: the
+---reason for it is not readable from here, and the commonest reason -- the spellbook open on a
+---spell being memorized -- is one that standing up destroys. The same courtesy runs the other way,
+---so a stand this state did not order buys a moment's grace before it sits back down. Answering
+---the person playing the character on the very next frame is wrestling, not resting.
+---
+---What holds it back, in the order it reports them: a sit that is not ours, an open spellbook,
+---having only just been stood up, being engaged (a character in a fight has a fight to be in), a
+---cast in the air, and -- while the client says the fight is on and we are not in it -- the
+---`in_combat` setting, plus melee being on. That last pair is the case worth naming: a caster that
+---has not engaged would rather fill its bar than start something, and a character that walks into
+---melee is a character that is about to be on its feet anyway.
 ---@class RestState : BaseState
 local RestState = {
     key = "RestState",
@@ -62,6 +80,12 @@ local RestState = {
         -- started sits down on the first pass instead of paying the settle window for nothing
         lastMovingMs = nil,
         lastCommandMs = 0,
+        -- "sit" or "stand": which of the two we sent last, so a posture that turns up can be told
+        -- apart from one somebody else asked for
+        lastCommandKind = nil,
+        lastPosture = nil,
+        sitIsOurs = false,
+        lastStandNotOursMs = nil,
         isResting = false,
         holdReason = nil
     }
@@ -180,6 +204,50 @@ local postureWords = {
 
 ---------------- Posture --------------------
 
+---Whether the spellbook is open, which is somebody in the middle of something that needs them
+---sitting. Standing closes it and throws away the memorize going on inside it, which is the whole
+---reason this state asks.
+---@return boolean isOpen
+local function spellbookIsOpen()
+    return mq.TLO.Window("SpellBookWnd").Open() == true
+end
+
+---@param now number
+---@param kind string "sit" or "stand"
+---@return boolean isOutstanding whether a command of that kind is still waiting on the server
+local function isOutstanding(now, kind)
+    return RestState._.lastCommandKind == kind and now - RestState._.lastCommandMs < commandAckMs
+end
+
+---Work out whose posture this is.
+---
+---There is no TLO for "the user pressed the sit key", so ownership is inferred from what we asked
+---for: a sit that turns up while our own `/sit` is outstanding is ours, and every other one is
+---not. Ownership is remembered, but it is confirmed against the world every pass -- the moment the
+---character is not sitting, the sit is not ours any more -- so it cannot go stale in the way a
+---remembered *mode* would.
+---@param now number
+---@param posture string
+local function observePosture(now, posture)
+    if posture == "SIT" then
+        if not RestState._.sitIsOurs and isOutstanding(now, "sit") then
+            DebugLog("The sit that just landed is ours")
+            RestState._.sitIsOurs = true
+        end
+    else
+        -- Getting up is only ours if we asked for it. Anything else -- somebody standing by hand,
+        -- the movement service getting under way, the casting service standing up to cast -- ends
+        -- the rest and buys the grace window before we sit down again.
+        if RestState._.lastPosture == "SIT" and not isOutstanding(now, "stand") then
+            DebugLog("Stood up by something that was not us")
+            RestState._.lastStandNotOursMs = now
+        end
+        RestState._.sitIsOurs = false
+    end
+
+    RestState._.lastPosture = posture
+end
+
 ---@param now number
 ---@return boolean isBusy
 local function sitDown(now)
@@ -187,6 +255,7 @@ local function sitDown(now)
     -- here either way rather than letting something weaker start while we are getting down
     if now - RestState._.lastCommandMs < commandRetryMs then return true end
     RestState._.lastCommandMs = now
+    RestState._.lastCommandKind = "sit"
 
     DebugLog("Sitting down to rest")
     -- `/sit on` rather than `/sit`, which toggles: asked again while the server catches up, a
@@ -201,6 +270,7 @@ end
 local function standUp(now, why)
     if now - RestState._.lastCommandMs < commandRetryMs then return true end
     RestState._.lastCommandMs = now
+    RestState._.lastCommandKind = "stand"
 
     DebugLog("Standing up: " .. why)
     mq.cmd("/stand")
@@ -298,6 +368,10 @@ end
 function RestState.Reset()
     RestState._.lastMovingMs = nil
     RestState._.lastCommandMs = 0
+    RestState._.lastCommandKind = nil
+    RestState._.lastPosture = nil
+    RestState._.sitIsOurs = false
+    RestState._.lastStandNotOursMs = nil
     RestState._.isResting = false
     RestState._.holdReason = nil
 end
@@ -313,11 +387,34 @@ function RestState.Go()
     end
 
     local posture = tostring(mq.TLO.Me.State() or "")
+    observePosture(now, posture)
+
     local hold = holdReason()
     RestState._.holdReason = hold
     local pools = RestState.GetPools()
 
     if posture == "SIT" then
+        RestState._.isResting = false
+
+        -- A sit we did not sit down is not ours to end. Somebody sat for a reason, and which
+        -- reason is not something this state can read, so it stays out of the way rather than
+        -- guessing. Standing up is what this state would have to do to disagree, and there is
+        -- nothing it wants the character on its feet for that is worth taking a decision off the
+        -- person playing it.
+        if not RestState._.sitIsOurs then
+            RestState._.holdReason = "you sat down yourself"
+            return false
+        end
+
+        -- Ours or not, standing closes the spellbook and loses the spell being memorized with it.
+        -- Everything that genuinely needs the character upright -- casting, movement, melee --
+        -- stands it up itself; this state only ever stands it up because sitting has stopped being
+        -- worthwhile, which never justifies that.
+        if spellbookIsOpen() then
+            RestState._.holdReason = "your spellbook is open"
+            return false
+        end
+
         if hold == nil and not isRested(pools) then
             RestState._.isResting = true
             -- filling up is what this character is doing right now, so the pass ends here. The
@@ -325,7 +422,6 @@ function RestState.Go()
             return true
         end
 
-        RestState._.isResting = false
         return standUp(now, hold or "rested")
     end
 
@@ -346,6 +442,17 @@ function RestState.Go()
     if RestState._.lastMovingMs ~= nil and now - RestState._.lastMovingMs < settleMs then
         RestState._.holdReason = "we have only just stopped"
         return false
+    end
+
+    -- Somebody put this character on its feet. Whoever it was had a reason -- and if the reason
+    -- was "I want to be standing", sitting them straight back down is an argument they cannot win
+    -- and we cannot hear. Wait it out; resting resumes on its own if nothing else happens.
+    if RestState._.lastStandNotOursMs ~= nil then
+        if now - RestState._.lastStandNotOursMs < standGraceMs then
+            RestState._.holdReason = "we were only just stood up"
+            return false
+        end
+        RestState._.lastStandNotOursMs = nil
     end
 
     return sitDown(now)
@@ -371,6 +478,11 @@ RestState.SetEnabled = function(isEnabled)
         RestState.Reset()
         if wasResting and mq.TLO.Me.State() == "SIT" then
             CommandQueue.Push("/stand")
+            -- the queue runs it a frame or two from now, and the pass that sees it land has to
+            -- know the stand was ours -- otherwise switching resting off and back on again pays
+            -- the grace window meant for somebody else's stand
+            RestState._.lastCommandMs = Time.current_time()
+            RestState._.lastCommandKind = "stand"
         end
     end
 end

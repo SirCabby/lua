@@ -341,6 +341,27 @@ local function UpdateCommEvent(command)
     end
 end
 
+---(Re)register a raw event's pattern, replacing whatever it is registered under now.
+---
+---A pattern is not always one mq event: a client that stamps a timestamp on every chat line puts
+---text in front of the pattern, and Blech will not test a pattern beginning with literal text
+---against a line beginning with `[`. Registering what Speak.GetListenPatterns returns is what
+---keeps an event like "You have been slain by #1#!" audible with timestamps on -- without it that
+---event is silently never heard, with no error to say so.
+---@param event Event
+local function UpdateEventRegistration(event)
+    for _, registeredEventId in ipairs(event.registeredEvents or {}) do
+        mq.unevent(registeredEventId)
+    end
+    event.registeredEvents = {}
+
+    for _, pattern in ipairs(Speak.GetListenPatterns(event.command)) do
+        local newEventId = event.id:lower() .. tostring(#event.registeredEvents + 1)
+        table.insert(event.registeredEvents, newEventId)
+        mq.event(newEventId, pattern, event.wrappedEventFunction or event.eventFunction)
+    end
+end
+
 ---@param command Command
 function Commands.RegisterCommEvent(command)
     if not TableUtils.ArrayContains(TableUtils.GetKeys(Commands._.registrations.commands.registeredCommands), command.command) then
@@ -365,8 +386,7 @@ local function UpdateCommChannels()
         ---@type Event
         event = event
         if event.reregister then
-            mq.unevent(event.id:lower())
-            mq.event(event.id:lower(), event.command, event.wrappedEventFunction or event.eventFunction)
+            UpdateEventRegistration(event)
         end
     end
 end
@@ -426,7 +446,8 @@ function Commands.RegisterEvent(event)
     if not TableUtils.ArrayContains(TableUtils.GetKeys(Commands._.registrations.events.registeredEvents), event.id) then
         Commands._.registrations.events.registeredEvents[event.id] = event
         event.wrappedEventFunction = protectChatHandler("event:" .. event.id, event.eventFunction)
-        mq.event(event.id:lower(), event.command, event.wrappedEventFunction)
+        event.registeredEvents = {}
+        UpdateEventRegistration(event)
     else
         print("Cannot re-register same event Id: ["..event.id:lower().."]")
     end

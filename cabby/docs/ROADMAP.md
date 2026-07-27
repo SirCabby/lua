@@ -324,9 +324,13 @@ does. What landed:
 
 - ~~**The state**~~ — sit while health, mana or stamina is below the sit point, stand once all of
   them are at or above the stand point. Which pools this character has is read (`MaxMana` of zero
-  is what says there is no mana bar) rather than configured, and nothing is remembered about having
-  sat down: "should I be sitting right now" is asked from the world every pass and answers both
-  directions, which is also why it stands up out of a sit somebody else chose.
+  is what says there is no mana bar) rather than configured, and "should I be sitting right now" is
+  asked from the world every pass and answers both directions.
+- ~~**Whose posture it is**~~ — the one thing remembered, because no TLO reports it: a sit is ours
+  only if it landed while our own `/sit on` was outstanding. A sit somebody else chose is never
+  stood out of, nor is our own while the spellbook is open, and a stand we did not order buys a
+  grace window before we sit again. Everything that really needs the character upright stands it up
+  itself, so the state never has to win that argument with the person playing.
 - ~~**Restraint**~~ — never while engaged, never with a cast in the air, and during a fight this
   character has not joined only while `restcombat` is on *and* melee is off (a character that walks
   into melee is one that is about to be on its feet anyway). A settle window keeps a group's
@@ -339,8 +343,11 @@ does. What landed:
 - Verified off-client (68 checks: sitting for each pool and not for a mana bar that does not exist,
   the two thresholds and the hysteresis between them, standing back up for full pools and for each
   reason to be up, every posture it refuses to touch, the settle window, the command throttle, the
-  config guards on the threshold pair, and the switch standing the character up) under LuaJIT.
-  **In-game smoke test still pending** — see Verify.
+  config guards on the threshold pair, and the switch standing the character up) under LuaJIT, and
+  the posture-ownership rules the same way afterwards (37 checks: a sit of somebody else's left
+  alone at full pools and through a fight, the spellbook holding down even a sit of our own, the
+  grace after a stand we did not order against no grace after one we did, and the switch leaving a
+  user's sit where it is). **In-game smoke test still pending** — see Verify.
 
 Rest's own leftovers are the rest of the misc band, and they are the MQ2Melee chores that have
 nowhere else to live: out-of-combat regen discs (Breather and friends), auto-food and drink,
@@ -544,7 +551,10 @@ backstab positioning; nothing asks for it).
    channel outright. What to confirm now: an owner's command over each active channel, a
    `bc` command specifically (it needed the second pattern), that no command runs *twice* on a
    stamped line (a toggle is the giveaway — two flips look like nothing happening), and a group
-   invite from an owner being accepted rather than `/disband`ed. Also worth pasting one raw
+   invite from an owner being accepted rather than `/disband`ed. Raw events now expand through the
+   same helper as comm patterns (`Speak.GetListenPatterns`), so a literal-leading event pattern is
+   registered twice and heard either way; neither event registered today needs it, so there is
+   nothing new to confirm in game beyond the invite still being accepted. Also worth pasting one raw
    stamped line of each channel into `scratchpad/test_chatpatterns.lua`, since the harness
    currently assumes the `[...]` prefix shape rather than a captured sample.
 16. In-game smoke of the 2026-07-18 Phase 0 fixes: fresh-config startup on a taunt-less
@@ -559,4 +569,8 @@ backstab positioning; nothing asks for it).
    a heal go out mid-rest (the priority floor should starve this state, and the cast's own
    stand-up should not read as a reason to sit again the moment it lands); and watch a stop-and-go
    run to see whether two seconds of settling is the right length. On a melee: `melee off` should
-   let it med through a fight it is not in, and `melee on` should stop it.
+   let it med through a fight it is not in, and `melee on` should stop it. Then the posture the
+   script does not own: sit down by hand at full pools and confirm nothing stands you back up, open
+   the spellbook from a rest and watch it hold the sit rather than close the book on a memorize,
+   and stand up by hand to see whether five seconds is long enough a grace to feel like being left
+   alone rather than long enough to feel like the resting stopped working.

@@ -2,6 +2,8 @@
 ---@field id string
 ---@field eventFunction function
 ---@field wrappedEventFunction function?
+---@field registeredEvents table? mq event ids this event is currently registered under -- one
+---pattern can need more than one, see Speak.GetListenPatterns
 ---@field reregister boolean reregister this event on event updates for last order preservation
 local Event = {}
 

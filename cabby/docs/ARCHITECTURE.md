@@ -244,8 +244,10 @@ The most developed subsystem. Three registration kinds, all carrying self-docume
   that flips something whose state can be read back, so whatever *presents* the command can
   present it as that state (a hotbar button carrying `stick toggle` is drawn as the stick setting).
   The reader answers for this character and returns nil when there is no single answer.
-- **Events** (`Event`): raw line patterns (group invite, generic tell-forwarder). `reregister`
-  flag re-adds them last so catchall patterns sort after specific ones.
+- **Events** (`Event`): raw line patterns (group invite, generic tell-forwarder). One pattern can
+  need more than one `mq.event` to be heard (see Chat timestamps), so an event holds a list of the
+  ids it is registered under. `reregister` flag re-adds them last so catchall patterns sort after
+  specific ones.
 - **Slash commands** (`SlashCmd`): `mq.bind` wrappers (/chelp, /cself, /debug, /activechannels,
   /speak, /owners, /state, /cmenu, /restart).
 
@@ -254,23 +256,37 @@ feeds Blech the line as rendered — so `[23:39:30] Haedes tells you, 'followme'
 patterns actually see. Blech matches the *whole* line, which splits the patterns three ways, and
 the handling is different for each:
 
-- A pattern starting with `#1#` (tell, group, raid, and both raw events) still matches, but the
-  wildcard swallows the timestamp into the speaker capture. Since the first thing every handler
-  does is an ACL check, the symptom is a character that silently ignores its own owners — and, for
-  the group-invite event, one that actively `/disband`s every invitation it is sent.
+Blech files each pattern under the first character it can match and tests a line only against the
+patterns filed under the line's own first character, plus those filed under "starts with a
+variable" — which is what decides each case:
+
+- A pattern starting with a scan variable (`#1#`, `#*#` — tell, group, raid, and both raw events)
+  is tested against every line, so it still matches, but the wildcard swallows the timestamp into
+  the speaker capture. Since the first thing every handler does is an ACL check, the symptom is a
+  character that silently ignores its own owners — and, for the group-invite event, one that
+  actively `/disband`s every invitation it is sent.
 - `bct`'s `[#1#(msg)]` also still matches, because the timestamp's own `[` satisfies the leading
   literal; it captures from inside it (`23:39:30] [Haedes`).
-- `bc`'s `<#1#>` cannot match at all, so those commands are not refused, they are never heard.
+- A pattern starting with literal text — `bc`'s `<#1#>`, or an event like `You have been slain by
+  #1#!` — is filed under that letter and never tested against a line beginning with `[`. Those are
+  not refused, they are never heard, and nothing says so.
 
 So there are two fixes, and the second is narrower than it looks. `Speak.CleanSpeaker` takes the
 name back off the end of the capture (EQ names are letters, chat carries the first name alone),
 applied once in `protectChatHandler` — the wrapper every comm command and raw event already passes
-through, and slash commands deliberately do not, having no speaker. And
-`Speak.GetPhrasePatterns` registers a second, timestamped copy of a pattern **only where the plain
-one cannot match a stamped line**, which is `bc` alone. Giving one to the others would be actively
-harmful: the line would match both patterns, every command would run twice, and on a toggle that
-is two flips and no visible effect. `Speak.Respond` needs nothing — `GetRequestChannel` searches
-with `string.find` rather than anchoring, so it already tolerates the prefix.
+through, and slash commands deliberately do not, having no speaker. And `Speak.GetListenPatterns`
+expands a pattern into everything that has to be registered for it to be heard: itself, plus a
+timestamped copy **only where the plain one cannot match a stamped line**. Giving one to the others
+would be actively harmful: the line would match both patterns, every command would run twice, and
+on a toggle that is two flips and no visible effect.
+
+Both registration paths expand through it — `Speak.GetPhrasePatterns` for comm channels, where it
+is `bc` alone, and `Commands.RegisterEvent` for raw events, which is why an `Event` carries a list
+of mq event ids the way a `Command` does. No pattern registered today needs the copy (both events
+open with `#1#`), but the shape that does is the ordinary one for a raw event: a line about the
+world rather than about a speaker starts with literal text. Registering an event pattern any other
+way is how one gets added that never fires. `Speak.Respond` needs nothing — `GetRequestChannel`
+searches with `string.find` rather than anchoring, so it already tolerates the prefix.
 
 **Two command factories** cover the shapes every state needs, so a new state registers its
 commands instead of writing them (`commands/toggleCommand.lua`, `commands/actionCommand.lua`).
@@ -752,11 +768,29 @@ the services take the character back without being asked: movement stands it up 
 task starts (the pause gate), and the casting service stands it up before a cast. So the state
 never has to argue for the character, and nothing above it has to know it exists.
 
-**Nothing is remembered about having sat down.** "Should I be sitting right now" is asked from the
-world every pass and read both directions: sitting when the answer turns yes, standing when it
-turns no. That is what makes it safe with no held mode to go stale, and it is also why it stands up
-out of a sit somebody else chose — there is no such thing here as *whose* sit it is, only whether
-sitting is right.
+**"Should I be sitting right now" is asked from the world every pass** and read both directions:
+sitting when the answer turns yes, standing when it turns no. That is what makes it safe, with no
+held mode to go stale.
+
+**The one thing it remembers is whose sit this is**, because the world will not tell it. There is
+no TLO for "the user pressed the sit key", so ownership is inferred from what was asked for: a sit
+that turns up while this state's own `/sit on` is still outstanding (two seconds, since the server
+answers inside a ping) is ours, and every other one is not. It is confirmed against the world every
+pass — the moment the character is not sitting, the sit is not ours — so it cannot go stale the way
+a remembered *mode* would.
+
+A sit that is not ours is left alone entirely, at any threshold and against every reason to be
+standing. The reason somebody sat down is not readable from here, and the commonest one — the
+spellbook, which only opens sitting — is destroyed by standing up. That is also why the state will
+not stand out of *its own* sit while the spellbook is open: everything that genuinely needs the
+character upright (casting, movement, melee) stands it up itself, so the only stand this state ever
+owes is "sitting has stopped being worth it", which is never worth a lost memorize.
+
+The courtesy runs the other way too. A stand this state did not order — somebody getting up by
+hand, or a service taking the character to cast or to move — buys a five-second grace before it
+sits down again. It is a debounce and not a give-up: resting resumes on its own once nothing else
+is happening, and in a fight it has the happy side effect of leaving a healer on its feet between
+casts rather than sitting and standing for every heal.
 
 Which pools are watched is read, not configured: health always, mana and stamina where the
 character has them (`MaxMana` of zero is what says there is no mana bar — read the other way round,

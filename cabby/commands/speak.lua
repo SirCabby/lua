@@ -90,16 +90,40 @@ end
 ---Whether a pattern needs a second, timestamped copy of itself registered alongside it.
 ---
 ---Only when the plain pattern *cannot* match a timestamped line, which is narrower than it
----looks. A pattern starting with `#1#` matches anything, and one starting with `[` is satisfied
----by the timestamp's own bracket -- both still fire, and `CleanSpeaker` puts the capture right.
----Registering a variant for those would be actively harmful: the line would match both patterns
----and every command would run twice, which on a toggle is two flips and no visible effect.
+---looks. Blech files a pattern under the first character it can match, and tests a line only
+---against the patterns filed under the line's own first character plus those filed under "starts
+---with a variable". So a pattern opening with a scan variable (`#1#`, `#*#`) is tested against
+---every line and swallows the timestamp into that first capture, and one opening with `[` is
+---filed under `[`, which is exactly what a timestamp starts with -- both still fire, and
+---`CleanSpeaker` puts the speaker capture right. Registering a variant for those would be
+---actively harmful: the line would match both patterns and every command would run twice, which
+---on a toggle is two flips and no visible effect.
+---
+---Anything else -- a pattern opening with literal text, `You have been slain by #1#!` -- is filed
+---under that letter, is never tested against a line beginning with `[`, and is simply never heard
+---while timestamps are on. Those are the patterns that need the variant.
 ---@param pattern string
 ---@return boolean needsVariant
 local function NeedsTimestampVariant(pattern)
-    if pattern:sub(1, 3) == "#1#" then return false end
+    -- `##` is Blech's escape for a literal `#`, so it opens with text, not a variable
+    if pattern:sub(1, 1) == "#" and pattern:sub(2, 2) ~= "#" then return false end
     if pattern:sub(1, 1) == "[" then return false end
     return true
+end
+
+---Every pattern that has to be registered for `pattern` to be heard, whether or not the client
+---stamps a timestamp on the line.
+---
+---Registering what this returns -- rather than the pattern alone -- is the whole of coping with
+---timestamps on the listening side; `CleanSpeaker` handles the capture side.
+---@param pattern string
+---@return table patterns the pattern itself, plus a timestamped copy when it needs one
+function Speak.GetListenPatterns(pattern)
+    local patterns = { pattern }
+    if NeedsTimestampVariant(pattern) then
+        table.insert(patterns, timestampPrefix .. pattern)
+    end
+    return patterns
 end
 
 --- to leverage tell-to channel types, submit string as "<channeltype> <to>"
@@ -221,9 +245,8 @@ function Speak.GetPhrasePatterns(channels)
             -- a local channel has no chat line to listen for; registering its pattern as an
             -- event would only add a matcher that can never fire
             local pattern = Speak.channelTypes[channel:lower()].phrasePattern
-            table.insert(phrasePatterns, pattern)
-            if NeedsTimestampVariant(pattern) then
-                table.insert(phrasePatterns, timestampPrefix .. pattern)
+            for _, listenPattern in ipairs(Speak.GetListenPatterns(pattern)) do
+                table.insert(phrasePatterns, listenPattern)
             end
         end
     end
