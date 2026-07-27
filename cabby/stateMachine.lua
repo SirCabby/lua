@@ -23,8 +23,11 @@ function StateMachine.new()
 
 ---@diagnostic disable-next-line: inject-field
     self._ = {}
+    ---{ state = BaseState, priority = number? }, in registration order
     self._.registeredStates = {}
     self._.registeredServices = {}
+    ---functions returning a priority floor, or nil for "nothing to hold back"
+    self._.priorityGates = {}
     self._.started = false
     self._.loopDelayMs = 25
     self._.paused = {}
@@ -89,20 +92,69 @@ local function runServices(self)
     end
 end
 
-local function runChecks(self)
-    for _, state in ipairs(self._.registeredStates) do
-        ---@type BaseState
-        state = state
+---The strongest floor any gate is asking for this frame.
+---
+---A gate says "nothing weaker than this may run right now". Casting is the first one: a heal
+---that has committed three seconds of cast time is lost the moment the follow state below it
+---walks off, so while that cast is in the air the chain has to stop at the heal. Yielding is
+---not enough on its own -- the states below would happily take the frame the caster is not
+---using, and that is exactly the frame that ruins the cast.
+---@return number|nil floor
+local function priorityFloor(self)
+    local floor = nil
 
-        if not self._.paused[state] and runState(self, state) then
+    for _, gate in ipairs(self._.priorityGates) do
+        local ok, value = xpcall(gate, debug.traceback)
+        if not ok then
+            ErrorAlert.Record("priorityGate", value)
+        elseif type(value) == "number" and (floor == nil or value < floor) then
+            floor = value
+        end
+    end
+
+    return floor
+end
+
+local function runChecks(self)
+    local floor = priorityFloor(self)
+
+    for _, entry in ipairs(self._.registeredStates) do
+        ---@type BaseState
+        local state = entry.state
+
+        -- a state registered without a priority takes no part in this: we have no way to judge
+        -- it, and silently starving it would be worse than letting it run
+        local isStarved = floor ~= nil and entry.priority ~= nil and entry.priority > floor
+
+        if not isStarved and not self._.paused[state] and runState(self, state) then
             return
         end
     end
 end
 
 ---@param state BaseState
-function StateMachine:Register(state)
-    table.insert(self._.registeredStates, state)
+---@param priority? number where this state sits in the chain; smaller is stronger. States
+---registered with one can be starved by a priority gate (see RegisterPriorityGate).
+function StateMachine:Register(state, priority)
+    table.insert(self._.registeredStates, { state = state, priority = priority })
+end
+
+---Register something that can hold back part of the chain: a function returning the weakest
+---priority allowed to run right now, or nil when it is not holding anything back.
+---@param gate fun(): number|nil
+function StateMachine:RegisterPriorityGate(gate)
+    table.insert(self._.priorityGates, gate)
+end
+
+---@param stateOrKey BaseState|string
+---@return number|nil priority this state was registered at
+function StateMachine:GetPriority(stateOrKey)
+    for _, entry in ipairs(self._.registeredStates) do
+        if entry.state == stateOrKey or entry.state.key == stateOrKey then
+            return entry.priority
+        end
+    end
+    return nil
 end
 
 ---Register something that must run every frame regardless of which state is busy. A service
@@ -119,7 +171,11 @@ function StateMachine:UnregisterService(service)
 end
 
 function StateMachine:Unregister(state)
-    TableUtils.RemoveByValue(self._.registeredStates, state)
+    for index = #self._.registeredStates, 1, -1 do
+        if self._.registeredStates[index].state == state then
+            table.remove(self._.registeredStates, index)
+        end
+    end
 end
 
 ---@param delayMs number milliseconds between main loop passes
@@ -127,12 +183,19 @@ function StateMachine:SetLoopDelay(delayMs)
     self._.loopDelayMs = math.max(1, delayMs)
 end
 
+---One pass of the main loop: chat events, then every service, then the state chain down to the
+---first state that says it is busy. Split out of `Start` so a harness can drive frames without
+---the loop and the delay around them.
+function StateMachine:Frame()
+    mq.doevents()
+    runServices(self)
+    runChecks(self)
+end
+
 function StateMachine:Start()
     self._.started = true
     while (self._.started) do
-        mq.doevents()
-        runServices(self)
-        runChecks(self)
+        self:Frame()
         mq.delay(self._.loopDelayMs)
     end
 end

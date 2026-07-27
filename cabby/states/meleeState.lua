@@ -312,6 +312,10 @@ end
 ---@diagnostic disable-next-line: duplicate-set-field
 function MeleeState.Init()
     if not MeleeState._.isInit then
+        -- our own config, rather than one more line in Setup's fixed list: a class that does
+        -- not register this state has no melee action slots to write defaults for
+        MeleeStateConfig.Init()
+
         Menu.RegisterState(MeleeState)
 
         local attackDocs = ChelpDocs.new(function() return {

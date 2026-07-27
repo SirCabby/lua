@@ -16,30 +16,33 @@ cabby.lua
   └─ Setup:Init(configFilePath, stateMachine)
        ├─ PluginSetup        — ensure MQ2EQBC (optional; nothing else is required)
        ├─ Config.new(path)   — per-character pickle store: configDir/cabby/<Name>-Config.lua
-       ├─ *Config.Init()     — CommandConfig, DebugConfig, GeneralConfig, HotbarConfig,
-       │                       MeleeStateConfig
+       ├─ *Config.Init()     — CommandConfig, DebugConfig, GeneralConfig, HotbarConfig
+       │                       (MeleeStateConfig is initialized by MeleeState, so only the
+       │                        classes that register it get a melee config section)
        ├─ CommandQueue.Init  — registers the command queue service (what UI presses run through)
+       ├─ CabbyCasting.Init  — registers the casting service, its priority gate + /ccast
        ├─ CabbyMovement.Init — registers the movement service + /cmove
-       ├─ ClassSetup         — class module Init(stateMachine) registers states
+       ├─ ClassSetup         — this character's class module assembles + registers its states
        ├─ HotbarsUI.Init()   — ImGui shell for the hotbar windows
        └─ Menu.Init()        — ImGui shell (must be last)
   └─ stateMachine:Start()    — main loop
 ```
 
-**Main loop** (`stateMachine.lua`): `mq.doevents()` → pulse registered **services** → walk
-registered states in registration order → first enabled state whose `Go()` returns `true`
-("busy") wins the frame; everything below it is starved → `mq.delay(25)`.
+**Main loop** (`stateMachine.lua`, one pass is `Frame()`): `mq.doevents()` → pulse registered
+**services** → walk registered states in registration order → first enabled state whose `Go()`
+returns `true` ("busy") wins the frame; everything below it is starved → `mq.delay(25)`.
 
 **Services** run every frame regardless of which state is busy (`RegisterService`, anything
 with `key` + `Pulse()` and optionally `Stop()`). They are for work that cannot wait for its
-requesting state to get another turn. Two exist: **Movement**, which has to release its keys on
-the frame its task ends rather than whenever FollowState next runs, and **CommandQueue**
-(`commandQueue.lua`), which runs command lines pushed to it by callers that must not run
-commands themselves — every ImGui callback, hotbar buttons above all.
+requesting state to get another turn. Three exist: **Movement**, which has to release its keys
+on the frame its task ends rather than whenever FollowState next runs; **Casting**, whose whole
+point is that the caster is starving everything below it while the cast runs, so the cast has to
+progress without a turn of its own; and **CommandQueue** (`commandQueue.lua`), which runs command
+lines pushed to it by callers that must not run commands themselves — every ImGui callback,
+hotbar buttons above all.
 
 This is a **priority-chain cooperative scheduler**: state order = priority; `Go()` returning
-`false` yields to lower states. The intended priority bands (from the comment block in
-`setup.lua`) are:
+`false` yields to lower states. The priority bands live in `classes/priorities.lua`:
 
 | Priority | State | Priority | State |
 |---|---|---|---|
@@ -50,8 +53,19 @@ This is a **priority-chain cooperative scheduler**: state order = priority; `Go(
 | 49 | Pulling | 109 | Following |
 | 59 | Mez (in combat) | 119/129 | Buff / Misc |
 
-Today priorities are implicit (whatever order the class module registers). Formalizing them
-as a declared `priority` field is a planned refactor.
+A bigger number is weaker. The gaps of ten are room for "the same job, but not as strongly":
+`Priorities.heal + 5` is a hybrid healing below the class that heals for a living. Classes
+name a band per state rather than ordering their `Register` calls by hand — see below.
+
+**Priority gates** (`RegisterPriorityGate`) are the other half of that ordering. A state that
+yields hands the frame to whatever is below it, which is right for work that can be picked up
+again next frame and wrong for work already in the air: a three second heal is lost the moment
+the follow state below it walks off. A gate returns the weakest priority allowed to run right
+now, and `runChecks` skips every state weaker than that. The priority a state was registered at
+is kept for exactly this (`Register(state, priority)`, `GetPriority(stateOrKey)`); a state
+registered without one is never starved, since there is no way to judge it. Casting is the only
+gate today, and anything else that commits the character for longer than a frame belongs here
+too.
 
 **States are mini-FSMs.** Each state keeps a `_.currentAction` function pointer; action
 functions do one frame of work, mutate `currentAction` to transition, and return busy/yield.
@@ -69,20 +83,69 @@ BuildMenu`. `BaseState` documents this contract but is *not* a real metatable ba
 cabby/
   cabby.lua           entry; defines global `Global` { tracing (FlowTracer), configStore }
   setup.lua           plugin checks, config init order, class dispatch (16-way if/elseif)
-  stateMachine.lua    priority-chain loop + per-frame services (instance class)
+  stateMachine.lua    priority-chain loop + per-frame services + priority gates (instance class)
   movement.lua        wiring only: registers the movement service and /cmove
+  casting.lua         wiring only: casting service, its priority gate, movement arbiter, /ccast
   commandQueue.lua    service: runs command lines pushed from ImGui callbacks, a frame later
   character.lua       capability snapshot: which skills exist (primary/secondary/melee lists)
   status.lua          shared predicates (IsFacingTarget)
   states/             baseState, followState, meleeState
-  classes/            baseClass, monk, warrior — thin: Init() registers states
+  classes/            priorities (the bands), baseClass (assembly), classes (the registry),
+                      and one profile per EQ class
   commands/           the chat-command bus (see below)
   configs/            per-domain config modules (see below)
   actions/            ActionType interface + implementations + registries
   ui/                 ImGui menu shell + per-domain panels
-  utils/ (sibling)    Movement/ (see below), Time/Timer/StopWatch, Config, Debug/FlowTracer,
-                      FileSystem, Json, PriorityQueue (unused), Stack, StringUtils, TableUtils
+  utils/ (sibling)    Movement/ and Casting/ (see below), Time/Timer/StopWatch, Config,
+                      Debug/FlowTracer, FileSystem, Json, PriorityQueue (unused), Stack,
+                      StringUtils, TableUtils
 ```
+
+## Classes (`classes/`)
+
+The class is the assembly axis: which states this character runs, and in what order. All
+sixteen EQ classes have a module; `classes/classes.lua` maps the short name the client
+reports (`Me.Class.ShortName`) to a module path and requires only that one, so a wizard never
+loads the melee state.
+
+A class module is **data**, not Init code — a `ClassProfile` handed to `BaseClass.new`:
+
+```lua
+local Warrior = BaseClass.new({
+    key = "Warrior", shortName = "WAR",
+    states = { { state = MeleeState, priority = Priorities.dps } },
+    unimplemented = { "tanking as its own state: aggro-loss detection ...", "pulling" }
+})
+```
+
+`BaseClass` merges the profile's states with the **common** ones, sorts by priority, and then
+inits and registers each in that order. Rules it enforces:
+
+- **Every class follows.** FollowState (which is also anchor and click-to-zone — one state,
+  one `Go()`) is the one job that has nothing to do with what the character is, so no profile
+  has to remember to ask for it. A profile naming the same state wins over the common entry,
+  priority and all, which is how a class moves follow somewhere else in its chain.
+- **Ties keep declaration order.** `table.sort` is not stable, so entries carry their
+  declaration index as the tie-break — two states sharing a band stay in the order written.
+- **A malformed profile fails loudly** at construction (no priority, an entry that is not a
+  state, a missing key), because the alternative is a character silently registered to
+  nothing.
+- **A shell says so.** Now that every class loads, a class cabby cannot really play can no
+  longer announce itself by crashing on `class.Init`. Each profile lists what the class can do
+  that cabby cannot do for it yet, and Init prints it at startup under the states it did
+  register. A bot that quietly follows the group around and never casts is worse than a loud
+  failure, not better.
+
+Which classes register **MeleeState** is the only capability judgment made here: the nine
+melee classes (WAR, PAL, SHD, MNK, ROG, BER, RNG, BST, BRD) do; the priests and casters do
+not, because a cleric that walks into melee instead of healing is worse than one that stands
+still. A shaman played as a melee on emu adds the entry to its own profile. Everything
+narrower than "can this class do this at all" — does it have bash, does it have taunt discs —
+stays where it already is, in `character.lua` and the action registries.
+
+Tanking currently rides inside MeleeState (the taunt and hate action lists), so the tank band
+is unused; when tanking splits out, the plate classes gain a second entry at
+`Priorities.tank` and MeleeState stays where it is.
 
 ## Command bus (`commands/`)
 
@@ -201,6 +264,80 @@ Design rules that matter when adding a caller:
   works around corners because it replays the trail the target actually walked. Real navmesh
   pathing remains out of scope (that is MQ2Nav's job).
 
+## Casting (`utils/Casting/`, wired by `cabby/casting.lua`)
+
+Spells, item clicks and AA activations all go through one service, for the reasons movement is
+one: a cast takes seconds, cannot be hurried, and is lost if anything moves the character in the
+meantime. A script that blocks for three seconds hears no chat orders and watches nobody's
+health bar, so callers **request** a cast and poll the result by id. MQ2Cast is not loaded and
+is not wanted — this is the same job done against our own state machine rather than against a
+macro's blocking wait — but its source is worth reading for the mechanics EQ forces on anyone
+doing this (`plugins/MQ2Cast`, kept for reference only).
+
+```
+Casting.lua         the service: one cast, arbitration by priority, the floor, status queries
+  CastTask.lua      the sequencer: validate → target → stand still → memorize → fire → watch
+  CastSubject.lua   what is being cast: spell (gem, memorize), item click, or AA
+  Immobilizer.lua   "have we stopped moving long enough", including standing up and autorun
+  CastOutcome.lua   why a cast ended, and the client lines that say so
+  CastStatus.lua    idle | preparing | casting | succeeded | failed
+```
+
+Rules that matter when adding a caller:
+
+- **One cast at a time, and priority decides who gets it.** `Cast(subject, { owner, priority,
+  targetId })` outranks the cast in progress or it is refused outright — nothing queues up
+  behind an in-flight heal hoping for a turn. Equal priority does not win, so two behaviors in
+  the same band cannot interrupt each other every frame; a caller replacing its own cast says so
+  with `StopFor(owner)` first. A stronger request preempts, which means `/stopcast` and a frame
+  of separation before the new cast starts.
+- **A cast raises the priority floor** (`GetPriorityFloor`, registered as the state machine's
+  priority gate). While a cast owned by priority P is preparing *or* in flight, no state weaker
+  than P gets a turn. Yielding is not enough on its own — the states below would take the frame
+  the caster is not using, and that is exactly the frame that ruins the cast. It is up during
+  preparation too, because a cast waiting to stand still has even more to lose from a weaker
+  behavior starting to move again.
+- **Standing still is arbitrated, not assumed.** A cast that outranks whoever owns the movement
+  task cancels it; one that does not just waits, which is usually fine — a follow that has caught
+  up is holding position with the keys released, and that is standing still. The comparison needs
+  cabby's priorities, so the service takes the policy as an injected function and `cabby/casting.lua`
+  supplies it from `StateMachine:GetPriority`. Bards are exempt for songs (they sing on the move,
+  and the movement pause gate knows it), as is anything with a cast time under 100 ms, because
+  there is no cast bar to lose.
+- **Requests never touch the client; only `Pulse()` does** — targeting, `/memspell`, `/cast`,
+  `/stopcast`, all of it. Same rule as movement, same reason: a cast asked for from an ImGui
+  button or a chat handler must not run EQ commands mid-frame. `Interrupt()`/`StopFor()` record
+  the request; the pulse carries it out. Casting is registered ahead of movement so that it
+  pulses first: a cast that stops the character asks on its pulse, and movement's pulse, right
+  after, is what actually releases the keys.
+- **Two sources decide a cast's fate and neither is enough alone.** `Me.Casting` says *whether*
+  we are still casting; only the chat lines say *why* it stopped, since a fizzle, a resist and a
+  stun look identical from outside. `CastOutcome` registers an `mq.event` per line and feeds the
+  reason in; the sequencer checks that before anything it can work out itself. Lines arriving
+  while a cast is merely *preparing* are somebody else's (a proc, a pet) and are ignored.
+- **Resists arrive late.** "Your target resisted" comes after the cast bar closes, by which time
+  the cast has already been reported as a success. Rather than delay every result to wait for a
+  line that usually never comes, the service refines the recorded result for a couple of seconds
+  afterwards — so a caller that cares about resists reads `GetResult` on the frame *after* it
+  first goes terminal.
+- **It never retries.** A fizzle or an interrupt is reported and the caller decides whether
+  casting again is still the right thing to do; by then the mob may be dead or the heal no longer
+  needed. MQ2Cast loops internally because a macro has nowhere else to put that decision. A state
+  machine does.
+- Preparation runs as far as it can in one frame (the steps chain until one has to wait on the
+  client), so a character standing still with the spell memorized casts on the frame it was asked
+  to. Everything that waits is bounded: one budget for the whole preparation
+  (`prepareTimeoutMs`), and a cast that never appears on the client is reported as
+  `didNotStart` rather than holding the chain open.
+
+`/ccast <name> [item | alt | gem<#>] [targetid|<#>]` drives it by hand, at the commands band, and
+reports the outcome when it lands; `/ccast` alone reports what casting is doing and `/ccast off`
+cancels it. Settings (memorize gem, settle window, preparation budget) live in
+`configs/castingConfig.lua`, whose menu page also shows the live status.
+
+Nothing calls the service on its own yet — the states that would (heal, buff, cure, mez) do not
+exist, and the Spell/AA/Item `ActionType`s are still the gap described below.
+
 ## Action system (`actions/`)
 
 `ActionType` is the interface for "a thing the character can activate":
@@ -213,7 +350,10 @@ Design rules that matter when adding a caller:
   `Me.CombatAbility(1..200)` at require time and buckets by SPA (92/192 → hate) and target
   type (Single → melee). (`taunt` bucket exists but is never populated — bug.)
 - **AA / Item / Spell**: enum values and UI plumbing exist (`actionType.lua`, `actionUI.lua`)
-  but `Actions.Get` only resolves Ability and Discipline. Casters are unsupported today.
+  but `Actions.Get` only resolves Ability and Discipline, so an action slot still cannot hold a
+  spell. What was missing underneath — the casting service — now exists (see Casting above);
+  what is left is an `ActionType` apiece over it, plus the character discovery that would let the
+  action UI *offer* a spell, AA or clicky to pick from.
 
 **Action** (`action.lua`) is the *persisted config shape* for a user-configured action slot:
 `{ name, actionType, enabled, luaEnabled, lua, end_type, end_threshold }`. `luaEnabled`
@@ -418,14 +558,12 @@ hand-wired:
    `{ states, configSections, comms, events, slashcmds, menuPanels }`; one registrar wires
    Commands/Menu/StateMachine and enforces init order. Kills the per-module
    isInit/Menu.Register/tracing boilerplate and the fragile Setup ordering.
-3. **Declarative class profiles.** Classes stay the assembly axis — a warrior has no
-   business registering crowd control, and a paladin's heal state must not sit at cleric
-   priority — but the assembly becomes data, not imperative Init code: each class declares
-   `{ { state = HealState, priority = Bands.heal + N, constraints = {...} }, ... }` drawing
-   from shared priority-band constants so cross-class ordering stays predictable. Priorities
-   and constraints must be adjustable at **runtime** by role config and group makeup (no
-   cleric present → hybrid heals tighten). Unimplemented classes keep failing loudly until
-   built out — that is intended.
+3. **Declarative class profiles** — **landed** (see the Classes section above): all sixteen
+   classes declare `{ state, priority }` against shared band constants, `BaseClass` sorts and
+   registers, and a class that cannot really be played says what is missing at startup rather
+   than crashing on `class.Init`. Still open: **constraints** on an entry, and adjusting
+   priorities at **runtime** by role config and group makeup (no cleric present → hybrid
+   heals tighten), which needs the states that would be adjusted.
 4. **Crash barrier with loud errors.** pcall around each state `Go()` and event handler,
    but an error must never disappear into chat scroll: (a) an unmissable ImGui alert window
    (separate from the menu, requires dismissal), (b) full traceback appended to a log file,
@@ -447,7 +585,9 @@ hand-wired:
    handlers/`Respond` instead of re-deriving it afterward by regexing the line
    (`Speak.GetRequestChannel`).
 9. **Plugin independence.** Movement is **done** — `utils/Movement` replaced MQ2MoveUtils and
-   MQ2AdvPath and neither plugin is loaded (see the Movement section above). Still open:
+   MQ2AdvPath and neither plugin is loaded (see the Movement section above). Casting is **done**
+   the same way: `utils/Casting` covers what MQ2Cast was wanted for and the plugin is not loaded
+   (its source sits in `plugins/MQ2Cast` as reference for EQ's casting mechanics). Still open:
    transport. Native chat channels (tell/group/raid) are already plugin-free; MQ Lua actors
    (routed between same-machine clients by the launcher post office) become the structured-
    message backend; EQBC stays optional for bc/bct until then (open decision). MQ2DanNet is

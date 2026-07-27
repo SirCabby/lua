@@ -4,13 +4,14 @@ local Config = require("utils.Config.Config")
 local Debug = require("utils.Debug.Debug")
 
 require("cabby.character")
+local CabbyCasting = require("cabby.casting")
+local Classes = require("cabby.classes.classes")
 local CommandConfig = require("cabby.configs.commandConfig")
 local CommandQueue = require("cabby.commandQueue")
 local DebugConfig = require("cabby.configs.debugConfig")
 local GeneralConfig = require("cabby.configs.generalConfig")
 local HotbarConfig = require("cabby.configs.hotbarConfig")
 local HotbarsUI = require("cabby.ui.hotbarsUI")
-local MeleeStateConfig = require("cabby.configs.meleeStateConfig")
 local Menu = require("cabby.ui.menu")
 local CabbyMovement = require("cabby.movement")
 
@@ -94,64 +95,33 @@ local function ConfigSetup(configFilePath)
     DebugConfig.Init()
     GeneralConfig.Init()
     HotbarConfig.Init()
-    MeleeStateConfig.Init()
+    -- MeleeStateConfig belongs to MeleeState and is initialized by it, so the classes that
+    -- register no melee state get no melee config either
 
     Global.tracing.close(ftkey)
 end
 
+---Which states this character runs, and in what order, is what its class *is*: the class
+---module declares them with a priority band and `BaseClass` sorts and registers them
+---(`classes/priorities.lua` holds the bands, `classes/baseClass.lua` does the assembly).
 ---@param stateMachine StateMachine
 local function ClassSetup(stateMachine)
     local ftkey = Global.tracing.open("State Setup")
 
     local className = mq.TLO.Me.Class.ShortName()
-    ---@type BaseClass
-    local class
-    if className == "BRD" then
-    elseif className == "BST" then
-    elseif className == "BER" then
-    elseif className == "CLR" then
-    elseif className == "DRU" then
-    elseif className == "ENC" then
-    elseif className == "MAG" then
-    elseif className == "MNK" then
-        class = require("cabby.classes.monk")
-    elseif className == "NEC" then
-    elseif className == "PAL" then
-    elseif className == "RNG" then
-    elseif className == "SHD" then
-    elseif className == "SHM" then
-    elseif className == "WAR" then
-        class = require("cabby.classes.warrior")
-    elseif className == "WIZ" then
+    local class = Classes.Get(className)
+
+    if class == nil then
+        -- every EQ class has a module, so this is the client telling us something we do not
+        -- recognize -- carrying on would leave a character registered to no states at all
+        print("Cabby does not know the class [" .. tostring(className) .. "]. Aborting...")
+        mq.exit()
+        return
     end
 
     class.Init(stateMachine)
 
     Global.tracing.close(ftkey)
-    
--- | 1 My commands / Task / DZ
-
--- | 19 Passive Mode
-
--- | 29 Cure
--- | 39 Heal
-
--- | 49 Pulling
-
--- | -- IN COMBAT --
--- | 59 Mez
-
--- | 69 Tank / grab aggro
--- | 79 Dps (melee / spells)
-
--- | -- OUT COMBAT
--- | 89 Looting
-
--- | 99 Anchor
--- | 109 Following
-
--- | 119 Buff
--- | 129 Misc
 end
 
 ---@param configFilePath string
@@ -161,6 +131,10 @@ function Setup:Init(configFilePath, stateMachine)
 
     ConfigSetup(configFilePath)
     CommandQueue.Init(stateMachine) -- anything drawn in ImGui runs its commands through this
+    -- Casting registers ahead of movement, and so pulses ahead of it: a cast that has to stop
+    -- the character to get started asks movement to stop, and movement's own pulse -- the only
+    -- thing that talks to the keys -- then releases them in that same frame rather than the next
+    CabbyCasting.Init(stateMachine)
     CabbyMovement.Init(stateMachine) -- states expect the movement service to exist before they register
     ClassSetup(stateMachine)
 

@@ -4,8 +4,10 @@ Companion to [ARCHITECTURE.md](ARCHITECTURE.md). Origin: design review 2026-07-1
 Vision: one script that bots any class/race — states for every band in the priority table
 (commands, passive, cure, heal, pull, mez, tank, dps, loot, anchor, follow, buff).
 
-Current coverage: Follow/Anchor/ClickZone and Melee states; MNK + WAR only; melee-only
-action types (Skill, Discipline). Everything else below.
+Current coverage: Follow/Anchor/ClickZone and Melee states; all sixteen classes load, but
+only as profiles over those two states (the nine melee classes melee, everyone follows);
+melee-only action types (Skill, Discipline). The casting service exists (Phase 3) but no state
+uses it yet — `/ccast` is the only caller. Everything else below.
 
 ---
 
@@ -17,7 +19,7 @@ off-game harness; **in-game smoke test still pending**.
 
 | # | Where | Bug | Status |
 |---|---|---|---|
-| 1 | `setup.lua:113` | `class.Init` on nil for the 14 unimplemented classes — loud failure until each class is built out | intended |
+| 1 | `setup.lua:113` | `class.Init` on nil for the 14 unimplemented classes (and ROG, which the 16-way if/elseif left out entirely, so a rogue could never run cabby at all) | fixed — every class has a profile; the dispatch is a registry lookup, and an unknown short name prints and exits. "Loud" is now a startup notice listing what the class cannot do yet |
 | 2 | `configs/meleeStateConfig.lua` | taunt/hate cleanup loops ran *outside* their `HasTaunts`/`HasHates` guards → `#nil` crash on fresh config for classes without taunts/hate discs | fixed |
 | 3 | `configs/meleeStateConfig.lua` | checked `primary_combat_ability == nil` instead of `secondary_combat_ability` → secondary default never written | fixed |
 | 4 | `states/followState.lua` | `Math.Distance` string missing comma between x and z → stuck-detection distance garbage | fixed |
@@ -62,10 +64,15 @@ In rough order (details in ARCHITECTURE.md "Target architecture"):
    results instead of every frame.
 3. Config `Section` helper (schema/defaults/migration; kills taint boilerplate + writing getters).
 4. Module contract + registrar (kills isInit/Menu.Register/Setup-order boilerplate).
-5. Declarative class profiles: per-class state lists with priorities drawn from shared band
-   constants; classes omit states they have no business running; hybrids register shared
-   states at weaker priorities; runtime priority/constraint modifiers by role + group
-   makeup. Unimplemented classes keep failing loudly until built.
+5. ~~Declarative class profiles~~ — **done** for the assembly half: `classes/priorities.lua`
+   holds the bands, `classes/baseClass.lua` merges the common states (Follow) with the
+   profile's own, sorts and registers, and `classes/classes.lua` maps short name → module.
+   All sixteen classes have a profile; each lists what it cannot do yet and says so at
+   startup. Verified under LuaJIT and Lua 5.1 by a `scratchpad/test_classes.lua`-style harness
+   with the states stubbed out (chain order, common-state merge and override, tie-break,
+   melee/caster split, idempotent Init, malformed profiles); **in-game smoke still pending**.
+   Still open: per-entry **constraints**, and **runtime** priority modifiers by role and group
+   makeup (no cleric → hybrid heals tighten) — both want states that do not exist yet.
 6. ~~Movement service seam~~ — **done**, and it went straight to the Lua implementation
    rather than wrapping the plugins first (see Phase 2). States call
    `utils.Movement.Movement`; no state issues `/stick`, `/moveto` or `/afollow`.
@@ -116,9 +123,42 @@ Still open in this phase:
 
 ## Phase 3 — Caster foundation
 
-- Implement `ActionType` for **Spell / AA / Item** (Actions.Get resolves them; ActionUI
-  already has the slots). Needs a casting service: gem memorization, mana/reagent checks,
-  cast + interrupt/fizzle/resist outcome detection, stacking checks, recast tracking.
+**Casting service: done.** `utils/Casting/` is the reusable half (service, sequencer, subject,
+immobilizer, outcomes) and `cabby/casting.lua` the wiring; architecture notes are in
+ARCHITECTURE.md ("Casting"). What landed:
+
+- ~~**The service**~~ — one cast at a time, requested and polled by id, never blocking. Priority
+  decides who gets it and a stronger request preempts a weaker one.
+- ~~**Priority integration**~~ — `StateMachine:RegisterPriorityGate` plus priorities kept at
+  registration (`Register(state, priority)`, `GetPriority`). A cast owned by priority P starves
+  every state weaker than P for as long as it is preparing or in the air, which is what stops
+  follow from walking off mid-heal. `Frame()` was split out of `Start()` so the loop is testable.
+- ~~**Standing still**~~ — settle window on top of "the client says we stopped", standing up out
+  of sit/duck/feign, an autorun-cancelling key tap, and arbitration over the movement task by
+  priority (cancel it if we outrank its owner, otherwise wait). Bards and instant casts skip it.
+- ~~**Targeting, mana, reagents, range, line of sight**~~ — checked before committing, since a
+  refusal here costs nothing and one from the client costs a gem timer.
+- ~~**Gem memorization**~~ — `/memspell` into the configured gem (last gem by default) when a
+  spell is not memorized, with its own timeout.
+- ~~**Outcome detection**~~ — `Me.Casting` for the shape of the cast, ~40 registered chat lines
+  for the reason -- 37 of them (fizzle, interrupt, resist, immune, out of range, silenced, components...).
+  Late "resisted"/"did not take hold" lines refine a result already reported as a success.
+- ~~**By hand**~~ — `/ccast <name> [item | alt | gem<#>] [targetid|<#>]`, plus a Casting config
+  page showing live status.
+- **Deliberately not done**: retries. A fizzle is reported to the caller, which decides whether
+  casting again still makes sense — a macro loops because it has nowhere else to put that
+  decision; a state machine does.
+- Verified off-client against a simulated client (104 checks: the happy path, waiting to stand
+  still and giving up, movement arbitration both ways, fizzle, interrupt, preemption and refusal
+  by priority, the queued-request case, no mana, no target, out of range, no line of sight,
+  targeting first, memorizing, item clicks, AA activation, late resist refinement, stray lines
+  while preparing, bard songs, `StopFor`, and the state machine's gate) under LuaJIT and Lua 5.1.
+  **In-game smoke test still pending** — see Verify.
+
+Still open in this phase:
+
+- Implement `ActionType` for **Spell / AA / Item** over the service (`Actions.Get` resolves them;
+  ActionUI already has the slots but the name picker has nothing to offer for those types).
 - Extend `character.lua` discovery: spellbook/memmed gems, AAs, clickies, songs; refresh
   triggers (level/skill-up events, gear swap, respec) instead of load-time-only snapshot.
 - Buff-stacking model (`Spell.Stacks`, existing-buff checks) shared by buff/heal logic.
@@ -134,7 +174,15 @@ needed" usage), **DPS** (melee exists; add caster rotations + assist-at-% rules)
 **Loot** (corpse scan, loot rules per item, master-loot coordination),
 **Buff** (self/group maintenance with stacking + rebuff timers).
 Each new state = state module + config section + UI panel + comm commands, which is why
-the Phase 1 module contract comes first.
+the Phase 1 module contract comes first. Landing one is also a sweep over `classes/*.lua`:
+the per-class view of this list is each profile's `unimplemented` lines, and a state that
+exists moves from that list into the profile's `states` at its band.
+
+Two of these are already half-written elsewhere and only need the state around them:
+**Tank** (MeleeState's taunt/hate lists run on a timer; what is missing is aggro-loss
+detection, and the plate classes then gain an entry at `Priorities.tank`) and **DPS at
+range** (`utils/Movement/Stick.lua` already strafes into the rear arc, which is a rogue's
+backstab positioning; nothing asks for it).
 
 ## Phase 5 — Group/raid coordination
 
@@ -196,6 +244,23 @@ the Phase 1 module contract comes first.
    outgoing chat cannot re-trigger a command on ourselves (EQ renders our own group/raid lines
    as "You tell your party, ...", which no registered pattern matches, and EQBC runs with
    localecho off — verify both still hold).
-9. In-game smoke of the 2026-07-18 Phase 0 fixes: fresh-config startup on a taunt-less
+9. **Class profiles on a live character**: startup on a class that was never reachable before
+   (a rogue, and any caster) — the notice should list its states and what it cannot do, the
+   melee-less classes should register Follow alone, and `/state` should list the chain in
+   priority order. MeleeStateConfig now initializes from MeleeState rather than from Setup, so
+   a caster's config file should come up with no `MeleeState` section at all — worth confirming
+   on a fresh config, and that a melee character's config is unchanged.
+10. **Casting, in game** (nothing here has touched a client yet). In rough order: `/ccast` a
+   long heal on a group member while running, and watch it stop, cast, and report; `/ccast` a
+   spell that is not memorized and confirm `/memspell` lands in the configured gem and the cast
+   follows; force a fizzle and an interrupt (move mid-cast) and confirm the reported outcome;
+   `/ccast off` mid-cast; a clicky and an AA, neither of which shows a cast bar; and a bard song
+   while following. Specific things to watch, since they are guesses until then: that
+   `Me.Casting.ID()` is nil for item clicks and AAs on this emu client (the sequencer assumes it
+   and falls back to a timed grace window), that the outcome lines match verbatim on emu (the
+   resist wording differs between live and emu builds, and MQ2Cast carries both), that
+   `Spell.MyCastTime` reads as milliseconds through `tonumber`, and that `/keypress back` cancels
+   autorun without upsetting the movement service's own key bookkeeping.
+11. In-game smoke of the 2026-07-18 Phase 0 fixes: fresh-config startup on a taunt-less
    class, follow/stuck detection, add-new-action UI flow, `/activechannels <cmd> reset`,
    and the Cabby Alerts window (force an error to see alert + log + pause/resume).
