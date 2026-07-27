@@ -28,9 +28,11 @@ local Priorities = {
     -- in combat --
     mez = 59,        -- add control, above dps so a new add is handled before the next swing
     tank = 69,       -- taunt / grab aggro
-    -- melee and spell rotations. SpellDpsState registers at `dps - 1` and MeleeState at `dps`:
-    -- the melee state reports busy for as long as it is engaged, so a rotation below it would
-    -- never get a frame, while a rotation above it only takes one when it actually casts
+    -- melee and spell rotations. SpellDpsState registers at `dps - 1`, the melee classes declare
+    -- MeleeState at `dps`, and every other class picks melee up from the common states at
+    -- `dps + 5`: the melee state reports busy for as long as it is engaged, so a rotation below it
+    -- would never get a frame, while a rotation above it only takes one when it actually casts.
+    -- That is also why a caster's melee sits below `dps` rather than at it
     dps = 79,
 
     -- out of combat --

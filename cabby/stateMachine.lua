@@ -92,41 +92,68 @@ local function runServices(self)
     end
 end
 
----The strongest floor any gate is asking for this frame.
+---What every gate is asking for this frame.
 ---
----A gate says "nothing weaker than this may run right now". Casting is the first one: a heal
----that has committed three seconds of cast time is lost the moment the follow state below it
----walks off, so while that cast is in the air the chain has to stop at the heal. Yielding is
----not enough on its own -- the states below would happily take the frame the caster is not
----using, and that is exactly the frame that ruins the cast.
----@return number|nil floor
-local function priorityFloor(self)
-    local floor = nil
+---A gate says "nothing weaker than this may run right now", and may name states that run anyway.
+---Casting is the first one: a heal that has committed three seconds of cast time is lost the moment
+---the follow state below it walks off, so while that cast is in the air the chain has to stop at
+---the heal. Yielding is not enough on its own -- the states below would happily take the frame the
+---caster is not using, and that is exactly the frame that ruins the cast.
+---
+---The exemptions are the other half of it, and flee is what needs them: a mode that holds the whole
+---chain back *except* for the one job it is still meant to be doing. A floor alone cannot say that,
+---since what has to go is two disjoint ranges -- everything above follow and everything below it.
+---@return table gates `{ floor = number|nil, exempt = table|nil }` per gate holding something back
+local function activeGates(self)
+    local gates = {}
 
     for _, gate in ipairs(self._.priorityGates) do
-        local ok, value = xpcall(gate, debug.traceback)
+        local ok, floor, exempt = xpcall(gate, debug.traceback)
         if not ok then
-            ErrorAlert.Record("priorityGate", value)
-        elseif type(value) == "number" and (floor == nil or value < floor) then
-            floor = value
+            ErrorAlert.Record("priorityGate", floor)
+        else
+            local hasFloor = type(floor) == "number"
+            if hasFloor or type(exempt) == "table" then
+                gates[#gates+1] = { floor = hasFloor and floor or nil, exempt = type(exempt) == "table" and exempt or nil }
+            end
         end
     end
 
-    return floor
+    return gates
+end
+
+---Is anything holding this state back this frame?
+---
+---A state has to satisfy **every** gate, which is what keeps an exemption from being a way past
+---somebody else's floor: follow is exempt from the flee gate and still starved by a cast in the
+---air, and that is right -- a heal half cast is lost either way.
+---@param gates table from activeGates
+---@param state BaseState
+---@param priority number|nil the band it was registered at
+---@return boolean isStarved
+local function isStarved(gates, state, priority)
+    -- a state registered without a priority takes no part in this: we have no way to judge it, and
+    -- silently starving it would be worse than letting it run
+    if priority == nil then return false end
+
+    for _, gate in ipairs(gates) do
+        local isExempt = gate.exempt ~= nil and gate.exempt[state.key] == true
+        if not isExempt and (gate.floor == nil or priority > gate.floor) then
+            return true
+        end
+    end
+
+    return false
 end
 
 local function runChecks(self)
-    local floor = priorityFloor(self)
+    local gates = activeGates(self)
 
     for _, entry in ipairs(self._.registeredStates) do
         ---@type BaseState
         local state = entry.state
 
-        -- a state registered without a priority takes no part in this: we have no way to judge
-        -- it, and silently starving it would be worse than letting it run
-        local isStarved = floor ~= nil and entry.priority ~= nil and entry.priority > floor
-
-        if not isStarved and not self._.paused[state] and runState(self, state) then
+        if not isStarved(gates, state, entry.priority) and not self._.paused[state] and runState(self, state) then
             return
         end
     end
@@ -141,7 +168,12 @@ end
 
 ---Register something that can hold back part of the chain: a function returning the weakest
 ---priority allowed to run right now, or nil when it is not holding anything back.
----@param gate fun(): number|nil
+---
+---A gate may also return, second, a set of state keys that run anyway (`{ FollowState = true }`) --
+---for a gate that is not stopping the chain so much as narrowing it to one job, which is what flee
+---does. Exemptions only ever apply to the gate that returned them; a state still has to satisfy
+---every other gate.
+---@param gate fun(): number|nil, table|nil
 function StateMachine:RegisterPriorityGate(gate)
     table.insert(self._.priorityGates, gate)
 end

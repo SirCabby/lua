@@ -4,12 +4,12 @@ Companion to [ARCHITECTURE.md](ARCHITECTURE.md). Origin: design review 2026-07-1
 Vision: one script that bots any class/race — states for every band in the priority table
 (commands, passive, cure, heal, pull, mez, tank, dps, loot, anchor, follow, buff).
 
-Current coverage: Follow/Anchor/ClickZone, Melee, Spell DPS, Heal and Buff states, over a shared
-engagement (`combat.lua`); all sixteen classes load as profiles over those five (the nine melee
+Current coverage: Follow/Anchor/ClickZone, Melee, Spell DPS, Heal, Buff, Rest and Flee states, over
+a shared engagement (`combat.lua`); all sixteen classes load as profiles over those (the nine melee
 classes melee, eleven cast damage, the three priests and three hybrids heal, the twelve with a
-spellbook buff, everyone follows). The casting service and all five action types exist (Phase 3),
-so an action list can hold a spell, clicky or AA and `/ccast` can fire anything by hand.
-Everything else below.
+spellbook buff, and everyone follows, rests and flees). The casting service and all five action
+types exist (Phase 3), so an action list can hold a spell, clicky or AA and `/ccast` can fire
+anything by hand. Everything else below.
 
 ---
 
@@ -346,7 +346,46 @@ Rest's own leftovers are the rest of the misc band, and they are the MQ2Melee ch
 nowhere else to live: out-of-combat regen discs (Breather and friends), auto-food and drink,
 dropping illusions and mounts, and the AA-on/off management at the bottom of `meleeState.lua`.
 
-Still to come, per priority band: **Passive** (global pause; also a /cpause slash + comm command),
+**Flee: done** (`states/fleeState.lua`, `configs/fleeStateConfig.lua`, `ui/states/fleeStateMenu.lua`;
+the model is described in ARCHITECTURE.md, "Flee state"). Travel mode, at the passive band: follow
+and nothing else, so a long run does not stop for aggro, healing, buffing or resting on the way.
+What landed:
+
+- ~~**Suppression by gate, not by config**~~ — `RegisterPriorityGate` grew an optional second
+  return, a set of state keys exempt from that gate's floor, and flee holds the chain at
+  `Priorities.passive` exempting FollowState. A floor alone could not say it: what has to go is two
+  disjoint ranges, above follow and below it. A state must satisfy every gate, so an exemption is
+  never a way past somebody else's floor — a cast in the air still starves follow. Nothing is
+  written onto the other states, so `flee off` needs no restoring and a crash mid-run cannot leave a
+  cleric that has quietly stopped healing.
+- ~~**Letting go**~~ — turning it on interrupts the cast in the air, drops the engagement, and stops
+  a movement task follow does not own (a melee stick would go on holding range on what we are
+  running from). Auto attack is dropped every pass instead, since `/attack on` is the one commitment
+  nothing else takes back, and `Combat.Pulse` skips the auto-engage sweep while fleeing.
+- ~~**A common state**~~ — registered for every class by `BaseClass`, like follow and rest. It is
+  the one state handed the state machine at `Init`, because a gate has to be registered with the
+  machine that consults it.
+- ~~**Commands**~~ — `flee` as a switch (so `/state flee` and a hotbar button that draws itself as
+  the setting come free), `/cflee` for status and for `on`/`off`. It rides on top of a follow order
+  rather than replacing one, and says so when turned on with nothing to follow.
+- Verified off-client (12 gate checks: the ungated chain, a busy state ending the pass, a floor on
+  its own, flee leaving only itself and follow, flee off restoring the chain, flee together with a
+  cast in the air in both registration orders, a floor weaker than the exempt state, an unranked
+  state never starved, a gate that errors holding nothing back, and an exempt set with no floor;
+  plus the wiring: the module graph loading, the default, the switch and what `Status` reads back
+  from it, `Describe` both ways, `Go` never holding the frame, the letting-go on the transition only,
+  the follow task kept where a stick is dropped, and flee first in an assembled class chain) under
+  LuaJIT. **In-game smoke test still pending** — see Verify.
+
+Flee's own leftovers: the **pet**, which goes on fighting whatever it was told to and trails the run
+— `/pet back off` belongs here, but cabby issues no pet commands anywhere yet and half a pet
+behavior (what it was fighting, whether to put it back afterwards) is worse than none, so it waits
+for a pet domain to live in; nothing decides on its *own* to flee (low health, a named spawning, a
+wipe), which is a trigger to hang off it once there is anything watching for those; and there is no
+group "everybody run" beyond saying `flee on` to a channel, which is Phase 5's coordination.
+
+Still to come, per priority band: **Passive** (global pause; the same shape as flee with an empty
+exemption set, plus a /cpause slash + comm command),
 **Cure** (detrimental scan → cure actions), **Pull** (target selection, pathing, leash,
 camp radius), **Mez** (add control, in-combat priority above dps), **Tank** (taunt/hate
 action lists already modeled in MeleeStateConfig; needs aggro-loss detection for "as
@@ -435,11 +474,12 @@ backstab positioning; nothing asks for it).
    as "You tell your party, ...", which no registered pattern matches, and EQBC runs with
    localecho off — verify both still hold).
 9. **Class profiles on a live character**: startup on a class that was never reachable before
-   (a rogue, and any caster) — the notice should list its states and what it cannot do, the
-   melee-less classes should register Follow alone, and `/state` should list the chain in
-   priority order. MeleeStateConfig now initializes from MeleeState rather than from Setup, so
-   a caster's config file should come up with no `MeleeState` section at all — worth confirming
-   on a fresh config, and that a melee character's config is unchanged.
+   (a rogue, and any caster) — the notice should list its states and what it cannot do, and
+   `/state` should list the chain in priority order. Every class registers MeleeState now, so
+   the thing to confirm is the *band*: a caster's notice should show Melee below SpellDps
+   (`dps + 5` against `dps - 1`), a melee class's should still show it at `dps`, and every
+   character should get a `MeleeState` config section where casters previously got none. A melee
+   character's config should be unchanged.
 10. **Casting, in game** (nothing here has touched a client yet). In rough order: `/ccast` a
    long heal on a group member while running, and watch it stop, cast, and report; `/ccast` a
    spell that is not memorized and confirm `/memspell` lands in the configured gem and the cast
@@ -476,8 +516,10 @@ backstab positioning; nothing asks for it).
    both the swinging and the casting, does `melee off` leave the spells running, and does `nuke
    off` leave the swinging? Then the ordering that the split depends on — the rotation should get
    its cast in without the melee state starving it, and a heal should interrupt a nuke rather
-   than waiting for it. On a wizard: `attack ${Target.ID}` with no melee state anywhere, and
-   `start below %` actually holding fire until the tank has aggro. Also confirm the auto_engage
+   than waiting for it. On a wizard: `attack ${Target.ID}` with melee left off should nuke and
+   never close, and `start below %` should hold fire until the tank has aggro; then `melee on`
+   and confirm the weaker band does what it claims — swings only with the frames the rotation
+   passes on, and never in place of a nuke that was ready. Also confirm the auto_engage
    migration: a character with an existing config should keep whatever it had set, and its
    `MeleeState` section should come back without the key.
 14. **Buffing, in game — and cached buffs above all.** The whole "what is missing" model rests on

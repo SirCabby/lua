@@ -9,9 +9,10 @@ local SpellDpsState = require("cabby.states.spellDpsState")
 ---damage that made it necessary -- which puts it above the damage rotations rather than at the
 ---buff band where the rest of its casting sits.
 ---
----No melee state: a shaman does swing on emu servers, but a spear is not worth walking away
----from a slow for. A character being played that way adds the state to its own profile the way
----the melee classes do -- `{ state = MeleeState, priority = Priorities.dps }`.
+---A shaman does swing on emu servers, and now has the melee state to do it with -- from the
+---common states at `dps + 5`, which is the band that says a spear is not worth walking away from
+---a slow for. A character played as a melee shaman moves it up by declaring it in this profile
+---the way the melee classes do: `{ state = MeleeState, priority = Priorities.dps }`.
 ---@type BaseClass
 local Shaman = BaseClass.new({
     key = "Shaman",

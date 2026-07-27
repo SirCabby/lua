@@ -417,6 +417,15 @@ function FollowState.StopFollowing()
     ClearFollowOrder()
 end
 
+---Whoever this character was told to follow, whether or not they are in the zone right now.
+---
+---The order, not a conclusion drawn from it: "am I following them at this moment" is
+---`Movement.IsFollowing`, and this stays set across a zone line and a death because the order does.
+---@return string name "" when no follow order is standing
+function FollowState.GetFollowTarget()
+    return FollowState._.followTarget
+end
+
 ---@diagnostic disable-next-line: duplicate-set-field
 function FollowState.Init()
     if not FollowState._.isInit then

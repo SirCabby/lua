@@ -17,6 +17,17 @@ Status.IsMeleeEnabled = function()
     return section ~= nil and section.enabled == true
 end
 
+---Is this character in travel mode -- following, and refusing every other job?
+---
+---Read out of the flee state's persisted section for the same reason melee is: asking a question
+---*about* a state should not be what drags the module in. Every class registers FleeState, so the
+---section is always there; no section still reads as off, which is the safe answer.
+---@return boolean isFleeing
+Status.IsFleeing = function()
+    local section = Global.configStore:GetConfigRoot()["FleeState"]
+    return section ~= nil and section.enabled == true
+end
+
 Status.IsFacingTarget = function()
     if (mq.TLO.Target.ID() or 0) <= 0 then return false end
 

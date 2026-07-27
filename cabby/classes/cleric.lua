@@ -8,8 +8,10 @@ local SpellDpsState = require("cabby.states.spellDpsState")
 ---The class the heal band was drawn for: a cleric heals at full priority and everything else
 ---it does yields to that.
 ---
----It deliberately does not register the melee state -- a cleric that walks into melee instead of
----healing is worse than one that stands still.
+---Melee comes from the common states at `dps + 5`, below the nukes and far below the heals, and
+---switched off until someone asks for it. A cleric that walks into melee instead of healing is
+---still worse than one that stands still -- what the band buys is that it cannot happen by
+---accident: healing, then nuking, then swinging, in that order, every pass.
 ---@type BaseClass
 local Cleric = BaseClass.new({
     key = "Cleric",

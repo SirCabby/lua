@@ -17,8 +17,8 @@ cabby.lua
        ├─ PluginSetup        — ensure MQ2EQBC (optional; nothing else is required)
        ├─ Config.new(path)   — per-character pickle store: configDir/cabby/<Name>-Config.lua
        ├─ *Config.Init()     — CommandConfig, DebugConfig, GeneralConfig, HotbarConfig
-       │                       (MeleeStateConfig is initialized by MeleeState, so only the
-       │                        classes that register it get a melee config section)
+       │                       (MeleeStateConfig is initialized by MeleeState, which every class
+       │                        registers now, so every character gets a melee config section)
        ├─ CommandQueue.Init  — registers the command queue service (what UI presses run through)
        ├─ CabbyCasting.Init  — registers the casting service, its priority gate + /ccast
        ├─ CabbyMovement.Init — registers the movement service + /cmove
@@ -57,7 +57,7 @@ This is a **priority-chain cooperative scheduler**: state order = priority; `Go(
 | Priority | State | Priority | State |
 |---|---|---|---|
 | 1 | My commands / Task / DZ | 69 | Tank / grab aggro |
-| 19 | Passive mode | 79 | DPS (melee/spells) |
+| 19 | Flee (travel mode) / passive | 79 | DPS (melee/spells) |
 | 29 | Cure | 89 | Looting |
 | 39 | Heal | 99 | Anchor |
 | 49 | Pulling | 109 | Following |
@@ -73,9 +73,16 @@ again next frame and wrong for work already in the air: a three second heal is l
 the follow state below it walks off. A gate returns the weakest priority allowed to run right
 now, and `runChecks` skips every state weaker than that. The priority a state was registered at
 is kept for exactly this (`Register(state, priority)`, `GetPriority(stateOrKey)`); a state
-registered without one is never starved, since there is no way to judge it. Casting is the only
-gate today, and anything else that commits the character for longer than a frame belongs here
-too.
+registered without one is never starved, since there is no way to judge it. Anything that
+commits the character for longer than a frame belongs here.
+
+A gate may also return, second, a set of state keys that run **anyway** — for a gate that is not
+so much stopping the chain as narrowing it to one job. Flee is the one that needs it: a floor
+alone cannot say "everything except follow", because what has to go is two disjoint ranges, the
+states above follow and the states below it. A state has to satisfy *every* gate, so an exemption
+is never a way past somebody else's floor — follow is exempt from the flee gate and still starved
+by a cast in the air, which is right, since a heal half cast is lost either way. Two gates exist:
+**casting** (a floor, no exemptions) and **flee** (the passive band, exempting follow).
 
 **Every state keeps the same contract** — written out in full in `states/baseState.lua`, which is
 the thing to read before writing one. In short, `Go()` is one pass of:
@@ -131,8 +138,8 @@ cabby/
   commandQueue.lua    service: runs command lines pushed from ImGui callbacks, a frame later
   character.lua       capability snapshot: which skills exist (primary/secondary/melee lists)
   status.lua          shared predicates (IsFacingTarget)
-  states/             baseState, followState, meleeState, spellDpsState, healState, buffState,
-                      restState
+  states/             baseState, fleeState, followState, meleeState, spellDpsState, healState,
+                      buffState, restState
   classes/            priorities (the bands), baseClass (assembly), classes (the registry),
                       and one profile per EQ class
   commands/           the chat-command bus (see below), incl. the toggle/action command factories
@@ -148,8 +155,8 @@ cabby/
 
 The class is the assembly axis: which states this character runs, and in what order. All
 sixteen EQ classes have a module; `classes/classes.lua` maps the short name the client
-reports (`Me.Class.ShortName`) to a module path and requires only that one, so a wizard never
-loads the melee state.
+reports (`Me.Class.ShortName`) to a module path and requires only that one, so a character
+never loads the states of a class it is not.
 
 A class module is **data**, not Init code — a `ClassProfile` handed to `BaseClass.new`:
 
@@ -164,11 +171,17 @@ local Warrior = BaseClass.new({
 `BaseClass` merges the profile's states with the **common** ones, sorts by priority, and then
 inits and registers each in that order. Rules it enforces:
 
-- **Every class follows, and every class rests.** FollowState (which is also anchor and
-  click-to-zone — one state, one `Go()`) and RestState are the two jobs that have nothing to do
-  with what the character is, so no profile has to remember to ask for them. A profile naming the
-  same state wins over the common entry, priority and all, which is how a class moves follow
-  somewhere else in its chain.
+- **Every class flees, follows, rests, and melees.** FleeState, FollowState (which is also anchor
+  and click-to-zone — one state, one `Go()`), RestState, and MeleeState are the four jobs that have
+  nothing to do with what the character is, so no profile has to remember to ask for them. Flee is
+  there for a second reason as well: it is not a job at all but the absence of every job below it,
+  so what it holds back is the same list whatever the character can do. It is also the only state
+  handed the state machine at `Init`, because a gate has to be registered with the machine that
+  consults it. Melee
+  comes in at `dps + 5` rather than `dps`, weak enough that a caster's rotation always gets the
+  frame first. A profile naming the same state wins over the common entry, priority and all,
+  which is how a class moves follow somewhere else in its chain — and how the melee classes keep
+  their melee at `dps`.
 - **Ties keep declaration order.** `table.sort` is not stable, so entries carry their
   declaration index as the tie-break — two states sharing a band stay in the order written.
 - **A malformed profile fails loudly** at construction (no priority, an entry that is not a
@@ -180,12 +193,17 @@ inits and registers each in that order. Rules it enforces:
   register. A bot that quietly follows the group around and never casts is worse than a loud
   failure, not better.
 
-Which states a class registers is the only capability judgment made here. The nine melee classes
-(WAR, PAL, SHD, MNK, ROG, BER, RNG, BST, BRD) melee; the priests and casters do not, because a
-cleric that walks into melee instead of healing is worse than one that stands still. A shaman
-played as a melee on emu adds the entry to its own profile. The eleven classes that can hurt
-something with a spell register **SpellDpsState** a band above melee, which for a hybrid means
-both. The three
+Which states a class registers is the only capability judgment made here. **Every class melees**,
+because anyone can swing a weapon — but not at the same strength. The nine melee classes (WAR,
+PAL, SHD, MNK, ROG, BER, RNG, BST, BRD) declare **MeleeState** themselves at `Priorities.dps`;
+everyone else picks it up from the common states one step weaker, at `dps + 5`. The gap is the
+capability judgment: the melee state reports busy for as long as it is engaged, so at `dps` a
+caster's swing would be as important as a warrior's, while at `dps + 5` it only gets the frames
+the spell rotation passed on. It is also off in config until switched on, so what a cleric gains
+is the option, not the habit — the ordering is what stops it walking into melee instead of
+healing. A shaman played as a melee on emu moves the entry up by declaring it in its own profile.
+The eleven classes that can hurt something with a spell register **SpellDpsState** a band above
+melee, which for a hybrid means both. The three
 priests heal, and so do the three hybrids that can (PAL, RNG, BST) — but a band lower
 (`Priorities.heal + 5`), which is the whole reason the bands are numbers: a paladin's heal has to
 land below a cleric's, and that is only checkable if both name the same band. A druid or shaman in
@@ -773,6 +791,65 @@ render callback is the crash hazard the movement service is built around.
 The rest of the misc band is still empty: the out-of-combat regen discs, auto-food, and illusion and
 mount management from the MQ2Melee lines at the bottom of `meleeState.lua` are the obvious
 neighbours, and each is its own job rather than something to bolt onto this one.
+
+## Flee state (`states/fleeState.lua`)
+
+Travel mode: follow, and nothing else. The state whose job is what must *not* happen.
+
+A group crossing four zones does not want each character stopping to fight back at every add on the
+way, to top somebody off, to re-buff whoever the last mob dispelled, or to sit down every time the
+run pauses for a moment. Switching each of those off one at a time is several orders *and* a set of
+settings to remember to put back afterwards.
+
+**It suppresses rather than configures**, which is why it is a state and not a script that flips the
+other states off. Nothing it does is persisted onto anything else: the heal list, the melee switch
+and the buff list are exactly as they were when the order arrived, `flee off` hands the character
+back to its normal chain with no restoring to get wrong, and a crash mid-run cannot leave behind a
+cleric that has quietly stopped healing.
+
+**The suppressing is a priority gate with one exemption.** At `Priorities.passive` this state is
+stronger than everything except an order given to the character, and while it is on its gate holds
+the chain at that band exempting FollowState — so a pass walks flee, skips cure/heal/dps/loot/anchor,
+runs follow, and skips buff/rest. Neither half of the ordinary release protocol can express that:
+returning `false` hands the turn to the heal state, and returning `true` starves follow along with
+everything else. Two disjoint ranges have to go, and only a gate can say so.
+
+Follow is the exemption rather than something flee re-does because it is already the state that
+knows how to keep up with somebody, work around a corner on their own breadcrumb trail, and click
+through the zone line they went out of — which is what a long run *is*. A flee that reimplemented
+any of it would be a second follow to keep in step with the first. It also means `anchor` still
+holds during a flee, since that is the same state and the same `Go()`.
+
+**Services are not suppressed.** Movement, casting, the command queue, character discovery and
+combat pulse every frame whatever the chain is doing, which is what keeps `flee off` reachable from
+chat, from the menu and from a hotbar button while the mode is on.
+
+What turning it on lets go of, once, on the transition: the cast in the air (`Casting.Interrupt`),
+the fight (`Combat.Disengage`), and the movement task — unless follow already owns it, since that is
+what we are about to be doing anyway and cancelling it only costs a pass picking the trail back up.
+A stick started by the melee state is exactly the one to drop: it would go on holding range on the
+very thing we are running from. Each of those is a *request* rather than a game command, which is
+what makes the menu checkbox and a hotbar button safe.
+
+Two things are read every pass instead of being done once. Auto attack, because `/attack on` is the
+one commitment nothing else takes back — the melee state issues it and never issues the other half,
+and it is not getting another turn in which to notice — so `Go()` reads `Me.Combat` and drops it
+whenever it finds it on, which also covers the player switching it back on by hand. And the
+auto-engage sweep, which `Combat.Pulse` skips while `Status.IsFleeing()`: nothing would act on a new
+engagement, but one recorded now is one that resumes the moment the run ends, against whatever we
+ran past ten zones ago.
+
+`flee` is the switch (so `flee on`, `flee off`, or `flee` on its own to flip it — and `/state flee`,
+and a hotbar button that draws itself as the setting like every other toggle), `/cflee` reports and
+also takes `on`/`off`. It rides on top of a follow order rather than replacing one, so turning it on
+with nothing to follow says so; the natural binding is one hotbar button carrying both lines
+(`/bc followme` then `/bc flee on`). The switch is persisted like every other one, which means a
+character that was fleeing when the script reloaded comes back fleeing — right far more often than
+not, since a long run is not over because a client restarted, but also the setting easiest to leave
+on by accident, so `Init` says so at startup.
+
+The passive band is shared with the global pause that does not exist yet; when it lands it is this
+same shape with an empty exemption set.
 
 ## Config model
 

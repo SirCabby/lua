@@ -10,6 +10,7 @@ local Command = require("cabby.commands.command")
 local Commands = require("cabby.commands.commands")
 local CombatConfig = require("cabby.configs.combatConfig")
 local SlashCmd = require("cabby.commands.slashcmd")
+local Status = require("cabby.status")
 local ToggleCommand = require("cabby.commands.toggleCommand")
 local UserInput = require("cabby.utils.userinput")
 
@@ -121,6 +122,11 @@ function Combat.Pulse()
 
     if not CombatConfig.GetAutoEngage() then return end
 
+    -- Travel mode is exactly the case for not picking a fight up. Nothing would act on it -- every
+    -- state that fights is held back while flee is on -- but an engagement recorded now is one that
+    -- resumes the moment the run ends, against whatever we ran past ten zones ago
+    if Status.IsFleeing() then return end
+
     local now = Time.current_time()
     if now - Combat._.lastScanMs < scanIntervalMs then return end
     Combat._.lastScanMs = now
@@ -229,6 +235,11 @@ function Combat.Init(stateMachine)
 
         print("Combat: " .. Combat.Describe())
         print(" -- auto-engage: " .. (CombatConfig.GetAutoEngage() and "on" or "off"))
+        -- the one setting that makes this whole report a lie about what will happen next: an
+        -- engagement is still recorded while fleeing, and nothing whatsoever acts on it
+        if Status.IsFleeing() then
+            print(" -- flee is on: nothing will act on this until `flee off`")
+        end
     end
     Commands.RegisterSlashCommand(SlashCmd.new("cattack", Bind_CAttack, cattackDocs))
 

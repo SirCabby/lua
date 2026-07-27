@@ -5,8 +5,11 @@ local BuffState = require("cabby.states.buffState")
 local SpellDpsState = require("cabby.states.spellDpsState")
 
 ---A wizard nukes, and the hard part is not nuking so hard it pulls the mob off the tank -- which
----is what the spell dps state's "start below %" is for. It deliberately does not register the
----melee state: a wizard in melee range is a dead wizard.
+---is what the spell dps state's "start below %" is for.
+---
+---Melee comes from the common states at `dps + 5` and stays off until it is switched on, because
+---a wizard in melee range is still a dead wizard. It is there for the character who is out of
+---mana with a mob already on them, which is the only time swinging beats standing still.
 ---@type BaseClass
 local Wizard = BaseClass.new({
     key = "Wizard",
