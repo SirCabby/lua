@@ -28,12 +28,14 @@ local Event = require("cabby.commands.event")
 ---ordering is the whole of the coordination, which is the design working as intended.
 ---
 ---**It holds the orders, because they cannot be re-derived**: who to follow, where to stand, and
----progress through clicking a zone line (a clicked door looks exactly like an unclicked one).
----The one measurement kept alongside them -- where the follow target was last seen -- exists for
----the same reason: it is the fact their vanishing is judged by, and there is nobody left to ask
----once they are gone. Everything else is read from the world on every drive. Follow and anchor
----are contradictory, so taking either order clears the other -- with only one ever standing,
----"which am I doing" stays something to read.
+---progress through a zone line -- clicking one's switch, or walking through after somebody where
+---there is no switch to click (a clicked door looks exactly like an unclicked one, and a walk
+---aimed at an invisible trigger looks exactly like walking). The one measurement kept alongside
+---them -- where the follow target was last seen, which way they were going and whether they were
+---still moving -- exists for the same reason: it is the fact their vanishing is judged by, and
+---there is nobody left to ask once they are gone. Everything else is read from the world on every
+---drive. Follow and anchor are contradictory, so taking either order clears the other -- with
+---only one ever standing, "which am I doing" stays something to read.
 ---@class Travel
 local Travel = {
     key = "Travel",
@@ -52,13 +54,20 @@ local Travel = {
         -- where we were told to stand
         anchor = { set = false, x = 0, y = 0 },
         -- where the follow target was last seen, and in which zone: the spot their vanishing is
-        -- judged from. Gone within click range of a switch reads as clicked-through; gone
-        -- anywhere else does not. A measurement, not an order -- and one vanishing spends it.
-        lastSeen = { zoneId = 0, y = 0, x = 0 },
+        -- judged from. Gone within click range of a switch reads as clicked-through; gone on
+        -- the move anywhere else reads as a walk-through zone line taking them, with heading
+        -- saying which way through it and seenMs/movedMs saying whether they were still moving;
+        -- gone from a standstill reads as nothing to chase. A measurement, not an order -- and
+        -- one vanishing spends it.
+        lastSeen = { zoneId = 0, y = 0, x = 0, heading = 0, seenMs = 0, movedMs = 0 },
         -- Progress through clicking a zone line: the door has been clicked and the zone is
-        -- coming, which is not something a fresh look at the world can reconstruct. The one
-        -- piece of held state here that is not an order.
+        -- coming, which is not something a fresh look at the world can reconstruct. Held state
+        -- that is not an order, like walkZone below.
         clickZone = { step = nil, timer = nil, lastFailedMs = 0 },
+        -- Progress through walking a walk-through zone line: the vanish spot is being walked
+        -- past and the zone should be coming, which a fresh look at the world cannot
+        -- reconstruct once the sighting that justified it is spent.
+        walkZone = { active = false, taskId = 0, destY = 0, destX = 0, fromZoneId = 0, lastFailedMs = 0 },
         -- stuck detection, which is a measurement rather than a decision
         stuck = { checking = false, timer = nil, lastLoc = { x = 0, y = 0, z = 0, zoneId = 0 } },
         waitingReported = false
@@ -87,6 +96,20 @@ local clickZoneRetryMs = 15000
 local zoneSwitchDistance = 30
 -- how near their corpse must be for a vanishing to read as "they died here"
 local corpseDistance = 100
+-- Walking through a walk-through zone line, for a target vanishing on the move where there is no
+-- switch: how far past the spot they vanished from to aim. The trigger plane is a step past where
+-- their client last reported them, so the walk has to overshoot -- it is the zone line that ends
+-- it, not arriving.
+local zoneWalkDistance = 40
+-- how lately the target must still have been moving, as of our last sighting of them, for their
+-- vanishing to read as walking through a zone line. A gate is cast and a camp is sat out, both
+-- from a standstill measured in whole seconds; a zone line takes somebody mid-stride.
+local zoneWalkRecentMoveMs = 2500
+-- how near the vanish spot we must be for walking through after them to be honest: the trail
+-- walked out is what brings us here, and a beeline from further away has no known-walkable route
+local zoneWalkNearDistance = 60
+-- how long to leave a failed walk-through alone, for the same reason as clickZoneRetryMs
+local zoneWalkRetryMs = 15000
 
 -- The command id the click-zone procedure speaks on. The command itself is registered by the
 -- follow state (it owns the order surface); this is the same id, so what the procedure says lands
@@ -122,6 +145,11 @@ end
 local function CloseToLastLoc()
     local lastLoc = Travel._.stuck.lastLoc
     return mq.TLO.Math.Distance(tostring(lastLoc.y) .. "," .. tostring(lastLoc.x) .. "," .. tostring(lastLoc.z))() < 30
+end
+
+---A fresh, empty last-sighting: nothing measured yet, nothing to judge a vanishing by.
+local function EmptyLastSeen()
+    return { zoneId = 0, y = 0, x = 0, heading = 0, seenMs = 0, movedMs = 0 }
 end
 
 ---Whoever we are following, whether or not they are currently around: an invalid spawn
@@ -195,6 +223,34 @@ local function EndClickZone(failed)
     Travel._.clickZone.lastFailedMs = failed and Time.current_time() or 0
 end
 
+---Whether walking through a zone line is worth trying: not while we have just failed at it.
+---@return boolean
+local function MayWalkZone()
+    return Time.current_time() - Travel._.walkZone.lastFailedMs >= zoneWalkRetryMs
+end
+
+---@param failed boolean whether the walk ended with the zone never taking us
+local function EndWalkZone(failed)
+    Travel._.walkZone.active = false
+    Travel._.walkZone.taskId = 0
+    Travel._.walkZone.lastFailedMs = failed and Time.current_time() or 0
+end
+
+---Start walking through a walk-through zone line: aim past the spot the follow target vanished
+---from, along the way they were going, and let the zone line end the walk the way it ended
+---theirs.
+---@param lastSeen table the sighting being spent: where they vanished, and their heading through
+local function BeginWalkZone(lastSeen)
+    local rad = math.rad(lastSeen.heading)
+    Travel._.walkZone.active = true
+    Travel._.walkZone.taskId = 0
+    Travel._.walkZone.destY = lastSeen.y + math.cos(rad) * zoneWalkDistance
+    Travel._.walkZone.destX = lastSeen.x + math.sin(rad) * zoneWalkDistance
+    Travel._.walkZone.fromZoneId = mq.TLO.Zone.ID()
+    DebugLog(string.format("Walking through a zone line: last seen %.0f, %.0f heading %.0f, aiming %.0f, %.0f",
+        lastSeen.y, lastSeen.x, lastSeen.heading, Travel._.walkZone.destY, Travel._.walkZone.destX))
+end
+
 ---------------- Init --------------------
 
 ---The world announcing that whoever we follow died. A follow order does not outlive its target:
@@ -248,7 +304,9 @@ function Travel.SetFollowOrder(name, spawnId, command)
     Travel._.followTargetId = spawnId or 0
     Travel._.followCommand = command
     Travel._.followSpawnId = 0
-    Travel._.lastSeen = { zoneId = 0, y = 0, x = 0 }
+    Travel._.lastSeen = EmptyLastSeen()
+    -- a walk-through in progress was justified by a sighting of whoever we *were* following
+    EndWalkZone(false)
     Travel._.waitingReported = false
     Travel.ClearAnchor()
 end
@@ -258,7 +316,9 @@ function Travel.ClearFollowOrder()
     Travel._.followTarget = ""
     Travel._.followTargetId = 0
     Travel._.followSpawnId = 0
-    Travel._.lastSeen = { zoneId = 0, y = 0, x = 0 }
+    Travel._.lastSeen = EmptyLastSeen()
+    -- a walk-through in progress only exists in service of the order being dropped
+    EndWalkZone(false)
     Travel._.stuck.checking = false
     Travel._.waitingReported = false
     Movement.StopFor(Travel.key)
@@ -285,8 +345,9 @@ function Travel.Reset()
     Travel._.followCommand = "followme"
     Travel._.followSpawnId = 0
     Travel._.anchor = { set = false, x = 0, y = 0 }
-    Travel._.lastSeen = { zoneId = 0, y = 0, x = 0 }
+    Travel._.lastSeen = EmptyLastSeen()
     Travel._.clickZone = { step = nil, timer = nil, lastFailedMs = 0 }
+    Travel._.walkZone = { active = false, taskId = 0, destY = 0, destX = 0, fromZoneId = 0, lastFailedMs = 0 }
     Travel._.stuck = { checking = false, timer = nil, lastLoc = { x = 0, y = 0, z = 0, zoneId = 0 } }
     Travel._.waitingReported = false
 end
@@ -343,22 +404,38 @@ local function FollowPass()
             return false
         end
 
-        -- Vanishing inside click range of a switch is the world saying they clicked through it:
-        -- go after them. Vanishing anywhere else -- a death whose notice never reached us, a
-        -- gate, a camp -- is not, and a guess clicked through a door scatters the group, so
-        -- everything else waits where it is. One sighting pays for one follow-through: spent
-        -- here, earned back only by seeing them again. In particular, a spot remembered from
-        -- another zone -- theirs before we zoned, or ours before we died -- pays for nothing.
+        -- A vanishing at a spot we watched them reach is the world saying they went through a
+        -- zone line there, and there are two ways through one. Inside click range of a switch,
+        -- they clicked through it. On the move anywhere else, they walked through one -- the
+        -- trigger is invisible, and somebody dropping out of the world mid-stride is its one
+        -- announcement. Go after them either way. A vanish from a standstill is neither: a gate
+        -- is cast and a camp is sat out, and both go somewhere no step past their spot can
+        -- reach -- and a spot we never walked their route to has no known-walkable line to walk
+        -- through, so those wait where they are, as does a death whose notice never reached us.
+        -- One sighting pays for one follow-through: spent when the procedure begins, earned
+        -- back only by seeing them again. In particular, a spot remembered from another zone --
+        -- theirs before we zoned, or ours before we died -- pays for nothing.
         local lastSeen = Travel._.lastSeen
-        if lastSeen.zoneId == mq.TLO.Zone.ID() and MayClickZone() then
+        if lastSeen.zoneId == mq.TLO.Zone.ID() then
             local switch = mq.TLO.Switch("nearest")
             local switchY = switch.Y()
             local switchX = switch.X()
             if switchY ~= nil and switchX ~= nil
                 and Geometry.Distance2D(lastSeen.y, lastSeen.x, switchY, switchX) < zoneSwitchDistance then
-                Travel._.lastSeen = { zoneId = 0, y = 0, x = 0 }
-                Travel.BeginClickZone()
-                return true
+                if MayClickZone() then
+                    Travel._.lastSeen = EmptyLastSeen()
+                    Travel.BeginClickZone()
+                    return true
+                end
+            elseif MayWalkZone() and lastSeen.seenMs - lastSeen.movedMs <= zoneWalkRecentMoveMs then
+                local myY = mq.TLO.Me.Y()
+                local myX = mq.TLO.Me.X()
+                if myY ~= nil and myX ~= nil
+                    and Geometry.Distance2D(myY, myX, lastSeen.y, lastSeen.x) < zoneWalkNearDistance then
+                    BeginWalkZone(lastSeen)
+                    Travel._.lastSeen = EmptyLastSeen()
+                    return true
+                end
             end
         end
 
@@ -369,13 +446,23 @@ local function FollowPass()
     end
 
     -- While they are here, keep fresh where "here" is: everything above judges their vanishing
-    -- from the last spot we saw them at.
+    -- from the last spot we saw them at, which way they were going, and whether they were still
+    -- moving. Moving is read off the spot itself -- a runner's reported position changes every
+    -- look (the client walks them smoothly between the server's updates), a stander's is frozen
+    -- exactly -- so the epsilon only has to clear float noise, not a stride.
     local seenY = targetSpawn.Y()
     local seenX = targetSpawn.X()
     if seenY ~= nil and seenX ~= nil then
-        Travel._.lastSeen.y = seenY
-        Travel._.lastSeen.x = seenX
-        Travel._.lastSeen.zoneId = mq.TLO.Zone.ID()
+        local lastSeen = Travel._.lastSeen
+        local zoneId = mq.TLO.Zone.ID()
+        if lastSeen.zoneId ~= zoneId or Geometry.Distance2D(lastSeen.y, lastSeen.x, seenY, seenX) > 0.1 then
+            lastSeen.movedMs = Time.current_time()
+        end
+        lastSeen.y = seenY
+        lastSeen.x = seenX
+        lastSeen.zoneId = zoneId
+        lastSeen.heading = targetSpawn.Heading.DegreesCCW() or lastSeen.heading
+        lastSeen.seenMs = Time.current_time()
     end
 
     -- Close enough: the follow task parks itself, and so do we.
@@ -523,14 +610,64 @@ local function ClickZonePass()
     return true
 end
 
+---One pass of walking through a walk-through zone line: keep the walk going until the zone
+---takes us, the world says no, or whoever we walked after turns out to be back.
+---
+---The walk is one straight, short leg: from the end of their trail, through the spot they
+---vanished from, to a little past it along the way they were going. The move's own end is the
+---evidence window -- arriving, sticking or timing out still in this zone is the world saying
+---there was no zone line where they vanished.
+---@return boolean isBusy
+local function WalkZonePass()
+    local walkZone = Travel._.walkZone
+
+    -- the zone took us: done here, and the next pass re-derives everything in the new zone
+    if walkZone.fromZoneId ~= mq.TLO.Zone.ID() then
+        DebugLog("Walked through the zone line")
+        Movement.StopFor(Travel.key)
+        EndWalkZone(false)
+        return true
+    end
+
+    -- whoever we are walking after is back -- they zoned back over the line, or never left --
+    -- and going to them is the ordinary follow's job, not this guess's
+    if followTargetSpawn().Name() ~= nil then
+        DebugLog("Follow target reappeared, calling off the walk-through")
+        Movement.StopFor(Travel.key)
+        EndWalkZone(false)
+        return true
+    end
+
+    if walkZone.taskId == 0 then
+        walkZone.taskId = Movement.MoveToLoc(walkZone.destY, walkZone.destX,
+            { distance = 5, timeoutMs = 20000, owner = Travel.key })
+        return true
+    end
+
+    -- the walk ended and we are still here: there was no zone line where they vanished
+    if Movement.GetResult(walkZone.taskId) ~= nil then
+        Commands.GetCommandSpeak(Travel._.followCommand):speak(
+            "Follow target [" .. Travel._.followTarget .. "] vanished but I found no zone line, waiting...")
+        Travel._.waitingReported = true
+        EndWalkZone(true)
+        return true
+    end
+
+    return true
+end
+
 ---One pass of carrying out whatever is standing: a procedure in progress first, then whichever
 ---order is standing. Called by exactly one state per pass -- see the notes on this module.
 ---@return boolean isBusy
 function Travel.Drive()
-    -- Clicking through a zone line is the one thing here that is genuinely part-way done rather
-    -- than a decision to re-make, so it comes first and finishes before anything else is asked.
+    -- Getting through a zone line is the one kind of thing here that is genuinely part-way done
+    -- rather than a decision to re-make, so a procedure in progress comes first and finishes
+    -- before anything else is asked.
     if Travel._.clickZone.step ~= nil then
         return ClickZonePass()
+    end
+    if Travel._.walkZone.active then
+        return WalkZonePass()
     end
 
     -- Following and anchoring are contradictory orders, so only one of them is ever standing:
@@ -544,6 +681,7 @@ end
 ---@return string description of what the standing order is, for the pages and /state
 function Travel.Describe()
     if Travel._.clickZone.step ~= nil then return "Clicking to Zone" end
+    if Travel._.walkZone.active then return "Walking through a Zone Line" end
     if Travel._.followTarget ~= "" then return "Following" end
     if Travel._.anchor.set then return "Anchoring" end
     return "Standby"

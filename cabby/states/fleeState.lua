@@ -36,7 +36,7 @@ local UserInput = require("cabby.utils.userinput")
 ---express: suppression *is* position plus busy, here as everywhere.
 ---
 ---**The traveling is this state's own job while the mode is on.** The machinery -- the follow
----order, the trail-walking, the anchor, the click-through-the-zone-line -- is `cabby.travel`, the
+---order, the trail-walking, the anchor, the zone-line follow-throughs -- is `cabby.travel`, the
 ---same core the follow state drives at the follow band in normal operation. The chain serializes
 ---the two drivers: flee sits above follow and is busy for as long as it is enabled, so there is
 ---never a pass in which both run, and neither state knows the other exists. An anchor holds

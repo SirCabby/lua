@@ -151,9 +151,11 @@ cabby/
   character.lua       service: what this character has, discovered and kept current
   combat.lua          service: what this character is fighting; every state that fights reads it
   roles.lua           reader: main tank / main assist, out of the group and raid windows
-  travel.lua          the traveling core: follow/anchor orders, trail-follow and click-through-
-                      zone; driven by FollowState (follow band) or FleeState (passive band),
-                      whichever the chain gives the frame to
+  travel.lua          the traveling core: follow/anchor orders, trail-follow, and following
+                      through zone lines -- clicking a switch, or walking through after a target
+                      that vanished mid-stride where there is none; driven by FollowState
+                      (follow band) or FleeState (passive band), whichever the chain gives the
+                      frame to
   stateMachine.lua    priority-chain loop + per-frame services + priority gates (instance class)
   movement.lua        wiring only: registers the movement service and /cmove
   casting.lua         wiring only: casting service, its priority gate, movement arbiter, /ccast
@@ -1108,7 +1110,8 @@ the exemption was removed because it punched a hole in the ordering that no chai
 express, which made it the one piece of out-of-band suppression in the design.
 
 **The traveling is flee's own job while the mode is on.** The machinery — the follow order, the
-trail-walking, the anchor, the click-through-the-zone-line procedure — is `travel.lua`, the same
+trail-walking, the anchor, the zone-line procedures (clicking a switch, or walking through a
+walk-through line after a target that vanished mid-stride) — is `travel.lua`, the same
 core FollowState drives at the follow band in normal operation, moved out of the follow state
 exactly the way the engagement moved out of the melee state into `combat.lua` when a second
 state needed it. The chain serializes the two drivers: flee sits above follow and is busy for as

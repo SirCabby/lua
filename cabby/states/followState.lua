@@ -14,8 +14,8 @@ local UserInput = require("cabby.utils.userinput")
 
 ---The order surface for going places, and the chain position the going runs at.
 ---
----The machinery itself -- the follow order, the trail-walking, the anchor and the
----click-through-the-zone-line procedure -- lives in `cabby.travel`, because travel mode (flee)
+---The machinery itself -- the follow order, the trail-walking, the anchor and the zone-line
+---follow-through procedures -- lives in `cabby.travel`, because travel mode (flee)
 ---drives the same machinery from the passive band and no state may read another. What is left
 ---here is what makes following a *state*: the commands that take the orders, the page that shows
 ---them, and this band in the chain -- following happens with the frames healing and fighting do
