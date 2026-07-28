@@ -47,6 +47,20 @@
 ---cannot tell you about: FollowState's click-zone chain has clicked the door and is waiting for
 ---the zone, which is not something a fresh look at the world can reconstruct.
 ---
+---# What a state may read
+---
+---**The world and the services -- never another state.** A frame this state is given is the
+---chain's guarantee that nothing above it had anything to do; that guarantee is the whole of
+---inter-state coordination, and it is all a state is ever entitled to know about the states
+---around it. Reading a service (Combat's engagement, Movement's driving) is different and fine:
+---services act without owning frames, so their published facts are the only way not to contradict
+---them. If a state seems to need to know what another *state* is doing -- or to distrust the
+---frame it was just given -- some busy signal upstream is lying about a continuous fact, and that
+---signal is what gets fixed (see `cabby.combat` holding a fight open across a target death).
+---
+---Windows a state keeps (a retry throttle, a settle, a grace) pace **its own actions** against
+---the world and the player. They never measure the chain, and never come from the scheduler.
+---
 ---# Why it holds together
 ---
 ---No failure path can wedge a chain of states built this way. A cast that cannot get started, a

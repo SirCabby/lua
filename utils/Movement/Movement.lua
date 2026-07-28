@@ -44,12 +44,13 @@ end
 
 ---Conditions under which we refuse to drive the character, the MQ2MoveUtils "autopause"
 ---equivalent. Sitting and ducking are stood up out of; everything else waits.
+---@param task MovementTask the active task, which gets a say in the sitting case
 ---@return string|nil reason nil when we are free to move
-local function blockedReason()
+local function blockedReason(task)
     if mq.TLO.Me.Y() == nil then return "not in the world" end
 
     local state = mq.TLO.Me.State()
-    if state == "DEAD" or state == "BIND" then return "state is " .. tostring(state) end
+    if state == "BIND" then return "binding" end
     if state == "FEIGN" then return "feigning" end
     if mq.TLO.Me.Stunned() then return "stunned" end
     if mq.TLO.Me.Mezzed() ~= nil then return "mezzed" end
@@ -59,6 +60,16 @@ local function blockedReason()
     if mq.TLO.Me.Casting() ~= nil and mq.TLO.Me.Class.ShortName() ~= "BRD" then return "casting" end
 
     if state == "SIT" or state == "DUCK" then
+        -- A task with nothing to do this frame is not a reason to be on anyone's feet. A follow
+        -- whose target is standing still is exactly that: it is alive and keeping its trail warm,
+        -- and it stays alive for as long as the follow order does. Standing up for it means every
+        -- sit is undone a second later, forever, which is a `/sit` and a `/stand` traded with the
+        -- rest state for as long as `followme` is on -- and neither side is wrong, because
+        -- standing up is part of *executing* a move rather than part of holding one.
+        if task.IsParked ~= nil and task:IsParked() then
+            return "sitting, with nothing to move toward"
+        end
+
         Locomotion.StandIfNeeded()
         return "standing up"
     end
@@ -162,6 +173,19 @@ end
 ---start or stop movement from an ImGui button or a chat event handler.
 ---@return string status
 function Movement.Pulse()
+    -- Death cancels the task rather than holding it. We come back at a bind point, and a plan
+    -- made from where we fell -- above all a stick at whatever killed us -- must not be what
+    -- the respawn wakes up to; the owner that could have tidied it up may not get a turn for a
+    -- while (a healer has work exactly then). Cancelling costs nothing when the order behind
+    -- the task still stands, because owners re-derive every pass and simply ask again --
+    -- a follow order survives death on purpose and restarts from wherever we respawn.
+    -- MQ2MoveUtils called this BreakOnDeath. HOVER is dead-but-not-released.
+    local myState = mq.TLO.Me.State()
+    if Movement._.task ~= nil and (myState == "DEAD" or myState == "HOVER") then
+        DebugLog("Death cancels task: " .. Movement._.task:Describe())
+        Movement.Stop()
+    end
+
     local task = Movement._.task
     if task == nil then
         Movement._.status = MovementStatus.idle
@@ -169,7 +193,7 @@ function Movement.Pulse()
         return MovementStatus.idle
     end
 
-    local reason = blockedReason()
+    local reason = blockedReason(task)
     if reason ~= nil then
         if Movement._.blockedReason ~= reason then
             DebugLog("Movement blocked: " .. reason)
@@ -203,6 +227,25 @@ end
 ---@return boolean isActive true while a task is running
 function Movement.IsActive()
     return Movement._.task ~= nil
+end
+
+---Whether the active task has anything to do right now.
+---
+---Three different things a caller can mean by "are we moving", and this is the one the others
+---cannot answer: *idle* is having no task at all, *blocked* is a task that wants to move and may
+---not, and **parked** is a task that is alive and has nowhere to go -- a follow whose target is
+---standing still. The distinction is what lets something else use the character while an order
+---that is not asking for anything stays standing: resting, above all, which would otherwise never
+---get a frame it could keep for as long as a follow order was in place.
+---
+---Tasks that cannot park say so by not implementing it. A `MoveToLoc` is never parked -- arriving
+---is what ends it -- and a stick that has closed to range is holding a mob, which is not a moment
+---to be sitting down in whatever the task thinks.
+---@return boolean isParked false when there is no task, or the task wants to move
+function Movement.IsParked()
+    local task = Movement._.task
+    if task == nil or task.IsParked == nil then return false end
+    return task:IsParked() == true
 end
 
 ---@return string status of the last pulse

@@ -5,7 +5,8 @@ Vision: one script that bots any class/race — states for every band in the pri
 (commands, passive, cure, heal, pull, mez, tank, dps, loot, anchor, follow, buff).
 
 Current coverage: Follow/Anchor/ClickZone, Melee, Spell DPS, Heal, Buff, Rest and Flee states, over
-a shared engagement (`combat.lua`); all sixteen classes load as profiles over those (the nine melee
+a shared engagement (`combat.lua`) that the group's main tank and main assist steer (`roles.lua`);
+all sixteen classes load as profiles over those (the nine melee
 classes melee, eleven cast damage, the three priests and three hybrids heal, the twelve with a
 spellbook buff, and everyone follows, rests and flees). The casting service and all five action
 types exist (Phase 3), so an action list can hold a spell, clicky or AA and `/ccast` can fire
@@ -113,7 +114,7 @@ them. Architecture notes are in ARCHITECTURE.md ("Movement"); what landed:
   tracked so holds only fire on transitions, `/face fast nolook`, stand, jump, release-all,
   and it is the single owner of the movement keys.
 - ~~**GoTo**~~ — `MoveTo.lua`: straight line to a loc or a spawn, arrival radius, timeout,
-  stuck detection over wall-clock windows (`StuckDetector.lua`), jump + alternating strafe
+  stuck detection over wall-clock windows (`StuckDetector.lua`), escalating strafe-then-jump
   unstick (`Unsticker.lua`), terminal status + reason polled by task id.
 - ~~**Stick**~~ — `Stick.lua`: hold range on a spawn id with constant re-facing, back off when
   crowded, `behind` mode strafes into the rear arc, breaks on target gone/dead/self/warp.
@@ -396,8 +397,7 @@ exemption set, plus a /cpause slash + comm command),
 **Cure** (detrimental scan → cure actions), **Pull** (target selection, pathing, leash,
 camp radius), **Mez** (add control, in-combat priority above dps), **Tank** (taunt/hate
 action lists already modeled in MeleeStateConfig; needs aggro-loss detection for "as
-needed" usage), **assist rules** (both dps states fight what `Combat` says; nothing yet says
-"fight what the main assist is fighting"),
+needed" usage),
 **Loot** (corpse scan, loot rules per item, master-loot coordination).
 Each new state = state module + config section + UI panel + comm commands, which is why
 the Phase 1 module contract comes first. Landing one is also a sweep over `classes/*.lua`:
@@ -418,11 +418,18 @@ backstab positioning; nothing asks for it).
 
 ## Phase 5 — Group/raid coordination
 
-- Assist protocol: MA/marks broadcast, `attack <id>` exists — add assist-percent, target
-  dedup, anti-summon distance rules, leash/give-up timers.
-- Role model: main tank / main assist / puller / healer assignments in config + comms;
-  feeds the runtime priority modifiers from the class-profile design (group makeup changes
-  who heals/tanks at what priority).
+- ~~Assist protocol~~ — **the first half has landed** (see the Assisting section of
+  ARCHITECTURE.md): `roles.lua` reads main tank and main assist out of the group and raid
+  windows, auto-engage takes the assist's target before anything that is merely hitting us,
+  and the tank calls `assist <id>` / `assist off` out to the group as its own engagement
+  changes. Still open: **marks** (`Group.MarkNpc`, `Raid.MarkNPC` — a called target that is
+  not the assist's current one), target dedup across the group, anti-summon distance rules,
+  and leash/give-up timers.
+- Role model: puller and healer assignments; main tank and main assist come from the client
+  now, and the rest may want to as well rather than growing a second place to set them. What
+  is still missing is the *use*: the runtime priority modifiers from the class-profile design
+  (group makeup changes who heals/tanks at what priority), and a tank that does something with
+  the role beyond announcing what it is on.
 - Structured coordination messages ride the Phase 2 transport (actors preferred, chat
   channels as universal fallback).
 - Fleet UX: broadcast config changes ("everyone set camp here"), status dashboards.
@@ -574,3 +581,28 @@ backstab positioning; nothing asks for it).
    the spellbook from a rest and watch it hold the sit rather than close the book on a memorize,
    and stand up by hand to see whether five seconds is long enough a grace to feel like being left
    alone rather than long enough to feel like the resting stopped working.
+18. **Assisting, in game — and the client's assist target above all.** One read decides whether
+   half of this works: does `Me.GroupAssistTarget.ID()` actually follow the group's main assist
+   around on this emu server, or does it only fill in after somebody presses `/assist`? `/croles`
+   answers it in one line — set a main assist, have them target something, and see whether "the
+   assist is on" names it. If it stays empty the read half is inert (no harm, it simply never picks
+   a target up that way) and the tank's `assist` call is carrying the group on its own, which is
+   why the two mechanisms exist. Same question again for `Me.RaidAssistTarget[#]` in a raid, and
+   worth confirming `Raid.MainAssist` resolves at all on a RoF2 client — the *indexed* form is
+   compiled out below CotF, which is why nothing here uses it. Then the behaviour: with the tank
+   calling, does a group of four all end up on one mob within a pulse or two, does the tank's Back
+   Off button stop all of them (it should go out as `assist off`), and does `flee on` on the tank
+   do the same? Watch chat for how noisy one line per target actually is over a real pull chain,
+   since that is the tuning knob if it turns out to be too much. Then the parts that are
+   judgment rather than plumbing: is "it has taken damage" the right gate for picking the assist's
+   target up unasked (too strict and a fight opens a second late, too loose and the group jumps on
+   a mob somebody conned), and does a hybrid holding the main tank role want its own heals scoped
+   to `tank` — that changed with this work, and a paladin now matches its own tank-scoped slots.
+19. **Non-NPC targets, in game** (changed 2026-07-27: pets and destructibles are fightable,
+   corpses never). `attack <id>` on a destructible (a spider cocoon cluster) and on an enemy pet:
+   everyone should acquire it and swing — the melee retarget used to ask for `npc`, so a character
+   that lost the target stood there while the MQ log filled with "There are no spawns matching".
+   Watch two judgment calls that came with it: the assist *reading* can now pick up a group
+   member's own wounded pet if the main assist parks their target on it (the taken-damage gate is
+   all that is left there — decide in game whether that needs a master-is-a-player exclusion), and
+   the Attack button now greys out with a corpse targeted, same as `attack` refusing a dead id.

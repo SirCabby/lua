@@ -18,6 +18,10 @@ local ToggleCommand = require("cabby.commands.toggleCommand")
 -- How long "As Needed" waits between tanking actions so they fire one at a time
 local sequentialActionDelayMs = 1500
 
+-- How long to leave a `/stand` before sending it again. Standing takes effect when the server says
+-- so, and repeating the command every frame in the meantime is nothing but spam
+local standRetryMs = 1000
+
 ---@class MeleeState : BaseState
 local MeleeState = {
     key = "MeleeState",
@@ -36,6 +40,7 @@ local MeleeState = {
     _ = {
         isInit = false,
         retargetTimer = nil,
+        standTimer = nil,
         stickTargetId = 0,
         tauntTimer = Timer.new(sequentialActionDelayMs),
         hateTimer = Timer.new(sequentialActionDelayMs)
@@ -65,8 +70,18 @@ local function HasTargetAggro()
 end
 
 local function FixCombatState()
-    if mq.TLO.Me.Feigning() or mq.TLO.Me.Ducking() then
-        mq.cmd("/stand")
+    -- Sitting belongs on this list for the same reason feigning does: we are engaged and about to
+    -- swing, and neither posture swings. It is not covered by `Ducking`, which is the duck stand
+    -- state and nothing else. RestState would stand us up for exactly this reason -- being engaged
+    -- is the first thing on its hold list -- but it never gets the chance, because this state
+    -- reports busy for as long as the fight lasts and everything below it is starved for the whole
+    -- of it. The movement service stands us up too, but only while it is actually driving, which
+    -- is not the case for a mob that walked into reach or for a character with stick switched off.
+    if mq.TLO.Me.State() == "SIT" or mq.TLO.Me.Feigning() or mq.TLO.Me.Ducking() then
+        if MeleeState._.standTimer:timer_expired() then
+            MeleeState._.standTimer = Timer.new(standRetryMs)
+            mq.cmd("/stand")
+        end
     end
 
     if mq.TLO.Me.Sneaking() then
@@ -177,20 +192,31 @@ end
 local function melee()
     local targetId = Combat.GetTargetId()
     if targetId == 0 then
-        -- let go of anything we were holding onto for a fight that is over
+        -- let go of anything we were holding onto for a target that is gone
         if MeleeState._.stickTargetId ~= 0 then
             MeleeState._.stickTargetId = 0
             Movement.StopFor(MeleeState.key)
         end
-        return false
+        -- The fight can be open with no target for a beat -- Combat is seeking the successor
+        -- after a death. Standing ready is this state's job then, and holding the frame is the
+        -- point: the beat between two mobs of one fight is not a frame for anything below to
+        -- act in.
+        return Combat.IsEngaged()
     end
 
     -- Swinging needs the client on the target, which casting a heal at a group member takes away
     -- from us. Ask again on a timer rather than every frame: /mqtarget is a game command and the
-    -- server answers when it answers.
+    -- server answers when it answers. The ask is by bare id -- a fight target is not always an
+    -- NPC; pets and destructibles are fights too, and a typed search excludes them, fails, and
+    -- fills the log with "no spawns matching" -- but never for a corpse: a dead mob keeps its
+    -- spawn id, the search language cannot say "alive", and the death is Combat's to notice,
+    -- not something to snap the target onto.
     if mq.TLO.Target.ID() ~= targetId then
         if MeleeState._.retargetTimer:timer_expired() then
-            mq.cmd("/mqtarget npc id " .. tostring(targetId))
+            local spawn = mq.TLO.Spawn("id " .. tostring(targetId))
+            if spawn.ID() ~= nil and not spawn.Dead() and spawn.Type() ~= "Corpse" then
+                mq.cmd("/mqtarget id " .. tostring(targetId))
+            end
             MeleeState._.retargetTimer = Timer.new(500)
         end
         return true
@@ -249,6 +275,7 @@ end
 ---is Combat's answer, and calling this off is not the same as calling that off.
 function MeleeState.Reset()
     MeleeState._.retargetTimer = Timer.new(0)
+    MeleeState._.standTimer = Timer.new(0)
     MeleeState._.stickTargetId = 0
     -- only our own stick; a higher priority behavior may have taken movement over since
     Movement.StopFor(MeleeState.key)

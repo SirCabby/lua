@@ -35,8 +35,8 @@ end
 --- - spawnId: chase this spawn's current location instead
 --- - distance: how close counts as arrived, default 10
 --- - timeoutMs: give up after this long, default 30000, false to disable
---- - nudgeAfter: stalled windows before trying to unstick, default 2
---- - failAfter: stalled windows before giving up, default 12
+--- - nudgeAfter: stalled windows before an unstick attempt, default 2
+--- - failAttempts: consecutive failed unstick attempts before giving up, default 5
 --- - owner: key of whoever asked for the move
 ---@return MoveTo
 function MoveTo.new(options)
@@ -58,10 +58,11 @@ function MoveTo.new(options)
     end
     self._.distance = options.distance or 10
     self._.nudgeAfter = options.nudgeAfter or 2
-    self._.failAfter = options.failAfter or 12
+    self._.failAttempts = options.failAttempts or 5
+    self._.lastDistance = nil
     self._.failReason = nil
     self._.stuck = StuckDetector.new()
-    self._.unsticker = Unsticker.new()
+    self._.unsticker = Unsticker.new(self._.stuck)
 
     if options.timeoutMs == false then
         self._.deadlineMs = nil
@@ -120,22 +121,32 @@ function MoveTo:Pulse()
         return self:Fail("timed out short of the destination")
     end
 
-    if self._.stuck:StalledWindows() >= self._.failAfter then
-        return self:Fail("stuck short of the destination")
+    -- Arrival is judged on the raw gap -- the caller was promised we would be within distance --
+    -- but the forward key is let go against the projected one, so the pulse of travel still in
+    -- the keys lands us inside the mark instead of past it. See Locomotion.leadPulses.
+    local closing = 0
+    if self._.lastDistance ~= nil then
+        closing = math.max(-Locomotion.closingClamp, math.min(Locomotion.closingClamp, self._.lastDistance - distance))
     end
+    self._.lastDistance = distance
+    local projected = distance - closing * Locomotion.leadPulses
 
     Locomotion.FaceLoc(y, x)
 
     if self._.unsticker:IsActive() then
         self._.unsticker:Drive()
     elseif self._.stuck:StalledWindows() >= self._.nudgeAfter then
+        if self._.unsticker:Streak() >= self._.failAttempts then
+            return self:Fail("stuck short of the destination")
+        end
         self._.unsticker:Begin()
         self._.unsticker:Drive()
     else
         local drift = math.abs(Geometry.HeadingDiff(Locomotion.GetHeading(), Geometry.HeadingTo(myY, myX, y, x)))
         Locomotion.ReleaseStrafe()
-        if drift > maxDriftDegrees then
-            -- our facing has not caught up yet; do not sprint off in the wrong direction
+        if drift > maxDriftDegrees or projected <= self._.distance then
+            -- facing not caught up yet, or the keys still letting go will carry us to the mark:
+            -- either way, sprinting now lands us somewhere we did not aim
             Locomotion.ReleaseForwardBack()
         else
             Locomotion.Hold(Locomotion.keys.forward)
@@ -150,6 +161,8 @@ end
 function MoveTo:OnBlocked()
     self._.stuck:Reset()
     self._.unsticker:Reset()
+    -- a gap measured either side of the held stretch is not a speed
+    self._.lastDistance = nil
 end
 
 function MoveTo:Stop()

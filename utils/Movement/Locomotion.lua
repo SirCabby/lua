@@ -23,6 +23,22 @@ local Time = require("utils.Time.Time")
 local Locomotion = {
     author = "judged",
     key = "Locomotion",
+    ---How many pulses ahead a task must aim when it decides to stop against a threshold.
+    ---
+    ---A key released this pulse actually lets go noticeably later: the release is emitted at the
+    ---end of the pulse, behind that pulse's own command yields, and the client acts on it a frame
+    ---after that -- a full pulse of actuation lag, and the next pulse gap is never quite the last
+    ---one. So a task steering by a distance it read this pulse is steering by where it *was*, and
+    ---testing "am I there" against the raw read stops a full pulse of travel too late, every time.
+    ---The cure is to test the threshold against where we will be when the release lands: raw
+    ---distance minus how fast the gap closed last pulse, times this. Erring long means stopping
+    ---short, which costs one more creeping pulse; erring short means running past the mark,
+    ---flipping around to re-face it, and a stuck detector staring at the oscillation -- so this
+    ---leans past a full pulse.
+    leadPulses = 1.5,
+    ---A gap that changed by more than this in one pulse was not closed by running, it was a
+    ---teleport -- ours or theirs -- and is not a speed to aim stops with.
+    closingClamp = 30,
     ---EQ mappable command names, keyed by direction
     keys = {
         forward = "forward",

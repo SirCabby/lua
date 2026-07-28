@@ -34,6 +34,8 @@ Stick.modes = {
 
 -- how much closer than the stick distance we tolerate before backing up
 local moveBackSlack = 5
+-- heading error beyond which running forward would take us somewhere unhelpful
+local maxDriftDegrees = 90
 
 ---@param str string
 local function DebugLog(str)
@@ -44,10 +46,11 @@ end
 ---@param options? table
 --- - distance: distance to hold, default 10
 --- - mode: Stick.modes.loose (default) or Stick.modes.behind
---- - moveBack: back up when the spawn crowds us, default true
+--- - moveBack: step back out when our own stop lands inside the spawn, default true
 --- - arcBehind: half-arc for behind mode, in degrees, default 45
 --- - warpDistance: a jump in distance larger than this is treated as a warp, default 75
---- - nudgeAfter / failAfter: stalled windows before unsticking / giving up, default 2 / 20
+--- - nudgeAfter: stalled windows before an unstick attempt, default 2
+--- - failAttempts: consecutive failed unstick attempts before giving up, default 9
 --- - owner: key of whoever asked for the stick
 ---@return Stick
 function Stick.new(spawnId, options)
@@ -69,11 +72,11 @@ function Stick.new(spawnId, options)
     self._.arcBehind = options.arcBehind or 45
     self._.warpDistance = options.warpDistance or 75
     self._.nudgeAfter = options.nudgeAfter or 2
-    self._.failAfter = options.failAfter or 20
+    self._.failAttempts = options.failAttempts or 9
     self._.lastDistance = nil
     self._.failReason = nil
     self._.stuck = StuckDetector.new()
-    self._.unsticker = Unsticker.new()
+    self._.unsticker = Unsticker.new(self._.stuck)
 
     return self
 end
@@ -122,6 +125,29 @@ function Stick:HoldArc(spawn, distance)
     end
 end
 
+---Whether stepping back is the right answer to being crowded right now.
+---
+---The only crowding that backing up honestly answers is our own: we were closing and the stop
+---landed inside the mob, so we step back out. That is recognized by the forward key still being
+---down when the crowded gap shows up. A retreat in progress keeps going only while its landing
+---spot is still crowded, judged projected so it lets go before punching back out of the zone.
+---
+---Crowding we did not cause is not backed away from at all. A mob pressing into a standing
+---character is moving itself -- dancing around its target, or chasing us -- and giving ground
+---to it just moves the fight, a step a pulse, across the zone: the mob takes every inch back,
+---and the walk never ends anywhere. Standing our ground still swings; inside the mob is still
+---in range.
+---@param distance number the raw gap
+---@param projected number the gap as it will be when a release lands
+---@return boolean shouldMoveBack
+function Stick:ShouldMoveBack(distance, projected)
+    local crowded = self._.distance - moveBackSlack
+    if Locomotion.IsHeld(Locomotion.keys.backward) then
+        return projected < crowded
+    end
+    return distance < crowded and Locomotion.IsHeld(Locomotion.keys.forward)
+end
+
 ---@return string status
 function Stick:Pulse()
     local spawn = mq.TLO.Spawn("id " .. tostring(self._.spawnId))
@@ -140,44 +166,72 @@ function Stick:Pulse()
     local x = spawn.X()
     if distance == nil or y == nil or x == nil then
         Locomotion.ReleaseAll()
+        -- a gap measured either side of the blind stretch is not a speed
+        self._.lastDistance = nil
         return MovementStatus.blocked
     end
 
     -- a spawn that jumped across the zone is a warp, not something to chase down
     if self._.lastDistance ~= nil and distance - self._.lastDistance > self._.warpDistance then
         DebugLog("Stick target warped " .. tostring(distance - self._.lastDistance) .. ", holding")
-        self._.lastDistance = distance
         self:OnBlocked()
+        self._.lastDistance = distance
         Locomotion.ReleaseAll()
         return MovementStatus.blocked
     end
+
+    -- How fast the gap closed last pulse is the error bar on where a stop lands, so the
+    -- thresholds below are tested against where we will be when the keys actually let go,
+    -- not against where we are -- see Locomotion.leadPulses. The gap and not our own speed,
+    -- because the spawn's movement is half of every close.
+    local closing = 0
+    if self._.lastDistance ~= nil then
+        closing = math.max(-Locomotion.closingClamp, math.min(Locomotion.closingClamp, self._.lastDistance - distance))
+    end
     self._.lastDistance = distance
+    local projected = distance - closing * Locomotion.leadPulses
 
     Locomotion.FaceLoc(y, x)
     self:HoldArc(spawn, distance)
 
-    if distance > self._.distance then
-        if self._.stuck:StalledWindows() >= self._.failAfter then
-            return self:Fail("could not reach the stick target")
-        end
+    -- A projection is only honest about the motion that produced it: while we are running, it
+    -- says where a release would land us, so we keep running only if that spot is still too
+    -- far. While we are not running, the closing rate is leftovers -- our own backpedal reads
+    -- as the gap sprinting open -- so starting to run is judged on the gap as it is.
+    local tooFar
+    if Locomotion.IsHeld(Locomotion.keys.forward) then
+        tooFar = projected > self._.distance
+    else
+        tooFar = distance > self._.distance
+    end
 
+    if tooFar then
         if self._.unsticker:IsActive() then
             self._.unsticker:Drive()
         elseif self._.stuck:StalledWindows() >= self._.nudgeAfter then
+            if self._.unsticker:Streak() >= self._.failAttempts then
+                return self:Fail("could not reach the stick target")
+            end
             self._.unsticker:Begin()
             self._.unsticker:Drive()
         else
-            Locomotion.Hold(Locomotion.keys.forward)
+            local drift = math.abs(Geometry.HeadingDiff(Locomotion.GetHeading(), Locomotion.GetHeadingToLoc(y, x)))
+            if drift > maxDriftDegrees then
+                -- our facing has not caught up yet; do not sprint off in the wrong direction
+                Locomotion.ReleaseForwardBack()
+            else
+                Locomotion.Hold(Locomotion.keys.forward)
+            end
         end
 
-        self._.stuck:Update(not Locomotion.IsRooted())
+        self._.stuck:Update(Locomotion.IsMoving() and not Locomotion.IsRooted())
         return MovementStatus.moving
     end
 
     self._.stuck:Reset()
     self._.unsticker:Reset()
 
-    if self._.moveBack and distance < self._.distance - moveBackSlack then
+    if self._.moveBack and self:ShouldMoveBack(distance, projected) then
         Locomotion.Hold(Locomotion.keys.backward)
         return MovementStatus.moving
     end
@@ -193,6 +247,8 @@ end
 function Stick:OnBlocked()
     self._.stuck:Reset()
     self._.unsticker:Reset()
+    -- a gap measured either side of the held stretch is not a speed
+    self._.lastDistance = nil
 end
 
 function Stick:Stop()

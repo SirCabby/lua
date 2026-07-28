@@ -47,7 +47,18 @@ local function initAndValidate()
     end
 
     if configRoot.engage_distance == nil then
-        configRoot.engage_distance = 50
+        configRoot.engage_distance = 100
+        taint = true
+    end
+
+    -- The default was 50 until 2026-07, and it was too short to answer the main assist: the call
+    -- goes out the moment the tank engages at pull range, which is routinely outside 50, and a
+    -- character that will not close that distance stands there while the group fights. Exactly 50
+    -- in a saved config is that old default still sitting there, so it is carried up rather than
+    -- making every character re-drag the slider -- any other value was chosen on purpose and is
+    -- kept. The one thing this cannot tell apart is a hand-set 50, which gets carried up too.
+    if configRoot.engage_distance == 50 then
+        configRoot.engage_distance = 100
         taint = true
     end
 

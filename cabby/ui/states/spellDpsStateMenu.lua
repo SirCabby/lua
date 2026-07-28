@@ -8,6 +8,7 @@ local Combat = require("cabby.combat")
 local CombatConfig = require("cabby.configs.combatConfig")
 local CommonUI = require("cabby.ui.commonUI")
 local Items = require("cabby.actions.items")
+local Roles = require("cabby.roles")
 local SpellDpsStateConfig = require("cabby.configs.spellDpsStateConfig")
 local Spells = require("cabby.actions.spells")
 
@@ -81,6 +82,25 @@ function SpellDpsStateMenu.BuildMenu(spellDpsState)
         if autoEngageClicked then
             CombatConfig.SetAutoEngage(autoEngage)
         end
+        ImGui.SameLine()
+        CommonUI.HelpMarker("Picks a fight up without being told: the main assist's target first, and then whatever is attacking us. Off waits for an (attack) order or an (assist) call.")
+
+        ImGui.SameLine()
+        local callAssist, callAssistClicked = ImGui.Checkbox("Call Assist", CombatConfig.GetCallAssist())
+        if callAssistClicked then
+            CombatConfig.SetCallAssist(callAssist)
+        end
+        ImGui.SameLine()
+        CommonUI.HelpMarker("While this character holds the group's Main Tank role, every change to what it is fighting is called out to the group as an (assist) line, and dropping the target calls the fight off. Nothing is said when somebody else is the tank. The channels it speaks on are the ones /speak sets.")
+
+        ImGui.TableNextRow()
+        ImGui.TableNextColumn()
+
+        ImGui.Dummy(0, 0)
+        ImGui.SameLine()
+
+        -- cached behind Roles' own scan interval, so this costs nothing per frame
+        ImGui.TextDisabled("Group roles -- " .. Roles.Describe())
 
         ImGui.TableNextRow()
         ImGui.TableNextColumn()

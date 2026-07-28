@@ -10,11 +10,10 @@ local Combat = require("cabby.combat")
 local Commands = require("cabby.commands.commands")
 local FleeStateConfig = require("cabby.configs.fleeStateConfig")
 local FleeStateMenu = require("cabby.ui.states.fleeStateMenu")
-local FollowState = require("cabby.states.followState")
 local Menu = require("cabby.ui.menu")
-local Priorities = require("cabby.classes.priorities")
 local SlashCmd = require("cabby.commands.slashcmd")
 local ToggleCommand = require("cabby.commands.toggleCommand")
+local Travel = require("cabby.travel")
 local UserInput = require("cabby.utils.userinput")
 
 ---Travel mode: follow, and nothing else.
@@ -30,22 +29,24 @@ local UserInput = require("cabby.utils.userinput")
 ---`flee off` hands the character back to its normal chain with no restoring to get wrong -- and no
 ---way for a crash mid-run to leave a cleric that has quietly stopped healing.
 ---
----**How the suppressing is done** is a priority gate (see `stateMachine.RegisterPriorityGate`). At
----the passive band this state is stronger than everything except an order given to the character,
----and while it is on its gate holds the chain at that band with one exemption: FollowState. So the
----chain walks flee, skips cure/heal/dps/loot/anchor, runs follow, and skips buff/rest. Suppressing
----by *yielding* could not do this -- a state that returns false hands the turn to the next state
----down, which is the heal state, and one that returns true starves follow along with everything
----else. Two disjoint ranges have to go, and only the gate can say that.
+---**How the suppressing is done is the ordinary release protocol**: at the passive band this state
+---is stronger than everything except an order given to the character, and while the mode is on its
+---`Go()` returns busy every pass -- so the chain never reaches anything below it, exactly as it
+---never reaches below any other busy state. No gate, no exemption, no shape the ordering cannot
+---express: suppression *is* position plus busy, here as everywhere.
 ---
----Follow is the exemption rather than a job of its own here because it is already the one state
----that knows how to keep up with somebody, work around a corner on their own trail, and click
----through the zone line they went out of -- all three of which are exactly what a long run is. A
----flee that reimplemented any of it would be a second follow to keep in step with the first.
+---**The traveling is this state's own job while the mode is on.** The machinery -- the follow
+---order, the trail-walking, the anchor, the click-through-the-zone-line -- is `cabby.travel`, the
+---same core the follow state drives at the follow band in normal operation. The chain serializes
+---the two drivers: flee sits above follow and is busy for as long as it is enabled, so there is
+---never a pass in which both run, and neither state knows the other exists. An anchor holds
+---through a flee for the same reason a follow does: it is a standing order in the same core.
 ---
 ---What it does *not* suppress is the services: movement, casting, the command queue, character
 ---discovery and combat all pulse every frame whatever the chain is doing. That is what keeps `flee
----off` reachable from chat, from the menu and from a hotbar button while the mode is on.
+---off` reachable from chat, from the menu and from a hotbar button while the mode is on. A cast
+---put in the air by hand (`/ccast`) mid-run pauses the walk at the movement service -- which
+---refuses to drive through a cast -- and the run resumes when it lands.
 ---@class FleeState : BaseState
 local FleeState = {
     key = "FleeState",
@@ -55,13 +56,6 @@ local FleeState = {
     _ = {
         isInit = false
     }
-}
-
----The states the flee gate lets through. Everything at or above the flee band runs anyway (an
----order given to this character is not what fleeing is meant to stop), so this is only ever about
----something further down the chain that is still worth doing while running.
-local fleeExemptions = {
-    [FollowState.key] = true
 }
 
 ---@param str string
@@ -75,37 +69,19 @@ end
 function FleeState.Describe()
     if not FleeState.IsEnabled() then return "standby" end
 
-    local target = FollowState.GetFollowTarget()
+    local target = Travel.GetFollowTarget()
     if target ~= "" then return "fleeing, following " .. target end
     return "fleeing, nothing to follow"
 end
 
 ---------------- Init --------------------
 
----@param stateMachine StateMachine handed over by `BaseClass` as it registers the chain.
----
----Flee is the one state that talks to the state machine directly, because holding the rest of the
----chain back is not something a state can do from inside its own `Go()` -- a gate is how it is
----said, and the gate has to be registered somewhere.
 ---@diagnostic disable-next-line: duplicate-set-field
-function FleeState.Init(stateMachine)
+function FleeState.Init()
     if FleeState._.isInit then return end
 
     FleeStateConfig.Init()
     Menu.RegisterState(FleeState)
-
-    if stateMachine == nil then
-        -- without the gate this state can still be switched on and would then do nothing at all
-        -- while claiming to, which is the one outcome worth being loud about
-        print("(flee) FleeState.Init got no state machine: flee mode will not hold anything back")
-    else
-        stateMachine:RegisterPriorityGate(function()
-            if not FleeState.IsEnabled() then return nil end
-            -- the band is written onto the state by BaseClass at registration; the fallback is for
-            -- a flee state initialized outside a class profile
-            return FleeState.priority or Priorities.passive, fleeExemptions
-        end)
-    end
 
     ToggleCommand.Register({
         key = FleeState.key,
@@ -166,15 +142,13 @@ function FleeState.Init(stateMachine)
     FleeState._.isInit = true
 end
 
----One pass.
+---One pass of travel mode: drive the traveling, hold the frame.
 ---
----Fleeing is a mode about what must not happen and the gate is what makes that true, so this never
----holds the frame: it hands the turn straight down to follow, the one state the gate lets through.
----
----What is left is the swing. `/attack on` is the one commitment nothing else takes back -- the
----melee state issues it and never issues the other half, and it is not getting another turn in
----which to notice -- so auto attack is read from the client every pass and dropped whenever it is
----found on. Reading first is what keeps this from being a command sent forty times a second.
+---Returning busy every pass is the suppression -- see the notes on this module. Before that, the
+---swing: `/attack on` is the one commitment nothing else takes back -- the melee state issues it
+---and never issues the other half, and it is not getting another turn in which to notice -- so
+---auto attack is read from the client every pass and dropped whenever it is found on. Reading
+---first is what keeps this from being a command sent forty times a second.
 ---@return boolean isBusy
 ---@diagnostic disable-next-line: duplicate-set-field
 function FleeState.Go()
@@ -183,7 +157,9 @@ function FleeState.Go()
         mq.cmd("/attack off")
     end
 
-    return false
+    Travel.Drive()
+
+    return true
 end
 
 ---@return boolean isFleeing whether travel mode is on. The switch and the state being enabled are
@@ -216,13 +192,14 @@ FleeState.SetEnabled = function(isEnabled)
     Combat.Disengage("fleeing")
 
     -- a stick started by melee would go on holding range on the very thing we are running from. A
-    -- follow already running is the one movement task worth keeping: it is what we are about to be
-    -- doing anyway, and cancelling it only costs a pass picking the trail back up
-    if not Movement.IsOwnedBy(FollowState.key) then
+    -- travel task already running -- a follow, or the walk back to an anchor -- is the one kind
+    -- worth keeping: it is what we are about to be doing anyway, and cancelling it only costs a
+    -- pass picking the trail back up
+    if not Movement.IsOwnedBy(Travel.key) then
         Movement.Stop()
     end
 
-    if FollowState.GetFollowTarget() == "" then
+    if Travel.GetFollowTarget() == "" then
         print("(flee) Nothing to follow -- this character will stand still until it is told to follow somebody")
     end
 end

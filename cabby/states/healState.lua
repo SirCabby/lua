@@ -14,7 +14,9 @@ local Commands = require("cabby.commands.commands")
 local HealStateConfig = require("cabby.configs.healStateConfig")
 local HealStateMenu = require("cabby.ui.states.healStateMenu")
 local Menu = require("cabby.ui.menu")
+local Roles = require("cabby.roles")
 local SlashCmd = require("cabby.commands.slashcmd")
+local Status = require("cabby.status")
 local ToggleCommand = require("cabby.commands.toggleCommand")
 local UserInput = require("cabby.utils.userinput")
 
@@ -37,6 +39,19 @@ local abortMarginPct = 10
 ---now; one that could not be acted on for ten seconds is stale, and acting on it late is worse
 ---than not acting on it.
 local orderTimeoutMs = 10000
+
+---How long a target is left alone after a heal on them did not land.
+---
+---A refusal costs nothing to make, which is exactly the problem: without this, a target the
+---client will not take a heal on is asked again on the very next pass, and every pass after that,
+---at whatever rate the loop runs. What that looks like from the outside is a cast and a
+---cancellation per frame and nothing ever leaving the ground.
+---
+---Deliberately *not* waived for someone below the emergency mark, which is the one thing that
+---separates it from the settle window above: chain healing a tank at 20% is the point of a healer,
+---but a cast that would not go out is not a heal that needs repeating faster. It is a debounce
+---rather than a give-up -- the target is reconsidered the moment it runs out.
+local retryAfterFailureMs = 3000
 
 ---Keeping a group alive.
 ---
@@ -73,6 +88,9 @@ local HealState = {
         healThreshold = nil,
         order = nil,        -- { id, name, expiresMs } from a `heal <id>` or `healme`
         settleUntil = {},   -- { [spawn id] = time we may consider healing them again }
+        -- { [spawn id] = when a heal that did not land is worth trying on them again }. Kept apart
+        -- from settleUntil because the two are waived under different conditions: see isHeldOff
+        tryAgainAt = {},
         calledOff = false,
         lastResult = nil
     }
@@ -103,6 +121,12 @@ local function addCandidate(candidates, id, name, pct, flags)
     pct = tonumber(pct)
     if id == nil or id < 1 or pct == nil then return end
 
+    -- Nobody at nothing is healable, and `Dead()` is not enough to catch them: a player on the way
+    -- to a corpse reads as a live spawn at zero or *below* zero health for as long as the server
+    -- takes to make the corpse. Sorted worst-first, one of those outranks every real target in the
+    -- group -- so it is not merely a wasted cast, it is the only cast this state will consider.
+    if pct <= 0 then return end
+
     candidates[#candidates+1] = {
         id = id,
         name = name or tostring(id),
@@ -122,7 +146,14 @@ end
 local function scanCandidates()
     local candidates = {}
 
-    addCandidate(candidates, mq.TLO.Me.ID(), mq.TLO.Me.CleanName(), mq.TLO.Me.PctHPs(), { isSelf = true })
+    -- Through Roles rather than off `Group.Member[#].MainTank`, so that "the tank" is one answer
+    -- for the whole script -- and so it is answered for *this* character too. A paladin holding
+    -- the role is who a tank-scoped slot is for, and reading the flag per group member could never
+    -- say so, since we are not one of our own group members.
+    local mainTank = Roles.GetMainTank()
+
+    addCandidate(candidates, mq.TLO.Me.ID(), mq.TLO.Me.CleanName(), mq.TLO.Me.PctHPs(),
+        { isSelf = true, isTank = Roles.IsMainTank() })
 
     if HealStateConfig.GetHealGroup() then
         for index = 1, (tonumber(mq.TLO.Group.Members()) or 0) do
@@ -130,8 +161,8 @@ local function scanCandidates()
             if not member.OtherZone() and not member.Offline() then
                 local spawn = member.Spawn
                 if not spawn.Dead() then
-                    addCandidate(candidates, spawn.ID(), spawn.CleanName(), spawn.PctHPs(),
-                        { isTank = member.MainTank() == true })
+                    addCandidate(candidates, spawn.ID(), spawn.CleanName(), Status.HealthPct(spawn),
+                        { isTank = Roles.Matches(mainTank, spawn.ID(), spawn.CleanName()) })
                 end
             end
         end
@@ -140,7 +171,7 @@ local function scanCandidates()
     if HealStateConfig.GetHealPets() then
         local pet = mq.TLO.Me.Pet
         if pet.ID() ~= nil and not pet.Dead() then
-            addCandidate(candidates, pet.ID(), pet.CleanName(), pet.PctHPs(), { isPet = true })
+            addCandidate(candidates, pet.ID(), pet.CleanName(), Status.HealthPct(pet), { isPet = true })
         end
     end
 
@@ -206,6 +237,58 @@ local function isSettling(candidate)
     if candidate.pct <= HealStateConfig.GetEmergencyPct() then return false end
     local until_ = HealState._.settleUntil[candidate.id]
     return until_ ~= nil and Time.current_time() < until_
+end
+
+---@param candidate HealCandidate
+---@return boolean isHeldOff true while a heal that would not go out is being left alone
+local function isHeldOff(candidate)
+    local at = HealState._.tryAgainAt[candidate.id]
+    return at ~= nil and Time.current_time() < at
+end
+
+---Would this pass pick this person, if it were picking?
+---
+---The question `reasonToAbandon` has to ask before it throws a heal away for somebody. Cancelling
+---a heal in the air is only ever right when there is a better one to cast instead, and "somebody
+---is worse off" is not the same claim: they may be settling, they may be held off after a refusal,
+---or no configured slot may be scoped to them at all. Abandoning for someone this state has
+---already decided not to heal ends the cast and then re-picks the same target on the next pass,
+---which is a cast and a cancellation per frame for as long as they stay in that condition -- and
+---below the emergency mark is exactly where people *stay*, because that is where a rez leaves
+---them.
+---
+---Readiness is deliberately left out. A gem still recovering is a reason to wait a moment, not a
+---reason to keep casting the wrong heal at the wrong person, and asking about it here would mean
+---a real emergency could not preempt anything in the second after a cast.
+---@param candidate HealCandidate
+---@return boolean wouldChoose
+local function wouldChoose(candidate)
+    if isHeldOff(candidate) or isSettling(candidate) then return false end
+
+    for _, slot in ipairs(HealStateConfig.GetActions()) do
+        if candidate.pct <= HealStateConfig.GetThreshold(slot) and scopeAllows(slot, candidate) then
+            local action = Action.GetActionType(slot)
+            -- a group heal is chosen for the group, so it is not a reason to drop somebody's heal
+            if action ~= nil and Action.IsEnabled(slot) and not isGroupHeal(action)
+                and Action.GetLuaResult(slot) then
+                return true
+            end
+        end
+    end
+
+    return false
+end
+
+---Drop the windows above once they have run out, so a long session does not collect an entry per
+---person this character has ever tried to heal.
+local function prune()
+    local now = Time.current_time()
+    for id, at in pairs(HealState._.settleUntil) do
+        if now >= at then HealState._.settleUntil[id] = nil end
+    end
+    for id, at in pairs(HealState._.tryAgainAt) do
+        if now >= at then HealState._.tryAgainAt[id] = nil end
+    end
 end
 
 ---@class HealPick
@@ -321,14 +404,20 @@ local function choosePick(candidates)
                     candidate = {
                         id = order.id,
                         name = spawn.CleanName() or order.name,
-                        pct = tonumber(spawn.PctHPs()) or 100,
+                        pct = Status.HealthPct(spawn) or 100,
                         isSelf = false, isTank = false, isPet = false
                     }
                 end
             end
 
             if candidate ~= nil then
-                if candidate.pct >= 100 then
+                if candidate.pct <= 0 then
+                    -- the same reading `addCandidate` refuses: a spawn at nothing is on its way to
+                    -- being a corpse whatever `Dead()` says, and an order is not a reason to spend
+                    -- the group's healer casting at one
+                    print("(healnow) " .. candidate.name .. " is past healing")
+                    HealState._.order = nil
+                elseif candidate.pct >= 100 then
                     print("(healnow) " .. candidate.name .. " is already at full health")
                     HealState._.order = nil
                 else
@@ -356,7 +445,7 @@ local function choosePick(candidates)
     end
 
     for _, candidate in ipairs(candidates) do
-        if not isSettling(candidate) then
+        if not isHeldOff(candidate) and not isSettling(candidate) then
             local pick = chooseFor(candidate)
             if pick ~= nil then return pick end
         end
@@ -428,7 +517,7 @@ local function reasonToAbandon(candidates)
     if spawn.ID() == nil then return "they are gone" end
     if spawn.Dead() then return "they died" end
 
-    local pct = tonumber(spawn.PctHPs())
+    local pct = Status.HealthPct(spawn)
     if pct == nil then return nil end
 
     -- somebody else healed them, or the mob switched targets
@@ -436,11 +525,14 @@ local function reasonToAbandon(candidates)
         return "they are back up to " .. tostring(math.floor(pct)) .. "%"
     end
 
-    -- someone else is in real trouble and this heal is not for them
+    -- Someone else is in real trouble, this heal is not for them, and -- the part that has to be
+    -- asked -- we would actually heal them if we dropped this. Without that last clause the cast
+    -- is thrown away for somebody nothing is going to be cast at, and the next pass starts the
+    -- same heal on the same target to be thrown away again.
     local emergency = HealStateConfig.GetEmergencyPct()
     if pct > emergency then
         for _, candidate in ipairs(candidates) do
-            if candidate.id ~= target.id and candidate.pct <= emergency then
+            if candidate.id ~= target.id and candidate.pct <= emergency and wouldChoose(candidate) then
                 return candidate.name .. " needs it more"
             end
         end
@@ -460,11 +552,20 @@ local function recordFinished(status, outcome, reason)
             (outcome ~= Casting.outcomes.succeeded and (" (" .. tostring(reason) .. ")") or "")
         if target.id ~= nil then
             HealState._.settleUntil[target.id] = Time.current_time() + healSettleMs
+            HealState._.tryAgainAt[target.id] = nil
         end
     elseif not HealState._.calledOff then
         -- a heal we called off already said why; anything else is the client refusing it
         HealState._.lastResult = tostring(target.spell) .. " on " .. tostring(target.name) ..
             " failed: " .. tostring(reason)
+        -- and a refusal is worth remembering for a moment. Without this the same target is chosen
+        -- again on the very next pass, refused again, and the whole thing runs at loop speed --
+        -- which is what a log full of a cast and a cancellation per frame actually is. A heal we
+        -- called off ourselves is left out on purpose: that one was dropped because somebody else
+        -- needed it more, and coming straight back to them is the right thing to do.
+        if target.id ~= nil then
+            HealState._.tryAgainAt[target.id] = Time.current_time() + retryAfterFailureMs
+        end
     end
     HealState._.calledOff = false
 
@@ -674,6 +775,8 @@ function HealState.Go()
         recordFinished(status, outcome, reason)
         return true
     end
+
+    prune()
 
     local pick = choosePick(candidates)
     if pick == nil then return false end

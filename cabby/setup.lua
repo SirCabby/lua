@@ -15,6 +15,7 @@ local HotbarConfig = require("cabby.configs.hotbarConfig")
 local HotbarsUI = require("cabby.ui.hotbarsUI")
 local Menu = require("cabby.ui.menu")
 local CabbyMovement = require("cabby.movement")
+local Roles = require("cabby.roles")
 
 local Setup = {
     key = "Setup"
@@ -138,6 +139,7 @@ function Setup:Init(configFilePath, stateMachine)
     CabbyCasting.Init(stateMachine)
     CabbyMovement.Init(stateMachine) -- states expect the movement service to exist before they register
     Character.Init(stateMachine) -- watches for level-ups, AA purchases and bag changes
+    Roles.Init() -- who holds which job in the group; Combat and HealState both read it
     Combat.Init(stateMachine) -- what we are fighting; every state that fights reads it
     ClassSetup(stateMachine)
 

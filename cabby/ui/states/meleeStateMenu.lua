@@ -10,6 +10,7 @@ local CommonUI = require("cabby.ui.commonUI")
 local Disciplines = require("cabby.actions.disciplines")
 local Items = require("cabby.actions.items")
 local MeleeStateConfig = require("cabby.configs.meleeStateConfig")
+local Roles = require("cabby.roles")
 local Skills = require("cabby.actions.skills")
 
 local MeleeStateMenu = {}
@@ -80,6 +81,14 @@ function MeleeStateMenu.BuildMenu(meleeState)
         ImGui.TableNextColumn()
         ImGui.Text(Combat.Describe())
 
+        ImGui.TableNextRow()
+        ImGui.TableNextColumn()
+        ImGui.Text("Group Roles")
+
+        ImGui.TableNextColumn()
+        -- cached behind Roles' own scan interval, so this costs nothing per frame
+        ImGui.Text(Roles.Describe())
+
         ImGui.EndTable()
     end
     ImGui.PopStyleVar()
@@ -108,6 +117,18 @@ function MeleeStateMenu.BuildMenu(meleeState)
         if clicked then
             CombatConfig.SetAutoEngage(result)
         end
+        ImGui.SameLine()
+        CommonUI.HelpMarker("Picks a fight up without being told: the main assist's target first, and then whatever is attacking us. Off waits for an (attack) order or an (assist) call.")
+
+        ImGui.SameLine()
+        ---@type boolean
+        local clicked, result
+        result, clicked = ImGui.Checkbox("Call Assist", CombatConfig.GetCallAssist())
+        if clicked then
+            CombatConfig.SetCallAssist(result)
+        end
+        ImGui.SameLine()
+        CommonUI.HelpMarker("While this character holds the group's Main Tank role, every change to what it is fighting is called out to the group as an (assist) line, and dropping the target calls the fight off. Nothing is said when somebody else is the tank. The channels it speaks on are the ones /speak sets.")
 
         ImGui.Dummy(0, 0)
         ImGui.SameLine()
@@ -124,7 +145,7 @@ function MeleeStateMenu.BuildMenu(meleeState)
 
         ImGui.SameLine()
         if ImGui.Button("Reset Default", 100, 23) then
-            MeleeStateConfig.SetEngageDistance(50)
+            MeleeStateConfig.SetEngageDistance(100)
         end
 
         ImGui.TableNextRow()
@@ -137,7 +158,7 @@ function MeleeStateMenu.BuildMenu(meleeState)
         -- stops fighting the thing, and a paladin that stops swinging but keeps nuking is not
         -- what the button says. Combat runs no game commands, which is what makes pressing them
         -- from inside a render callback safe -- the old Attack button ran /mqtarget from here.
-        local attackDisabled = mq.TLO.Target.ID() == nil
+        local attackDisabled = mq.TLO.Target.ID() == nil or mq.TLO.Target.Type() == "Corpse"
         if attackDisabled then
             ImGui.BeginDisabled(true)
         end

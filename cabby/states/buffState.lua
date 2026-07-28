@@ -16,6 +16,7 @@ local Command = require("cabby.commands.command")
 local Commands = require("cabby.commands.commands")
 local Menu = require("cabby.ui.menu")
 local SlashCmd = require("cabby.commands.slashcmd")
+local Status = require("cabby.status")
 local ToggleCommand = require("cabby.commands.toggleCommand")
 local UserInput = require("cabby.utils.userinput")
 
@@ -136,6 +137,15 @@ local function scanCandidates()
         id = tonumber(id)
         if id == nil or id < 1 or seen[id] then return end
         seen[id] = true
+
+        -- `Dead()` is not the whole answer: a player on the way to a corpse reads as a live spawn
+        -- at zero or below for as long as the server takes to make the corpse, and every stacking
+        -- check on one of those comes back "they need it". Read through `Status`, not `PctHPs`,
+        -- which reports a group member the client knows no maximum for as somebody at nothing --
+        -- and this is a check that *drops* people, so a wrong reading here empties the group out
+        -- of the list and leaves this character buffing nobody but itself
+        local pct = Status.HealthPct(mq.TLO.Spawn("id " .. tostring(id)))
+        if pct ~= nil and pct <= 0 then return end
 
         candidates[#candidates+1] = {
             id = id,

@@ -2,6 +2,7 @@
 local mq = require("mq")
 
 local Debug = require("utils.Debug.Debug")
+local Movement = require("utils.Movement.Movement")
 local Time = require("utils.Time.Time")
 
 local ChelpDocs = require("cabby.commands.chelpDocs")
@@ -12,7 +13,6 @@ local Menu = require("cabby.ui.menu")
 local RestStateConfig = require("cabby.configs.restStateConfig")
 local RestStateMenu = require("cabby.ui.states.restStateMenu")
 local SlashCmd = require("cabby.commands.slashcmd")
-local Status = require("cabby.status")
 local ToggleCommand = require("cabby.commands.toggleCommand")
 
 ---How long the character has to have been standing still before sitting down is worth it. A group
@@ -38,6 +38,18 @@ local commandAckMs = 2000
 ---stops being answered instantly.
 local standGraceMs = 5000
 
+---How long the reason we got up has to have stayed gone before sitting back down is worth it.
+---
+---The grace above covers a stand somebody else ordered; this covers the ones this state orders
+---itself. Without it there is no hysteresis in that direction at all: the command throttle is the
+---only thing in the way, so a hold that comes and goes is answered with a `/stand` and a `/sit` a
+---second apart, over and over, for as long as it keeps flickering. Which reason it was does not
+---matter -- any of them is read from the world afresh each pass and so any of them can blink, and
+---none of them is worth a posture change that lasts a second.
+---A debounce and not a give-up, like the rest of the windows in here: resting resumes on its own
+---once the reason has actually stayed away.
+local holdSettleMs = 5000
+
 ---Getting the pools back up, at the bottom of the chain.
 ---
 ---The job is one sentence -- sit while something is short, stand once nothing is -- and the whole
@@ -61,10 +73,19 @@ local standGraceMs = 5000
 ---
 ---What holds it back, in the order it reports them: a sit that is not ours, an open spellbook,
 ---having only just been stood up, being engaged (a character in a fight has a fight to be in), a
----cast in the air, and -- while the client says the fight is on and we are not in it -- the
----`in_combat` setting, plus melee being on. That last pair is the case worth naming: a caster that
----has not engaged would rather fill its bar than start something, and a character that walks into
----melee is a character that is about to be on its feet anyway.
+---cast in the air, the movement service driving, and -- while the client says the fight is on and
+---we are not in it -- the `in_combat` setting. That last one is the case worth naming: a caster
+---that has not engaged would rather fill its bar than start something, which is why it is a
+---setting rather than a rule.
+---
+---Movement is the one to read twice, because a *parked* task is not a hold. A follow order stands
+---for as long as the group is together, and if that counted as being moved this state would never
+---sit down at all while anyone was following anybody -- which is most of the time, and the whole
+---case it was written for.
+---
+---**Both directions are debounced**, and they have to be. Every one of those reasons is read from
+---the world afresh each pass, so any of them can blink -- and a posture change is the most
+---expensive answer there is to a question whose answer changes back a second later.
 ---@class RestState : BaseState
 local RestState = {
     key = "RestState",
@@ -86,6 +107,9 @@ local RestState = {
         lastPosture = nil,
         sitIsOurs = false,
         lastStandNotOursMs = nil,
+        -- when something last held us off sitting, so a reason that flickers cannot be answered
+        -- with a posture change per flicker. nil means "nothing has held us back yet"
+        lastHoldMs = nil,
         isResting = false,
         holdReason = nil
     }
@@ -177,16 +201,24 @@ local function holdReason()
         return "a cast is going out"
     end
 
-    if mq.TLO.Me.CombatState() == "COMBAT" then
-        if not RestStateConfig.GetInCombat() then
-            return "the fight is still on"
-        end
+    -- The movement service is driving. A `/sit` under a move is answered with a `/stand` on the
+    -- service's next pulse, which is an argument this state cannot win and should not be having --
+    -- and the frames it happens on are exactly the ones it gets, because a follow hands the frame
+    -- back the moment it is nearly caught up while the task is still closing the last few units.
+    -- A task that is *parked* is not driving, and is precisely when resting is the right answer.
+    if Movement.IsActive() and not Movement.IsParked() then
+        return "we are being moved"
+    end
 
-        -- melee is about to want this character on its feet and inside the mob's reach, and a
-        -- character sitting there is one taking full hits while it gets up
-        if Status.IsMeleeEnabled() then
-            return "the fight is on and melee is turned on"
-        end
+    -- The client's own combat flag, which is a fight *somewhere* rather than a fight we are in --
+    -- the one above is the fight we are in. `in_combat` is the user's answer to whether that is
+    -- worth staying on our feet for, and it is the only thing that reads it: this used to stand up
+    -- as well whenever melee happened to be switched on, which quietly overrode that setting for
+    -- every character with a melee page. It bought nothing either -- the melee state does not act
+    -- on anything but an engagement, and an engagement is the hold above -- and it cost a `/stand`
+    -- every time the flag came on and a `/sit` every time it went off again.
+    if mq.TLO.Me.CombatState() == "COMBAT" and not RestStateConfig.GetInCombat() then
+        return "the fight is still on"
     end
 
     return nil
@@ -333,7 +365,7 @@ function RestState.Init()
         summary = "Turns resting during a fight on or off",
         about = {
             "Only ever covers a fight this character has not joined: being engaged stops it",
-            "resting whatever this is set to, and so does having melee turned on."
+            "resting whatever this is set to."
         },
         get = RestStateConfig.GetInCombat,
         set = RestStateConfig.SetInCombat
@@ -372,6 +404,7 @@ function RestState.Reset()
     RestState._.lastPosture = nil
     RestState._.sitIsOurs = false
     RestState._.lastStandNotOursMs = nil
+    RestState._.lastHoldMs = nil
     RestState._.isResting = false
     RestState._.holdReason = nil
 end
@@ -391,6 +424,7 @@ function RestState.Go()
 
     local hold = holdReason()
     RestState._.holdReason = hold
+    if hold ~= nil then RestState._.lastHoldMs = now end
     local pools = RestState.GetPools()
 
     if posture == "SIT" then
@@ -442,6 +476,18 @@ function RestState.Go()
     if RestState._.lastMovingMs ~= nil and now - RestState._.lastMovingMs < settleMs then
         RestState._.holdReason = "we have only just stopped"
         return false
+    end
+
+    -- Whatever got us up has to have stayed gone. A reason read from the world can blink -- the
+    -- client's combat flag around a fight we are standing next to is the one that started this --
+    -- and sitting the moment it clears is how a `/stand` and a `/sit` end up a second apart for
+    -- as long as the flicker lasts.
+    if RestState._.lastHoldMs ~= nil then
+        if now - RestState._.lastHoldMs < holdSettleMs then
+            RestState._.holdReason = "the reason we got up has only just gone"
+            return false
+        end
+        RestState._.lastHoldMs = nil
     end
 
     -- Somebody put this character on its feet. Whoever it was had a reason -- and if the reason

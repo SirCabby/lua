@@ -1,6 +1,4 @@
 ---@diagnostic disable: undefined-field
-local mq = require("mq")
-
 local AAs = require("cabby.actions.aas")
 local Action = require("cabby.actions.action")
 local ActionUI = require("cabby.ui.actions.actionUI")
@@ -8,6 +6,7 @@ local AvailableActions = require("cabby.actions.availableActions")
 local CommonUI = require("cabby.ui.commonUI")
 local HealStateConfig = require("cabby.configs.healStateConfig")
 local Items = require("cabby.actions.items")
+local Roles = require("cabby.roles")
 local Spells = require("cabby.actions.spells")
 
 local HealStateMenu = {}
@@ -204,8 +203,11 @@ function HealStateMenu.BuildMenu(healState)
 
             ImGui.Spacing()
             ImGui.TextDisabled("The tank is whoever holds that role in the group window.")
-            if mq.TLO.Group.MainTank.Name() == nil then
+            local mainTank = Roles.GetMainTank()
+            if mainTank == nil then
                 ImGui.TextDisabled("Nobody is assigned Main Tank, so tank-scoped heals will not fire.")
+            else
+                ImGui.TextDisabled("Main Tank: " .. mainTank.name .. (Roles.IsMainTank() and " (me)" or ""))
             end
 
             ImGui.EndTabItem()

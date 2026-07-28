@@ -29,7 +29,10 @@ function StateMachine.new()
     ---functions returning a priority floor, or nil for "nothing to hold back"
     self._.priorityGates = {}
     self._.started = false
-    self._.loopDelayMs = 25
+    -- MQ resumes the script at most once per game frame, so anything above one frame time
+    -- makes passes skip frames: 25 here cost a whole extra frame of command latency per pass
+    -- at 60fps. 10 stays under typical frame times, which means one pass every pulse.
+    self._.loopDelayMs = 10
     self._.paused = {}
     self._.failStreaks = {}
 
@@ -94,51 +97,47 @@ end
 
 ---What every gate is asking for this frame.
 ---
----A gate says "nothing weaker than this may run right now", and may name states that run anyway.
----Casting is the first one: a heal that has committed three seconds of cast time is lost the moment
----the follow state below it walks off, so while that cast is in the air the chain has to stop at
----the heal. Yielding is not enough on its own -- the states below would happily take the frame the
----caster is not using, and that is exactly the frame that ruins the cast.
+---A gate is how a *service* is busy at a band: it returns the weakest priority allowed to run
+---right now, and every state weaker than that is starved exactly as if a state at that band had
+---returned busy. Casting is the one that needs it -- a heal that has committed three seconds of
+---cast time is lost the moment the follow state below it walks off, and the cast can be in the
+---air with no state holding a frame for it (`/ccast` from a hotbar). Yielding is not enough on
+---its own: the states below would happily take the frame the caster is not using, and that is
+---exactly the frame that ruins the cast.
 ---
----The exemptions are the other half of it, and flee is what needs them: a mode that holds the whole
----chain back *except* for the one job it is still meant to be doing. A floor alone cannot say that,
----since what has to go is two disjoint ranges -- everything above follow and everything below it.
----@return table gates `{ floor = number|nil, exempt = table|nil }` per gate holding something back
+---A floor is all a gate may say. It cuts a contiguous tail off the chain, which is the only shape
+---the ordering can express -- no exemptions, no holes. A job that must keep running below
+---somebody's floor is a job registered at the wrong band, and the fix is where it sits, not a
+---hole in the cut: travel mode is the worked example, suppressing by returning busy at the
+---passive band and driving the traveling itself (`cabby.travel`) rather than gating the chain
+---and exempting follow.
+---@return table floors one floor per gate holding something back
 local function activeGates(self)
-    local gates = {}
+    local floors = {}
 
     for _, gate in ipairs(self._.priorityGates) do
-        local ok, floor, exempt = xpcall(gate, debug.traceback)
+        local ok, floor = xpcall(gate, debug.traceback)
         if not ok then
             ErrorAlert.Record("priorityGate", floor)
-        else
-            local hasFloor = type(floor) == "number"
-            if hasFloor or type(exempt) == "table" then
-                gates[#gates+1] = { floor = hasFloor and floor or nil, exempt = type(exempt) == "table" and exempt or nil }
-            end
+        elseif type(floor) == "number" then
+            floors[#floors+1] = floor
         end
     end
 
-    return gates
+    return floors
 end
 
 ---Is anything holding this state back this frame?
----
----A state has to satisfy **every** gate, which is what keeps an exemption from being a way past
----somebody else's floor: follow is exempt from the flee gate and still starved by a cast in the
----air, and that is right -- a heal half cast is lost either way.
----@param gates table from activeGates
----@param state BaseState
+---@param floors table from activeGates
 ---@param priority number|nil the band it was registered at
 ---@return boolean isStarved
-local function isStarved(gates, state, priority)
+local function isStarved(floors, priority)
     -- a state registered without a priority takes no part in this: we have no way to judge it, and
     -- silently starving it would be worse than letting it run
     if priority == nil then return false end
 
-    for _, gate in ipairs(gates) do
-        local isExempt = gate.exempt ~= nil and gate.exempt[state.key] == true
-        if not isExempt and (gate.floor == nil or priority > gate.floor) then
+    for _, floor in ipairs(floors) do
+        if priority > floor then
             return true
         end
     end
@@ -147,13 +146,13 @@ local function isStarved(gates, state, priority)
 end
 
 local function runChecks(self)
-    local gates = activeGates(self)
+    local floors = activeGates(self)
 
     for _, entry in ipairs(self._.registeredStates) do
         ---@type BaseState
         local state = entry.state
 
-        if not isStarved(gates, state, entry.priority) and not self._.paused[state] and runState(self, state) then
+        if not isStarved(floors, entry.priority) and not self._.paused[state] and runState(self, state) then
             return
         end
     end
@@ -166,14 +165,13 @@ function StateMachine:Register(state, priority)
     table.insert(self._.registeredStates, { state = state, priority = priority })
 end
 
----Register something that can hold back part of the chain: a function returning the weakest
+---Register something that can hold back the tail of the chain: a function returning the weakest
 ---priority allowed to run right now, or nil when it is not holding anything back.
 ---
----A gate may also return, second, a set of state keys that run anyway (`{ FollowState = true }`) --
----for a gate that is not stopping the chain so much as narrowing it to one job, which is what flee
----does. Exemptions only ever apply to the gate that returned them; a state still has to satisfy
----every other gate.
----@param gate fun(): number|nil, table|nil
+---A gate is a service's way of being busy at a band -- see activeGates. It can only cut a
+---contiguous tail, never punch holes: anything that must keep running below a floor is a job
+---that belongs at a different band.
+---@param gate fun(): number|nil
 function StateMachine:RegisterPriorityGate(gate)
     table.insert(self._.priorityGates, gate)
 end

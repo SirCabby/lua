@@ -38,8 +38,8 @@ local BaseClass = { key = "BaseClass" }
 ---Fleeing is the third, and it is here for the same reason and one more: it is not a job at all but
 ---the *absence* of every job below it, so what it holds back is the same list whatever the
 ---character is. It sits at the passive band, above everything except an order given to this
----character, and it is the one state handed the state machine at Init, because holding the chain
----back is a gate and a gate has to be registered with the machine that consults it.
+---character, and it suppresses the way anything does -- by returning busy for as long as the mode
+---is on -- while driving the traveling core (`cabby.travel`) itself.
 ---
 ---Meleeing is the fourth, and it is the one whose band has to be argued for. Anyone can swing a
 ---weapon, so everyone gets the state -- but at `dps + 5`, one step weaker than the `dps` band the
@@ -190,9 +190,9 @@ function BaseClass.new(profile)
             -- a state has to know its own band to ask anything that arbitrates by priority for
             -- something -- a cast, above all -- and only the profile knows what that band is
             entry.state.priority = entry.priority
-            -- the state machine goes to any state that asks for it. Only flee does, and only
-            -- because what it does is hold the rest of the chain back -- which is a gate, and a
-            -- gate has to be registered with the machine that consults it
+            -- the state machine goes to any state that asks for it. None does today (flee used
+            -- to, for a gate it no longer registers); it keeps being passed so a state that one
+            -- day needs machine-level registration can take it
             entry.state.Init(stateMachine)
             -- the priority goes to the state machine as well as deciding the order here: a
             -- priority gate (casting, so far) needs to know what it is starving

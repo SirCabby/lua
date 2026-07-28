@@ -15,10 +15,16 @@ local Unsticker = require("utils.Movement.Unsticker")
 ---a trail and walk the trail instead, which reproduces their route around corners and, when
 ---they leave the zone or our sight, still walks us to the last place they were.
 ---
+---How close we hold is two numbers rather than one: we close to `distance` and then stand still
+---until they are `resumeDistance` away, so they get a buffer to move around in instead of being
+---shadowed step for step (see `WithinHold`).
+---
 ---Trail bookkeeping worth knowing about:
 --- - waypoints are only recorded once the spawn has moved `sampleDistance` from the last one
 --- - reaching a waypoint drops it, and a short lookahead drops any earlier ones we have
 ---   already wandered past, which collapses the backtracking a laggy trail collects
+--- - the trail is dropped entirely on any frame the spawn is in line of sight, because with no
+---   wall between us there is nothing it can tell us that we cannot see -- see `Pulse`
 --- - a big jump in our own position (summon, port, gate) invalidates the trail entirely
 ---@class Follow : MovementTask
 local Follow = { author = "judged", key = "Follow" }
@@ -32,6 +38,8 @@ setmetatable(Follow, {
 
 -- how many waypoints ahead we look for one we have already reached
 local lookaheadWaypoints = 10
+-- heading error beyond which running forward would take us somewhere unhelpful
+local maxDriftDegrees = 90
 -- distance our own position can change in a frame before the trail is meaningless
 local selfWarpDistance = 50
 local doorRetryMs = 500
@@ -45,13 +53,15 @@ end
 
 ---@param spawnId number
 ---@param options? table
---- - distance: how close we hold to the spawn, default 10
+--- - distance: how close we close to the spawn, default 10
+--- - resumeDistance: how far the spawn gets before we close it again, default distance
 --- - sampleDistance: how far the spawn moves before a new waypoint, default 5
 --- - waypointGap: how close counts as reaching a waypoint, default 5
 --- - maxWaypoints: trail cap, oldest dropped first, default 250
 --- - warpDistance: a jump in the spawn's position larger than this restarts the trail, default 100
 --- - openDoors: click closed doors we run into, default true
---- - nudgeAfter / failAfter: stalled windows before unsticking / giving up, default 2 / 20
+--- - nudgeAfter: stalled windows before an unstick attempt, default 2
+--- - failAttempts: consecutive failed unstick attempts before giving up, default 9
 --- - owner: key of whoever asked for the follow
 ---@return Follow
 function Follow.new(spawnId, options)
@@ -68,13 +78,22 @@ function Follow.new(spawnId, options)
     -- search does not belong in the render path
     self._.name = mq.TLO.Spawn("id " .. tostring(spawnId)).CleanName() or tostring(spawnId)
     self._.distance = options.distance or 10
+    -- never inside distance, or closing and holding would each undo the other
+    self._.resumeDistance = math.max(options.resumeDistance or self._.distance, self._.distance)
+    -- which of the two thresholds is in force right now (see WithinHold)
+    self._.holding = false
+    -- whether we are running at them or walking a trail, cached for Describe (a render path)
+    self._.inSight = false
+    -- the gap last pulse, and how fast it is closing, which is what we aim the stop with
+    self._.lastDistance = nil
+    self._.closing = 0
     self._.sampleDistance = options.sampleDistance or 5
     self._.waypointGap = options.waypointGap or 5
     self._.maxWaypoints = options.maxWaypoints or 250
     self._.warpDistance = options.warpDistance or 100
     self._.openDoors = options.openDoors ~= false
     self._.nudgeAfter = options.nudgeAfter or 2
-    self._.failAfter = options.failAfter or 20
+    self._.failAttempts = options.failAttempts or 9
     self._.zoneId = mq.TLO.Zone.ID()
     self._.failReason = nil
     self._.lastSelf = nil
@@ -83,7 +102,7 @@ function Follow.new(spawnId, options)
     self._.first = 1
     self._.last = 0
     self._.stuck = StuckDetector.new()
-    self._.unsticker = Unsticker.new()
+    self._.unsticker = Unsticker.new(self._.stuck)
 
     return self
 end
@@ -95,6 +114,19 @@ function Follow:Fail(reason)
     DebugLog("Follow failed: " .. reason)
     Locomotion.ReleaseAll()
     return MovementStatus.failed
+end
+
+---Whether we are close enough to stand still, which is not the same question as whether we were
+---close enough to have stayed standing still.
+---
+---One threshold means we hold the spawn at exactly that range, so every step they take is a step
+---we take: correct to the inch, and unpleasant to be followed by. So there are two -- we close to
+---`distance` and then hold until they are `resumeDistance` away -- and the gap between them is the
+---room they get to move around in before we come after them again.
+---@param distance number how far away the spawn is now
+---@return boolean withinHold
+function Follow:WithinHold(distance)
+    return distance <= (self._.holding and self._.resumeDistance or self._.distance)
 end
 
 ---@return number count waypoints still on the trail
@@ -210,22 +242,73 @@ function Follow:Pulse()
     if lastSelf ~= nil and Geometry.Distance3D(lastSelf.y, lastSelf.x, lastSelf.z, myY, myX, myZ) > selfWarpDistance then
         DebugLog("We moved without walking, dropping the trail")
         self:ClearTrail()
+        -- and a gap measured either side of a jump is not a speed
+        self._.lastDistance = nil
     end
     self._.lastSelf = { y = myY, x = myX, z = myZ }
 
     local spawn = mq.TLO.Spawn("id " .. tostring(self._.spawnId))
     local spawnExists = (spawn.ID() or 0) > 0
     if spawnExists then
+        local distance = spawn.Distance3D()
+
+        -- **The trail is memory of where they went while we could not see them, and nothing else.**
+        --
+        -- Its whole reason for existing is the corner: the moment they round one, the straight line
+        -- goes through a wall. While we *can* see them there is no wall, so there is nothing the
+        -- breadcrumbs can tell us that we cannot see for ourselves -- and following them anyway is
+        -- what makes a follow look drunk. They record the leader shuffling about camp and walking
+        -- out to pull and back, and setting off along that means retracing every step of it before
+        -- heading anywhere, and being carried clean past them on the way: arriving is measured
+        -- against the spawn and not against the trail, so a trail that loops out and comes back
+        -- walks us out and back too. The wandering and the overshoot are the same bug.
+        --
+        -- So while they are in sight we run at them and keep no trail at all. What `Record` leaves
+        -- behind is a single breadcrumb on where they are standing right now -- which is exactly
+        -- the corner they went round, on the frame they go out of sight.
+        self._.inSight = spawn.LineOfSight() == true
+        if self._.inSight then
+            self:ClearTrail()
+        end
         self:Record(spawn)
 
-        local distance = spawn.Distance3D()
-        if distance ~= nil and distance <= self._.distance then
+        -- Stopping is a decision we only get to make once a pulse, and the keys let go later
+        -- still -- a full pulse and change behind the read, see Locomotion.leadPulses -- so the
+        -- gap is tested where it will be when the release actually lands. Aiming half a pulse
+        -- ahead was tried here first and still stopped long every time: it assumed the release
+        -- was instant, and it never is. No hold distance setting can absorb the error either --
+        -- it grows with speed and loop congestion, not with the threshold.
+        --
+        -- What matters is how fast the *gap* is closing, which is not how fast we are moving. A
+        -- leader turning and running back through the group closes it at both our speeds at once,
+        -- and that is exactly the moment a follower ends up stood on top of them -- our own speed
+        -- would have said we needed half as much room as we did. The gap is the thing to measure,
+        -- so measure the gap. Clamped because a zone or a port is not a speed -- but clamped well
+        -- above any real sprint, because a clamp that bites on a fast runner eats exactly the
+        -- lead that runner needs.
+        local closing = 0
+        if distance ~= nil and self._.lastDistance ~= nil then
+            closing = math.max(-Locomotion.closingClamp, math.min(Locomotion.closingClamp, self._.lastDistance - distance))
+        end
+        self._.lastDistance = distance
+        self._.closing = closing
+
+        local holding = distance ~= nil and self:WithinHold(distance - closing * Locomotion.leadPulses)
+        self._.holding = holding
+        if holding then
             -- close enough; keep recording so the trail stays warm for the next move
             Locomotion.ReleaseAll()
             self._.stuck:Reset()
             self._.unsticker:Reset()
             return MovementStatus.holding
         end
+    else
+        -- walking a trail out to where they no longer are is not holding station on them, so the
+        -- buffer is spent: whenever they turn up again we close on them properly
+        self._.holding = false
+        self._.inSight = false
+        self._.lastDistance = nil
+        self._.closing = 0
     end
 
     local waypoint = self:NextWaypoint(myY, myX)
@@ -241,31 +324,54 @@ function Follow:Pulse()
         end
     end
 
-    if self._.stuck:StalledWindows() >= self._.failAfter then
-        return self:Fail("stuck while following")
-    end
-
     Locomotion.FaceLoc(waypoint.y, waypoint.x)
     self:OpenDoorAhead()
 
     if self._.unsticker:IsActive() then
         self._.unsticker:Drive()
     elseif self._.stuck:StalledWindows() >= self._.nudgeAfter then
+        if self._.unsticker:Streak() >= self._.failAttempts then
+            return self:Fail("stuck while following")
+        end
         self._.unsticker:Begin()
         self._.unsticker:Drive()
     else
+        local drift = math.abs(Geometry.HeadingDiff(Locomotion.GetHeading(), Geometry.HeadingTo(myY, myX, waypoint.y, waypoint.x)))
         Locomotion.ReleaseStrafe()
-        Locomotion.Hold(Locomotion.keys.forward)
+        if drift > maxDriftDegrees then
+            -- our facing has not caught up yet; do not sprint off in the wrong direction
+            Locomotion.ReleaseForwardBack()
+        else
+            Locomotion.Hold(Locomotion.keys.forward)
+        end
     end
 
-    self._.stuck:Update(not Locomotion.IsRooted())
+    self._.stuck:Update(Locomotion.IsMoving() and not Locomotion.IsRooted())
     return MovementStatus.moving
+end
+
+---Whether this follow has anywhere to go right now.
+---
+---The same reading `Pulse` holds on -- `WithinHold`, buffer zone and all -- asked before the pulse
+---rather than during it, because the service has to know whether the character is worth standing up
+---before it stands them up. A target that is not in the zone is not "close enough": the trail
+---still leads somewhere and we should be walking it.
+---@return boolean isParked
+function Follow:IsParked()
+    local spawn = mq.TLO.Spawn("id " .. tostring(self._.spawnId))
+    if (spawn.ID() or 0) < 1 then return false end
+
+    local distance = spawn.Distance3D()
+    return distance ~= nil and self:WithinHold(distance)
 end
 
 ---Called when the movement service will not let us move this frame
 function Follow:OnBlocked()
     self._.stuck:Reset()
     self._.unsticker:Reset()
+    -- a gap measured either side of the held stretch is not a speed
+    self._.lastDistance = nil
+    self._.closing = 0
 end
 
 function Follow:Stop()
@@ -284,7 +390,19 @@ end
 
 ---@return string description
 function Follow:Describe()
-    return "following " .. self._.name .. " (" .. tostring(self:TrailSize()) .. " waypoints)"
+    -- Which of the two things a follow can be doing, because from the outside they look the same
+    -- and only one of them can wander: `/cmove` saying "trailing" with a pile of waypoints is the
+    -- reading that says the route is being replayed rather than run.
+    --
+    -- The gap and how fast it is closing are here for the same reason -- how close we end up is a
+    -- pulse of closing away from where we aimed, so a per-pulse figure that is large is the loop
+    -- being too slow to stop on a mark, and no threshold will fix that.
+    local gap = string.format("%.0f away, %.1f/pulse", self._.lastDistance or 0, self._.closing or 0)
+
+    if self._.inSight then
+        return "chasing " .. self._.name .. " (" .. gap .. ")"
+    end
+    return "trailing " .. self._.name .. " (" .. tostring(self:TrailSize()) .. " waypoints, " .. gap .. ")"
 end
 
 return Follow

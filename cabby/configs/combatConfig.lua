@@ -60,6 +60,14 @@ local function initAndValidate()
         taint = true
     end
 
+    -- On by default and harmless where it does not apply: only the character holding the group's
+    -- main tank role ever says anything, so every other character carries the setting unused until
+    -- the day it is handed the role.
+    if configRoot.call_assist == nil then
+        configRoot.call_assist = true
+        taint = true
+    end
+
     if taint then
         Global.configStore:SaveConfig()
     end
@@ -89,6 +97,18 @@ function CombatConfig.SetAutoEngage(enable)
     getConfigSection().auto_engage = enable == true
     Global.configStore:SaveConfig()
     print("Auto-Engage is Enabled: [" .. tostring(enable) .. "]")
+end
+
+---@return boolean callAssist whether the main tank calls the assist out to the group
+function CombatConfig.GetCallAssist()
+    return getConfigSection().call_assist
+end
+
+---@param enable boolean
+function CombatConfig.SetCallAssist(enable)
+    getConfigSection().call_assist = enable == true
+    Global.configStore:SaveConfig()
+    print("Calling the assist is Enabled: [" .. tostring(enable) .. "]")
 end
 
 ---@diagnostic disable-next-line: duplicate-set-field

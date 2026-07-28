@@ -23,6 +23,7 @@ cabby.lua
        ├─ CabbyCasting.Init  — registers the casting service, its priority gate + /ccast
        ├─ CabbyMovement.Init — registers the movement service + /cmove
        ├─ Character.Init     — registers the discovery service + /crefresh
+       ├─ Roles.Init         — registers /croles (who holds which job in the group)
        ├─ Combat.Init        — registers the engagement service, /cattack + the attack order
        ├─ ClassSetup         — this character's class module assembles + registers its states
        ├─ HotbarsUI.Init()   — ImGui shell for the hotbar windows
@@ -67,22 +68,39 @@ A bigger number is weaker. The gaps of ten are room for "the same job, but not a
 `Priorities.heal + 5` is a hybrid healing below the class that heals for a living. Classes
 name a band per state rather than ordering their `Register` calls by hand — see below.
 
-**Priority gates** (`RegisterPriorityGate`) are the other half of that ordering. A state that
+**Priority gates** (`RegisterPriorityGate`) are how a *service* is busy at a band. A state that
 yields hands the frame to whatever is below it, which is right for work that can be picked up
 again next frame and wrong for work already in the air: a three second heal is lost the moment
-the follow state below it walks off. A gate returns the weakest priority allowed to run right
-now, and `runChecks` skips every state weaker than that. The priority a state was registered at
-is kept for exactly this (`Register(state, priority)`, `GetPriority(stateOrKey)`); a state
-registered without one is never starved, since there is no way to judge it. Anything that
-commits the character for longer than a frame belongs here.
+the follow state below it walks off, and a cast can be in the air with no state holding a frame
+for it (`/ccast` from a hotbar). A gate returns the weakest priority allowed to run right now,
+and `runChecks` skips every state weaker than that — exactly as if a state at that band had
+returned busy. The priority a state was registered at is kept for exactly this
+(`Register(state, priority)`, `GetPriority(stateOrKey)`); a state registered without one is never
+starved, since there is no way to judge it.
 
-A gate may also return, second, a set of state keys that run **anyway** — for a gate that is not
-so much stopping the chain as narrowing it to one job. Flee is the one that needs it: a floor
-alone cannot say "everything except follow", because what has to go is two disjoint ranges, the
-states above follow and the states below it. A state has to satisfy *every* gate, so an exemption
-is never a way past somebody else's floor — follow is exempt from the flee gate and still starved
-by a cast in the air, which is right, since a heal half cast is lost either way. Two gates exist:
-**casting** (a floor, no exemptions) and **flee** (the passive band, exempting follow).
+A floor is all a gate may say. It cuts a contiguous tail off the chain, which is the only shape
+the ordering can express — no exemptions, no holes, no out-of-band suppression. A job that must
+keep running below somebody's floor is a job registered at the wrong band, and the fix is where
+it sits: travel mode is the worked example — flee suppresses by returning busy at the passive
+band and drives the traveling core (`travel.lua`) itself, where it once gated the chain and
+exempted FollowState. One gate exists: **casting**.
+
+**Busy signals are the whole of cross-state coordination, and the chain is the only arbiter.**
+What position promises a lower state is exactly this: *a frame you are given is a frame nothing
+above you wanted*. That guarantee is all a state ever knows about the states around it — a state
+never reads, models or compensates for another state, and finding yourself wanting to is the
+smell that some busy signal upstream is lying. Signals must therefore be **domain-honest and
+continuous**: "we are in a fight" is continuous across one mob dying and the next picking up, so
+`IsEngaged` is too (Combat holds a lost-target fight open while it seeks the successor — see
+Combat), and a gap in any signal built on a continuous fact is fixed at the service that owns the
+fact, never by teaching a downstream state to distrust its frames. Reading a **service** is
+different and fine: services act without owning frames, so their published facts are the only way
+not to contradict them — RestState holding for Combat's engagement and Movement's driving is
+that, not state-to-state knowledge. And the machine itself never pads any of this: no linger, no
+held frames, re-arbitration from the top every pass, an order landing on the next pass its state
+is entitled to. The windows a state keeps (retry throttles, a grace before undoing the player, a
+settle over a genuinely flickery world read) pace only that state's own actions, and never
+measure the scheduler.
 
 **Every state keeps the same contract** — written out in full in `states/baseState.lua`, which is
 the thing to read before writing one. In short, `Go()` is one pass of:
@@ -132,6 +150,10 @@ cabby/
   setup.lua           plugin checks, config init order, class dispatch (16-way if/elseif)
   character.lua       service: what this character has, discovered and kept current
   combat.lua          service: what this character is fighting; every state that fights reads it
+  roles.lua           reader: main tank / main assist, out of the group and raid windows
+  travel.lua          the traveling core: follow/anchor orders, trail-follow and click-through-
+                      zone; driven by FollowState (follow band) or FleeState (passive band),
+                      whichever the chain gives the frame to
   stateMachine.lua    priority-chain loop + per-frame services + priority gates (instance class)
   movement.lua        wiring only: registers the movement service and /cmove
   casting.lua         wiring only: casting service, its priority gate, movement arbiter, /ccast
@@ -300,7 +322,8 @@ holds no state: `get`/`set` are the config's own accessors, the ones the checkbo
 button, a chat order and the checkbox cannot disagree. Saying what changed is left to the setter,
 which is where this codebase already prints it — printing in both places would report every flip
 twice and still leave the checkbox as the one path that says nothing. MeleeState registers `melee`,
-`stick`, `autoengage`, `tanking`, and `bashoverride` for characters that can bash; HealState
+`stick`, `tanking`, and `bashoverride` for characters that can bash; Combat registers `autoengage`
+and `callassist`; HealState
 registers `healing`, `healgroup` and `healpets`; BuffState registers `buffing`, `buffgroup`,
 `buffpets` and `buffcombat`. Switches that have to call off work in progress
 rather than only stopping new work go through the *state* rather than the config, so the
@@ -356,8 +379,8 @@ Movement.lua        the service: one active task, arbitration, the pause gate, s
   Stick.lua         hold range on a spawn (loose, or `behind` to strafe into the rear arc)
   Follow.lua        breadcrumb-trail follow of a spawn, opens doors in the way
 Locomotion.lua      the only thing that touches movement keys; hold/release, /face, /stand
-StuckDetector.lua   position delta over wall-clock windows
-Unsticker.lua       jump + alternating strafe recovery
+StuckDetector.lua   summed travel over wall-clock windows
+Unsticker.lua       escalating recovery: alternating strafe first, jump only on a repeat attempt
 Geometry.lua        pure distance/heading math (headings are degrees CCW, EQ style)
 MovementStatus.lua  idle | moving | holding | blocked | arrived | failed
 ```
@@ -385,6 +408,40 @@ Design rules that matter when adding a caller:
 - Tasks are best-effort straight-line movers with stuck detection, *not* pathfinding. Follow
   works around corners because it replays the trail the target actually walked. Real navmesh
   pathing remains out of scope (that is MQ2Nav's job).
+- **Follow holds a buffer zone, sticks and moves do not.** `Follow` takes two ranges — it closes
+  to `distance` (20 for `followme`/`followtarget`, comfortably outside melee range and deliberately
+  so) and then holds until the target is `resumeDistance` away (35), rather than re-closing the moment
+  they take a step. The two are tuned together — what matters is the room between them, so moving
+  one without the other either parks the group on the leader or thins the buffer to nothing. One threshold
+  makes a follower a shadow, matching the target's every move to the inch, which is what being
+  followed by a bot looked like before. The hysteresis is one bit of task state, so *which*
+  threshold applies is only knowable from the task: `Follow:WithinHold` and `IsParked` are the
+  readings, and FollowState asks `Movement.IsParked()` rather than measuring the distance itself.
+  Nothing else inherits this — `m2m` is a `MoveTo` and still arrives exactly, and `Stick` holds
+  its engage range for melee, where a buffer would be a swing missed.
+- **The trail is memory of where they went while we could not see them, and nothing else.**
+  `Follow` drops its whole trail on any frame the spawn is in line of sight and runs straight at
+  them; the breadcrumbs only accumulate once sight is lost. The trail exists for the corner — with
+  no wall between us it has nothing to say that we cannot see — and walking it anyway is what made
+  following look drunk, because it records the leader shuffling round camp and walking out to pull
+  and back. Setting off along *that* is a follower retracing every step before it heads anywhere,
+  and being carried past the leader on the way, since arriving is measured against the spawn and a
+  trail that loops out and back walks us out and back too. The wandering and the overshoot were the
+  same bug. What `Record` leaves behind each frame is one breadcrumb on where they are standing,
+  which is exactly the corner they went round on the frame they go out of sight. `Follow:Describe`
+  (so `/cmove` and the Follow State panel) says which of the two it is doing: **chasing** or
+  **trailing (N waypoints)**. The cost of the rule is that line of sight is not walkability — a
+  leader visible across a chasm gets a beeline into it, recovered by the stuck detector rather than
+  by routing, which is the same bargain `Stick` and `MoveTo` have always made.
+- **Arriving leads by half a pulse, measured on the gap.** The stop test is
+  `distance - closing/2`, where `closing` is how much the *distance to the target* shrank since the
+  last pulse — not how far we moved. Stopping is decided once per pulse, so a pulse of closing is
+  the error bar on where we come to rest: testing the gap as it is now is always a pulse late, and
+  aiming half a pulse ahead centres the miss on the range we asked for. Own-speed is the wrong
+  measure because a leader running back through the group closes the gap at both speeds at once,
+  which is exactly when a follower ends up stood on them. `Follow:Describe` reports the gap and the
+  per-pulse figure, so a large `/pulse` number in `/cmove` is the loop being too slow to stop on a
+  mark — a thing no threshold can fix.
 
 ## Casting (`utils/Casting/`, wired by `cabby/casting.lua`)
 
@@ -570,6 +627,33 @@ stale config harmless rather than an error; the action editor offers exactly wha
 a filter box once a list passes a dozen entries, because a spellbook is not something anyone
 scrolls.
 
+## Roles (`roles.lua`) — who holds which job
+
+Main tank and main assist, read out of the client and never configured. The group window already
+answers this and every EQ player already sets it, so a group that reassigns the tank mid-session has
+said everything it needs to say and no cabby character has to be told separately.
+
+It **reads and nothing else** — whether a role is worth acting on belongs to whoever asks.
+`combat.lua` uses the assist's target to decide what to fight; `states/healState.lua` uses the tank
+to decide who a tank-scoped heal is for. That split is what lets the tank matter to the healer
+without the healer knowing anything about how the group engages.
+
+Two client facts shape what can be answered:
+
+- **Main tank is a group role, and only a group role.** The raid window has a main assist (three of
+  them) and a leader, but no tank — inside a raid the tank of *this* group is still the group
+  window's, which is what a healer wants anyway. Main assist is read from the group window first,
+  since a group inside a raid is often working on something of its own, and falls back to the raid's.
+- **The assist's target comes from the client, not from watching them.** There is no TLO for what
+  another player has targeted; what there is, is the client's own assist target
+  (`Me.GroupAssistTarget`, `Me.RaidAssistTarget[#]`) — the same value `/assist` and the group
+  window's assist display work off.
+
+`Roles.Matches(role, id, name)` is how anything else asks "is that them": by spawn id where both
+sides have one, by name otherwise, since a role holder out of the zone has no spawn and the group
+window works in names either way. Everything is cached behind one 250 ms scan, because the menu
+pages read it every frame. `/croles` reports it and refreshes first.
+
 ## Combat (`combat.lua`) — what we are fighting
 
 One target, whoever put it there, and everything that fights reads it. It was a field on the
@@ -580,18 +664,94 @@ It holds no opinion about *how* to fight. The melee state gets on target and swi
 state casts at it, a tank state will taunt it — and each decides for itself about range, whether
 it is worth it, and when to give up. What Combat does is narrow:
 
-- **Keeps the engagement honest.** The pulse drops a target that is dead or gone, which is how
-  every state finds out the fight is over at the same moment.
-- **Picks one up.** With `autoengage` on, an extended-target sweep (throttled to 250 ms, and only
-  while the client says we are in combat) engages whatever is on us. `Auto Hater` is the client's
-  own word for "this is fighting you", which beats anything we could work out ourselves.
-- **Owns the `attack` order** and the `autoengage` switch, and reports on `/cattack`.
+- **Keeps the engagement honest, continuity included.** A fight outlives any one target: losing
+  one to a death or a despawn does not close the fight, it opens a **seek** — `IsEngaged` stays
+  true with `GetTargetId` at 0 while the sweep runs every pulse for up to `fightLingerMs` (500 ms)
+  looking for the successor, and only an empty seek, an order (`attack off`, an `assist off`
+  call), or flee actually closes it. This is what the chain's blocking runs on: the states that
+  fight hold their frames off `IsEngaged`, so "the fight is over" blinking true between two mobs
+  — because the extended target window is a beat behind a corpse — would hand one frame to the
+  bottom of the chain in the middle of a pull. It did, once: that was the warrior sitting down
+  mid-fight. The linger is deliberately shorter than any real gap between pulls, because between
+  pulls the fight *is* over and falling through to rest is the design working.
+- **Picks one up.** With `autoengage` on (throttled to 250 ms; every pulse while seeking), the
+  main assist's target first and an extended-target sweep after it — see Assisting below.
+  `Auto Hater` is the client's own word for "this is fighting you", which beats anything we could
+  work out ourselves.
+- **Owns the `attack` order**, the `assist` call, the `autoengage` and `callassist` switches, and
+  reports on `/cattack`.
 
-**It issues no game commands**, which is what makes `Combat.Engage` safe to call from an ImGui
-button. The Attack button used to call `MeleeState.EngageTargetId`, which ran `/mqtarget` from
-inside the render callback — the crash-to-desktop hazard the movement service is built around.
-Targeting is now the melee state's business, done from its own pulse, because swinging is what
-needs the client's target; a cast targets through the casting service.
+**It runs no game command that decides anything**, which is what makes `Combat.Engage` safe to call
+from an ImGui button. The Attack button used to call `MeleeState.EngageTargetId`, which ran
+`/mqtarget` from inside the render callback — the crash-to-desktop hazard the movement service is
+built around. Targeting is now the melee state's business, done from its own pulse, because
+swinging is what needs the client's target; a cast targets through the casting service. The one
+thing Combat says out loud — the tank calling the assist — is said from `Pulse` and nowhere else,
+for that same reason.
+
+### Assisting — how a group ends up on one mob
+
+Six characters that each fight whatever is hitting them are six characters fighting one mob each.
+What turns them into a group is the two roles the group window already holds (`roles.lua` reads
+them), and the two directions they work in are deliberately different mechanisms, because one of
+them cannot be relied on everywhere:
+
+- **The main assist's target says what the group is on.** Read from the client's own assist target
+  (`Me.GroupAssistTarget`, falling back to `Me.RaidAssistTarget[#]`), which is the value `/assist`
+  and the group window's assist display work off — there is no way to read what another player has
+  targeted, and this is the client being told. Where a server does not keep it current it reads as
+  "the assist is on nothing", and everything below still works.
+- **The main tank's call says when.** Whoever holds the tank role says `assist <id>` out loud every
+  time what they are fighting changes, and `assist off` when they drop it. That depends on nothing
+  but chat, so it is the path that carries a group whose server says nothing about assist targets —
+  and it is also the answer to "the tank wants everyone to stop", which no amount of target-reading
+  can express.
+
+Which gives three ways an engagement is decided, and `Combat.sources` records which, because that
+is what says whether something weaker may replace it:
+
+| Source | Set by | Replaced automatically? |
+|---|---|---|
+| `order` | `attack <id>`, the Attack button | no — somebody chose it |
+| `assist` | an `assist` call, or the assist's target | only by the next call |
+| `hater` | the extended-target sweep | no, while it lives |
+
+Rules the code depends on:
+
+- **A call is an order, the assist's target is not.** `assist <id>` engages exactly as `attack <id>`
+  does, ACL and all. The *reading* of the assist's target only ever picks a fight up when there is
+  none: it asks for something fightable — an NPC, a pet, a destructible object; never a player and
+  never a corpse — that has **taken damage**, which is the difference between a thing the group is
+  fighting and one the assist targeted to read the name off. That check is why there is no
+  assist-percentage setting — the call is what opens a fight, and the read is only the standing
+  question of what the group is already on.
+- **The assist never assists itself.** A character holding the role reads its own target back
+  through that TLO, so following it would mean attacking whatever it looks at. `Roles.IsMainAssist`
+  is checked first.
+- **One line per target, not a heartbeat.** The tank calls on change only. A character that misses a
+  call has its own auto-engage to fall back on, and chat that repeats itself is chat nobody reads.
+  Not calling is not the same as having called nothing: losing the role, or the switch, forgets what
+  was said, so getting either back re-announces the fight rather than assuming everyone heard.
+- **Called off as loudly as called on.** The tank dropping its target says `assist off`, which is
+  what makes the Back Off button and `flee on` stop the whole group rather than one character —
+  both end with the tank disengaged, and the next pulse says so.
+- **A call is refused while fleeing**, for the same reason the sweep is: nothing would act on it
+  during a run, and the engagement would come back the moment the run ended.
+- Unlike `attack`, a call is not range- or line-of-sight-checked. It arrives the instant the tank
+  engages, which is exactly when the rest of the group is still coming round the corner; refusing it
+  there would drop the one call that mattered. Whether the thing is reachable is each state's own
+  question, asked again every pass.
+
+`callassist` is the switch on the calling side, on by default and silent on every character that is
+not the tank; the call goes out on that command's own speak channels (`/speak assist`). `/cattack`
+reports all of it: the roles, what the assist is on, and where calls are being spoken.
+
+- **The call falls back to the group channel**, alone among the things cabby speaks. Every other
+  `speak` is a *report* — "cannot see you to heal you", "I failed to click into the zone" — and a
+  character with no speak channels keeping those to itself is a reasonable thing to be. This one is
+  not a report: it **is** assisting, it is on by default, and with an empty speak list the group
+  hears nothing and is told nothing about why. An empty list is not how the feature is turned off;
+  `callassist off` is.
 
 ## The two dps states
 
@@ -623,8 +783,9 @@ tank, runs itself out of mana, and spends a four second cast on something that d
 Anything more specific than those three numbers goes in a slot's Lua predicate, which is the
 escape hatch the action list already had.
 
-Both states fight whatever `Combat` says, so `attack <id>` starts both, `attack off` ends both,
-and `melee off` on a paladin stops the swinging while the spells carry on.
+Both states fight whatever `Combat` says, so `attack <id>` starts both, `attack off` ends both, an
+`assist` call from the tank starts both, and `melee off` on a paladin stops the swinging while the
+spells carry on.
 
 ## Heal state (`states/healState.lua`)
 
@@ -675,9 +836,10 @@ Two smaller rules worth knowing:
 Who is watched: this character, the group (`healgroup`), and this character's pet (`healpets`, off
 by default — a pet is cheaper to summon than the mana spent keeping it up). Members who are out of
 zone or offline are skipped rather than counted as healthy, since a missing member counted as a
-full one is a quiet way to get the group-heal count wrong. The tank is whoever holds that role in
-the group window; nothing else assigns one yet, so a group with no Main Tank set has no
-tank-scoped heals firing, and the Heal State page says so.
+full one is a quiet way to get the group-heal count wrong. The tank is whoever `roles.lua` says
+holds the role, which is also how a hybrid holding it is tank-scoped to *itself* — reading the flag
+per group member could never say so, since we are not one of our own group members. A group with no
+Main Tank set has no tank-scoped heals firing, and the Heal State page says so.
 
 `/cheal` reports what it is doing and everyone it is watching; `/cheal off` calls off the heal in
 progress. The order is `healnow` rather than `heal` because a registered phrase also matches every
@@ -806,11 +968,15 @@ What holds it back, in the order it reports:
    since the cast began — but a hand-cast from the player is not.
 3. **A fight it has not joined**, and this is the case worth naming. With `restcombat` on it *will*
    sit through one, because a caster that has not engaged would rather fill its bar than start
-   something; but only while melee is off, since a character that walks into melee is one about to
-   be on its feet anyway, and one sitting in reach of the mob takes full hits while it gets up.
-   "Melee is off" is read out of the melee state's config section (`Status.IsMeleeEnabled`) rather
-   than off the module: a class that does not melee never loads `states/meleeState.lua`, and no
-   section is the same answer as off.
+   something.
+
+The chain is its shield for the whole of any fight: melee holds every frame from the first
+engagement to the last corpse — including the beat between one mob and the next, because Combat
+holds a lost-target fight open while it seeks the successor — so this state never sees a
+mid-fight frame and knows nothing about fights beyond the engagement hold above. Its own windows
+exist for its own reasons only: pacing its posture commands, a grace before undoing a stand the
+player chose, and smoothing world reads that genuinely flicker. None of them measures anything
+about the chain, and none of them delays anyone but this state.
 
 Two smaller rules: a posture the state did not choose is left alone (feigning, mounted, ducking,
 hovering dead), so it only ever sits a standing character and stands a sitting one; and sitting
@@ -841,18 +1007,23 @@ and the buff list are exactly as they were when the order arrived, `flee off` ha
 back to its normal chain with no restoring to get wrong, and a crash mid-run cannot leave behind a
 cleric that has quietly stopped healing.
 
-**The suppressing is a priority gate with one exemption.** At `Priorities.passive` this state is
-stronger than everything except an order given to the character, and while it is on its gate holds
-the chain at that band exempting FollowState — so a pass walks flee, skips cure/heal/dps/loot/anchor,
-runs follow, and skips buff/rest. Neither half of the ordinary release protocol can express that:
-returning `false` hands the turn to the heal state, and returning `true` starves follow along with
-everything else. Two disjoint ranges have to go, and only a gate can say so.
+**The suppressing is the ordinary release protocol.** At `Priorities.passive` this state is
+stronger than everything except an order given to the character, and while the mode is on its
+`Go()` returns busy every pass — so the chain never reaches anything below it, exactly as it never
+reaches below any other busy state. It used to be a priority gate with a FollowState exemption;
+the exemption was removed because it punched a hole in the ordering that no chain position could
+express, which made it the one piece of out-of-band suppression in the design.
 
-Follow is the exemption rather than something flee re-does because it is already the state that
-knows how to keep up with somebody, work around a corner on their own breadcrumb trail, and click
-through the zone line they went out of — which is what a long run *is*. A flee that reimplemented
-any of it would be a second follow to keep in step with the first. It also means `anchor` still
-holds during a flee, since that is the same state and the same `Go()`.
+**The traveling is flee's own job while the mode is on.** The machinery — the follow order, the
+trail-walking, the anchor, the click-through-the-zone-line procedure — is `travel.lua`, the same
+core FollowState drives at the follow band in normal operation, moved out of the follow state
+exactly the way the engagement moved out of the melee state into `combat.lua` when a second
+state needed it. The chain serializes the two drivers: flee sits above follow and is busy for as
+long as it is enabled, so there is never a pass in which both run, and neither state knows the
+other exists. `anchor` still holds during a flee, since it is a standing order in the same core.
+A cast put in the air by hand (`/ccast`) mid-run pauses the walk at the movement service — which
+refuses to drive through a cast — and the run resumes when it lands, which replaces the old
+"follow is exempt from flee but starved by casting" gate interaction.
 
 **Services are not suppressed.** Movement, casting, the command queue, character discovery and
 combat pulse every frame whatever the chain is doing, which is what keeps `flee off` reachable from
