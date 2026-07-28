@@ -3,6 +3,7 @@ local mq = require("mq")
 
 local Casting = require("utils.Casting.Casting")
 local Debug = require("utils.Debug.Debug")
+local Time = require("utils.Time.Time")
 
 local Action = require("cabby.actions.action")
 local ActionCommand = require("cabby.commands.actionCommand")
@@ -11,6 +12,13 @@ local Menu = require("cabby.ui.menu")
 local SpellDpsStateConfig = require("cabby.configs.spellDpsStateConfig")
 local SpellDpsStateMenu = require("cabby.ui.states.spellDpsStateMenu")
 local ToggleCommand = require("cabby.commands.toggleCommand")
+
+---How long a debuff this state just landed is trusted to still be on the target before the
+---target's buff list is believed instead. A cast reports success the moment the cast bar closes;
+---the effect shows up in the target's buff list a server round-trip later, and for that beat "not
+---on them yet" reads exactly like "dropped". This is the evidence window that bridges it -- once
+---it has passed, what the target shows is the answer.
+local justLandedMs = 2000
 
 ---Hurting whatever this character is fighting, with spells rather than with a weapon.
 ---
@@ -36,8 +44,10 @@ local SpellDpsState = {
         castId = nil,
         castTargetId = 0,
         castName = nil,
+        castEffect = nil,   -- what the cast in the air will leave on the target, nil for a nuke
         lastResult = nil,
-        holdReason = nil
+        holdReason = nil,
+        justLanded = {}     -- { ["<effect>@<targetId>"] = trusted until }, see justLandedMs
     }
 }
 
@@ -111,6 +121,75 @@ function SpellDpsState.Reset()
     SpellDpsState._.castId = nil
     SpellDpsState._.castTargetId = 0
     SpellDpsState._.castName = nil
+    SpellDpsState._.castEffect = nil
+end
+
+---How long this spell's effect hangs on whatever it lands on, in milliseconds. Zero is a true
+---nuke: all of its work is done the moment it lands.
+---@param spell any mq spell TLO
+---@return number ms
+local function durationMs(spell)
+    -- MyDuration carries this character's duration focus effects; Duration is the unmodified
+    -- value and the fallback. Read through TotalSeconds rather than the tick count, which is what
+    -- the bare member gives
+    local seconds = tonumber(spell.MyDuration.TotalSeconds())
+    if seconds == nil or seconds <= 0 then
+        seconds = tonumber(spell.Duration.TotalSeconds())
+    end
+    if seconds == nil or seconds <= 0 then return 0 end
+    return seconds * 1000
+end
+
+---Drop just-landed windows that have run out. They are the only thing this state accumulates:
+---one short-lived entry per debuff landed, gone a couple of seconds later.
+local function pruneLanded()
+    local now = Time.current_time()
+    for key, until_ in pairs(SpellDpsState._.justLanded) do
+        if now >= until_ then
+            SpellDpsState._.justLanded[key] = nil
+        end
+    end
+end
+
+---Is this action's effect already doing its work on the target?
+---
+---What separates a debuff from a nuke, without asking the user to label either: a spell that
+---leaves something on the target -- a weakness, a snare, a DoT -- has done its whole job for as
+---long as that something is still there, and casting it again spends a cast and the mana to
+---change nothing. A nuke leaves nothing behind and recasts freely. Read off the spell rather
+---than configured, the same way the buff state reads a buff's aim and duration.
+---
+---The answer comes from the target's buff list, which the client caches for whatever has been
+---targeted -- and what this state is fighting *is* targeted, from the first cast at it. The
+---stacking check covers what that list cannot: a stronger effect in the same line, usually
+---somebody else's, that this one would bounce off with "did not take hold" -- which recasting
+---does not fix either.
+---@param action ActionType
+---@param targetId number
+---@return boolean isWorking
+local function alreadyWorking(action, targetId)
+    local spell = action:Subject():Spelldata()
+    if spell == nil then return false end
+    if durationMs(spell) <= 0 then return false end
+
+    local name = spell.Name()
+    if name == nil then return false end
+
+    -- our own cast, landed a beat ago: trusted ahead of a buff list still catching up
+    local trustedUntil = SpellDpsState._.justLanded[name .. "@" .. tostring(targetId)]
+    if trustedUntil ~= nil and Time.current_time() < trustedUntil then return true end
+
+    local cached = mq.TLO.Spawn("id " .. tostring(targetId)).CachedBuff(name)
+    if cached.SpellID() ~= nil then
+        -- what the cache reports is what is left *now*, and it ages by itself: a readable zero is
+        -- the debuff having run out, while ticking down, a permanent's negative, or unreadable
+        -- are all still on them
+        return tonumber(cached.Duration()) ~= 0
+    end
+
+    -- not on them by name -- would it even land? "No" means something stronger is already doing
+    -- this job, and a cast spent asking the hard way comes back "did not take hold"
+    return spell.StacksSpawn(targetId)() ~= true
 end
 
 ---The first action in the rotation that is worth firing right now.
@@ -123,7 +202,8 @@ local function nextAction(request)
             -- casts only: this state polls the cast it started, which a skill or a discipline has
             -- no equivalent of. Only casts are offered on the page; this is for a config that was
             -- edited by hand.
-            if action ~= nil and action.Subject ~= nil and action:IsReady(request) and Action.GetLuaResult(slot) then
+            if action ~= nil and action.Subject ~= nil and action:IsReady(request)
+                    and not alreadyWorking(action, request.targetId) and Action.GetLuaResult(slot) then
                 return action
             end
         end
@@ -192,6 +272,10 @@ function SpellDpsState.Go()
 
         if status == Casting.status.succeeded and outcome == Casting.outcomes.succeeded then
             SpellDpsState._.lastResult = tostring(SpellDpsState._.castName) .. ": landed"
+            if SpellDpsState._.castEffect ~= nil then
+                SpellDpsState._.justLanded[SpellDpsState._.castEffect .. "@" .. tostring(SpellDpsState._.castTargetId)] =
+                    Time.current_time() + justLandedMs
+            end
         else
             SpellDpsState._.lastResult = tostring(SpellDpsState._.castName) .. ": " .. tostring(reason)
         end
@@ -202,6 +286,8 @@ function SpellDpsState.Go()
     end
 
     if hold ~= nil then return false end
+
+    pruneLanded()
 
     local request = SpellDpsState.CastRequest()
     local action = nextAction(request)
@@ -217,6 +303,10 @@ function SpellDpsState.Go()
     SpellDpsState._.castId = newCastId
     SpellDpsState._.castTargetId = request.targetId
     SpellDpsState._.castName = action:Name()
+    -- the *spell's* name rather than the action's: for a clicky they differ, and the spell name
+    -- is what the target's buff list will show once it lands
+    local spell = action:Subject():Spelldata()
+    SpellDpsState._.castEffect = (spell ~= nil and durationMs(spell) > 0) and spell.Name() or nil
     return true
 end
 

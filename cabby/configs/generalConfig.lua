@@ -27,7 +27,8 @@ local GeneralConfig = {
         groupInvited = "groupInvited",
         tellToMe = "tellToMe",
         inspectRequest = "inspect",
-        restart = "restart"
+        restart = "restart",
+        doType = "dotype"
     },
     equipmentSlots = {
         "charm",
@@ -151,6 +152,26 @@ function GeneralConfig.Init()
             end
         end
         Commands.RegisterCommEvent(Command.new(GeneralConfig.eventIds.restart, event_Restart, restartDocs))
+
+        local doTypeDocs = ChelpDocs.new(function() return {
+            "(dotype /<command>) Tells listener(s) to type the given slash command line as their own",
+            " -- Example: /bc dotype /camp desktop"
+        } end )
+        local function event_DoType(_, speaker, args)
+            if Commands.GetCommandOwners(GeneralConfig.eventIds.doType):HasPermission(speaker) then
+                local commandLine = StringUtils.TrimFront(args or "")
+                if commandLine:sub(1, 1) ~= "/" then
+                    Speak.Respond(_, speaker, "(dotype /<command>) The line to type must start with a slash, e.g.: dotype /camp desktop")
+                    return
+                end
+                DebugLog("Typing [" .. commandLine .. "] on request of speaker [" .. speaker .. "]")
+                mq.cmd(commandLine)
+            else
+                DebugLog("Ignoring dotype request of speaker [" .. speaker .. "]")
+            end
+        end
+        Commands.RegisterCommEvent(Command.new(GeneralConfig.eventIds.doType, event_DoType, doTypeDocs)
+            :WithArgs({ required = true, hint = "a slash command line, e.g. /camp desktop" }))
 
         -- Binds
 

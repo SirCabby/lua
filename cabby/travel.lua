@@ -7,7 +7,9 @@ local Movement = require("utils.Movement.Movement")
 local Time = require("utils.Time.Time")
 local Timer = require("utils.Time.Timer")
 
+local ChelpDocs = require("cabby.commands.chelpDocs")
 local Commands = require("cabby.commands.commands")
+local Event = require("cabby.commands.event")
 
 ---The traveling core: the movement orders, and the procedures that carry them out.
 ---
@@ -27,13 +29,16 @@ local Commands = require("cabby.commands.commands")
 ---
 ---**It holds the orders, because they cannot be re-derived**: who to follow, where to stand, and
 ---progress through clicking a zone line (a clicked door looks exactly like an unclicked one).
----Everything else is read from the world on every drive. Follow and anchor are contradictory, so
----taking either order clears the other -- with only one ever standing, "which am I doing" stays
----something to read.
+---The one measurement kept alongside them -- where the follow target was last seen -- exists for
+---the same reason: it is the fact their vanishing is judged by, and there is nobody left to ask
+---once they are gone. Everything else is read from the world on every drive. Follow and anchor
+---are contradictory, so taking either order clears the other -- with only one ever standing,
+---"which am I doing" stays something to read.
 ---@class Travel
 local Travel = {
     key = "Travel",
     _ = {
+        isInit = false,
         -- who we were told to follow
         followTarget = "",
         -- 0 while we are holding the target by name (see followTargetSpawn), the spawn id we
@@ -46,6 +51,10 @@ local Travel = {
         followSpawnId = 0,
         -- where we were told to stand
         anchor = { set = false, x = 0, y = 0 },
+        -- where the follow target was last seen, and in which zone: the spot their vanishing is
+        -- judged from. Gone within click range of a switch reads as clicked-through; gone
+        -- anywhere else does not. A measurement, not an order -- and one vanishing spends it.
+        lastSeen = { zoneId = 0, y = 0, x = 0 },
         -- Progress through clicking a zone line: the door has been clicked and the zone is
         -- coming, which is not something a fresh look at the world can reconstruct. The one
         -- piece of held state here that is not an order.
@@ -73,6 +82,11 @@ local anchorRadius = 15
 -- how long to leave a failed attempt at clicking through a zone line alone. Without it, a door
 -- that will not take us anywhere is clicked again on the pass after each failure, forever.
 local clickZoneRetryMs = 15000
+-- how near a switch the follow target must have vanished for that vanishing to read as "they
+-- clicked through it": their click reach, plus a breath of movement between our looks at them
+local zoneSwitchDistance = 30
+-- how near their corpse must be for a vanishing to read as "they died here"
+local corpseDistance = 100
 
 -- The command id the click-zone procedure speaks on. The command itself is registered by the
 -- follow state (it owns the order surface); this is the same id, so what the procedure says lands
@@ -84,6 +98,12 @@ local clickZoneSteps = {
     findingSwitch = "findingSwitch",
     clickingSwitch = "clickingSwitch",
     waitingToZone = "waitingToZone"
+}
+
+---Ids of the game-text listeners this core registers (see Travel.Init).
+local eventIds = {
+    followTargetSlain = "followtargetslain",
+    followTargetDied = "followtargetdied"
 }
 
 ---@param str string
@@ -175,6 +195,40 @@ local function EndClickZone(failed)
     Travel._.clickZone.lastFailedMs = failed and Time.current_time() or 0
 end
 
+---------------- Init --------------------
+
+---The world announcing that whoever we follow died. A follow order does not outlive its target:
+---a dead player is not somewhere to walk to -- they come back at a bind point, on their own
+---clock -- and a follower left holding the order starts reading their absence as a zone line to
+---click through. The message is the one death notice that arrives even when no corpse is left to
+---find, and it arrives while a fight still owns the frames -- which is exactly when it happens.
+---@param name string|nil who the death message named, cleaned to its last word by the listener
+local function event_FollowTargetDied(_, name)
+    if Travel._.followTarget == "" or name == nil then return end
+    if name:lower() ~= Travel._.followTarget:lower() then return end
+
+    Commands.GetCommandSpeak(Travel._.followCommand):speak(
+        "Follow target [" .. Travel._.followTarget .. "] died, stopping follow")
+    Travel.ClearFollowOrder()
+end
+
+---One-time wiring of the game-text listeners the orders depend on. Both patterns hear every
+---death in range, so the handler answers only to the name it is holding a follow order for.
+function Travel.Init()
+    if Travel._.isInit then return end
+    Travel._.isInit = true
+
+    local slainDocs = ChelpDocs.new(function() return {
+        "(followtargetslain) Ends autofollow when the character being followed is slain"
+    } end)
+    Commands.RegisterEvent(Event.new(eventIds.followTargetSlain, "#1# has been slain by #2#!", event_FollowTargetDied, slainDocs))
+
+    local diedDocs = ChelpDocs.new(function() return {
+        "(followtargetdied) Ends autofollow when the character being followed dies without a slayer"
+    } end)
+    Commands.RegisterEvent(Event.new(eventIds.followTargetDied, "#1# died.", event_FollowTargetDied, diedDocs))
+end
+
 ---------------- Orders --------------------
 
 ---Start clicking through a zone line. Progress from here is held, because the world cannot tell
@@ -194,6 +248,7 @@ function Travel.SetFollowOrder(name, spawnId, command)
     Travel._.followTargetId = spawnId or 0
     Travel._.followCommand = command
     Travel._.followSpawnId = 0
+    Travel._.lastSeen = { zoneId = 0, y = 0, x = 0 }
     Travel._.waitingReported = false
     Travel.ClearAnchor()
 end
@@ -203,6 +258,7 @@ function Travel.ClearFollowOrder()
     Travel._.followTarget = ""
     Travel._.followTargetId = 0
     Travel._.followSpawnId = 0
+    Travel._.lastSeen = { zoneId = 0, y = 0, x = 0 }
     Travel._.stuck.checking = false
     Travel._.waitingReported = false
     Movement.StopFor(Travel.key)
@@ -229,6 +285,7 @@ function Travel.Reset()
     Travel._.followCommand = "followme"
     Travel._.followSpawnId = 0
     Travel._.anchor = { set = false, x = 0, y = 0 }
+    Travel._.lastSeen = { zoneId = 0, y = 0, x = 0 }
     Travel._.clickZone = { step = nil, timer = nil, lastFailedMs = 0 }
     Travel._.stuck = { checking = false, timer = nil, lastLoc = { x = 0, y = 0, z = 0, zoneId = 0 } }
     Travel._.waitingReported = false
@@ -254,14 +311,14 @@ end
 ---
 ---Everything it decides is decided here, from the world: whether they are in the zone, whether we
 ---are close enough, whether a follow is running, and whether it is getting anywhere. What it
----keeps is what it cannot ask for again -- who we were told to follow.
+---keeps is what it cannot ask for again -- who we were told to follow, and where we last saw them.
 ---@return boolean isBusy
 local function FollowPass()
     local targetSpawn = followTargetSpawn()
 
     if targetSpawn.Name() == nil then
         -- Their breadcrumb trail outlives them leaving; walk it out first, which puts us at the
-        -- zone line (or their corpse) before we decide what to do about it.
+        -- spot where they vanished before we decide what to do about it.
         if Movement.IsFollowing(Travel._.followSpawnId) then
             return true
         end
@@ -275,12 +332,31 @@ local function FollowPass()
             return false
         end
 
-        -- Only a player walks out through a zone line. If they are not lying dead next to us,
-        -- assume they zoned and go through after them.
-        local corpse = mq.TLO.Spawn("corpse " .. Travel._.followTarget)
-        if corpse.Name() == nil or corpse.Distance() > 100 then
-            local switchDistance = mq.TLO.Switch("nearest").Distance()
-            if switchDistance ~= nil and switchDistance < 100 and MayClickZone() then
+        -- A death leaves proof behind: their corpse, near where we watched them go down. The
+        -- order ends there -- see event_FollowTargetDied, which is this same conclusion heard
+        -- rather than seen, and usually reaches it first.
+        local targetCorpseDistance = mq.TLO.Spawn("corpse " .. Travel._.followTarget).Distance()
+        if targetCorpseDistance ~= nil and targetCorpseDistance < corpseDistance then
+            Commands.GetCommandSpeak(Travel._.followCommand):speak(
+                "Follow target [" .. Travel._.followTarget .. "] died, stopping follow")
+            Travel.ClearFollowOrder()
+            return false
+        end
+
+        -- Vanishing inside click range of a switch is the world saying they clicked through it:
+        -- go after them. Vanishing anywhere else -- a death whose notice never reached us, a
+        -- gate, a camp -- is not, and a guess clicked through a door scatters the group, so
+        -- everything else waits where it is. One sighting pays for one follow-through: spent
+        -- here, earned back only by seeing them again. In particular, a spot remembered from
+        -- another zone -- theirs before we zoned, or ours before we died -- pays for nothing.
+        local lastSeen = Travel._.lastSeen
+        if lastSeen.zoneId == mq.TLO.Zone.ID() and MayClickZone() then
+            local switch = mq.TLO.Switch("nearest")
+            local switchY = switch.Y()
+            local switchX = switch.X()
+            if switchY ~= nil and switchX ~= nil
+                and Geometry.Distance2D(lastSeen.y, lastSeen.x, switchY, switchX) < zoneSwitchDistance then
+                Travel._.lastSeen = { zoneId = 0, y = 0, x = 0 }
                 Travel.BeginClickZone()
                 return true
             end
@@ -290,6 +366,16 @@ local function FollowPass()
         ReportWaiting("Follow target [" .. Travel._.followTarget .. "] is not here, waiting...")
         -- nothing to do but wait, so let lower tier actions have the frame
         return false
+    end
+
+    -- While they are here, keep fresh where "here" is: everything above judges their vanishing
+    -- from the last spot we saw them at.
+    local seenY = targetSpawn.Y()
+    local seenX = targetSpawn.X()
+    if seenY ~= nil and seenX ~= nil then
+        Travel._.lastSeen.y = seenY
+        Travel._.lastSeen.x = seenX
+        Travel._.lastSeen.zoneId = mq.TLO.Zone.ID()
     end
 
     -- Close enough: the follow task parks itself, and so do we.

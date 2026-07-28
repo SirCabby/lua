@@ -16,6 +16,7 @@ local HotbarsUI = require("cabby.ui.hotbarsUI")
 local Menu = require("cabby.ui.menu")
 local CabbyMovement = require("cabby.movement")
 local Roles = require("cabby.roles")
+local Travel = require("cabby.travel")
 
 local Setup = {
     key = "Setup"
@@ -141,6 +142,7 @@ function Setup:Init(configFilePath, stateMachine)
     Character.Init(stateMachine) -- watches for level-ups, AA purchases and bag changes
     Roles.Init() -- who holds which job in the group; Combat and HealState both read it
     Combat.Init(stateMachine) -- what we are fighting; every state that fights reads it
+    Travel.Init() -- the standing movement orders; the world's death messages end a follow here
     ClassSetup(stateMachine)
 
     HotbarsUI.Init()

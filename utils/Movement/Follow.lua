@@ -282,7 +282,8 @@ function Follow:TrimBacktrack(myY, myX)
     end
 end
 
----Click open a closed door we are about to run into
+---Click open a closed door we have run into. Callers gate this on being stalled: a switch
+---within reach that is not blocking us must be left alone, because it may be a zone line.
 function Follow:OpenDoorAhead()
     if not self._.openDoors then return end
 
@@ -429,7 +430,16 @@ function Follow:Pulse()
     self._.warpWaiting = false
 
     Locomotion.FaceLoc(waypoint.y, waypoint.x, waypoint.z)
-    self:OpenDoorAhead()
+
+    -- Only a door the world has already refused us through -- we are stalled against it -- is
+    -- worth clicking. The client offers no way to tell a door from a zone line's clickable, and
+    -- clicking one of those is not opening a door, it is leaving the zone: a follower that
+    -- clicks every switch it brushes past zones itself out from under a leader who is still
+    -- here. Stalling first is the world saying this switch is what is actually in the way --
+    -- and if it does turn out to be a zone line, it is one the leader's own route runs through.
+    if self._.stuck:StalledWindows() >= 1 then
+        self:OpenDoorAhead()
+    end
 
     if self._.unsticker:IsActive() then
         self._.unsticker:Drive()
