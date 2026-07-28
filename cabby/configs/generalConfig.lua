@@ -14,12 +14,14 @@ local HotbarConfig = require("cabby.configs.hotbarConfig")
 local Menu = require("cabby.ui.menu")
 local SlashCmd = require("cabby.commands.slashcmd")
 local Speak = require("cabby.commands.speak")
+local ToggleCommand = require("cabby.commands.toggleCommand")
 
 ---@class GeneralConfig : BaseConfig
 local GeneralConfig = {
     key = "GeneralConfig",
     keys = {
-        version = "version"
+        version = "version",
+        tellToMe = "tellToMe"
     },
     eventIds = {
         groupInvited = "groupInvited",
@@ -73,6 +75,13 @@ local function initAndValidate()
     if GeneralConfig._.config:GetConfigRoot()[GeneralConfig.key][GeneralConfig.keys.version] == nil then
         DebugLog("General Version was not set, updating...")
         GeneralConfig._.config:GetConfigRoot()[GeneralConfig.key][GeneralConfig.keys.version] = "0.0.1"
+        taint = true
+    end
+    if GeneralConfig._.config:GetConfigRoot()[GeneralConfig.key][GeneralConfig.keys.tellToMe] == nil then
+        DebugLog("General tellToMe was not set, updating...")
+        -- on: forwarding is the reason the event exists, and with no speak override it only
+        -- reaches this character's own console, so leaving it on broadcasts nothing
+        GeneralConfig._.config:GetConfigRoot()[GeneralConfig.key][GeneralConfig.keys.tellToMe] = true
         taint = true
     end
     if taint then
@@ -159,14 +168,40 @@ function GeneralConfig.Init()
         Commands.RegisterSlashCommand(SlashCmd.new(GeneralConfig.eventIds.restart, Bind_Restart, slashRestartDocs))
 
         local tellToMeDocs = ChelpDocs.new(function() return {
-            "(event "..GeneralConfig.eventIds.tellToMe..") Forwards any received tells that were not part of an issued command to the speak channel"
+            "(event "..GeneralConfig.eventIds.tellToMe..") Forwards any received tells that were not part of an issued command",
+            " -- Turn it on or off with (telltome <on | off | toggle>), the General menu page, or a hotbar button",
+            " -- Forwards arrive on this character's own console unless a speak override for this event says otherwise: /speak telltome <channel>",
+            " -- Tells from NPCs are not forwarded"
         } end )
         local function event_TellToMe(_, speaker, message)
+            if not GeneralConfig.GetTellToMe() then return end
             if mq.TLO.SpawnCount("npc " .. speaker)() < 1 then
-                Commands.GetEventSpeak(GeneralConfig.eventIds.tellToMe):speak(speaker .. " told me: " .. message)
+                local line = speaker .. " told me: " .. message
+                -- A tell is private. The default speak list is where group-facing chatter goes,
+                -- so it is deliberately not consulted here: with no override of its own, the
+                -- forward stays on this character's console instead of going out on a channel.
+                local speak = Commands.GetEventSpeakOverride(GeneralConfig.eventIds.tellToMe)
+                if speak ~= nil then
+                    speak:speak(line)
+                else
+                    print(line)
+                end
             end
         end
         Commands.RegisterEvent(Event.new(GeneralConfig.eventIds.tellToMe, "#1# tells you, '#2#'", event_TellToMe, tellToMeDocs, true))
+
+        ToggleCommand.Register({
+            key = GeneralConfig.key,
+            phrase = GeneralConfig.eventIds.tellToMe:lower(),
+            summary = "Turns forwarding of received tells on or off",
+            about = {
+                "Forwards arrive on this character's own console. To send them somewhere else,",
+                "set a speak override for the telltome event: /speak telltome <channel>.",
+                "Tells from NPCs are never forwarded."
+            },
+            get = GeneralConfig.GetTellToMe,
+            set = GeneralConfig.SetTellToMe
+        })
 
         Menu.RegisterConfig(GeneralConfig)
 
@@ -175,10 +210,30 @@ function GeneralConfig.Init()
     end
 end
 
+---@return boolean isEnabled whether received tells are forwarded
+function GeneralConfig.GetTellToMe()
+    return getConfigSection()[GeneralConfig.keys.tellToMe] == true
+end
+
+---@param enable boolean
+function GeneralConfig.SetTellToMe(enable)
+    getConfigSection()[GeneralConfig.keys.tellToMe] = enable == true
+    GeneralConfig._.config:SaveConfig()
+    print("Forwarding received tells is Enabled: [" .. tostring(enable) .. "]")
+end
+
 ---@diagnostic disable-next-line: duplicate-set-field
 function GeneralConfig.BuildMenu()
     local generalConfig = getConfigSection()
     ImGui.Text("Config Version: " .. generalConfig[GeneralConfig.keys.version])
+
+    ImGui.SeparatorText("Tells")
+    local tellToMe, tellToMeClicked = ImGui.Checkbox("Forward received tells", GeneralConfig.GetTellToMe())
+    if tellToMeClicked then
+        GeneralConfig.SetTellToMe(tellToMe)
+    end
+    ImGui.SameLine()
+    CommonUI.HelpMarker("Repeat tells from other players on this character's own console, so a question aimed at one boxed character is not missed. Tells that were one of this script's commands, and tells from NPCs, are not repeated. The forwards stay on this console -- the group-facing default speak list is deliberately not used. To send them somewhere else (a tell to your driver, for example), set a speak override for the telltome event under Command > Speak Channels, or /speak telltome <channel>. Toggle from chat or a hotbar button with: telltome")
 
     ImGui.SeparatorText("Hotbars")
     ImGui.SameLine()

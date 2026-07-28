@@ -1,5 +1,6 @@
 local Debug = require("utils.Debug.Debug")
 
+local AdvLootState = require("cabby.states.advLootState")
 local FleeState = require("cabby.states.fleeState")
 local FollowState = require("cabby.states.followState")
 local MeleeState = require("cabby.states.meleeState")
@@ -28,7 +29,7 @@ local BaseClass = { key = "BaseClass" }
 
 ---The states every class registers, whatever it is.
 ---
----Four jobs have nothing to do with what the character can do, so no class should have to
+---Five jobs have nothing to do with what the character can do, so no class should have to
 ---remember to ask for them. Following is the first -- a wizard follows the same way a warrior
 ---does; and FollowState is also the anchor and click-to-zone state, all three at the follow band
 ---because they are one state and one `Go()`. Resting is the second: sitting to get health, mana
@@ -53,6 +54,12 @@ local BaseClass = { key = "BaseClass" }
 ---in never defaulting `enabled`, so the state stays off until it is switched on -- what a caster
 ---gains here is the option and the Melee State page, not a new habit.
 ---
+---Minding the loot window is the fifth: with somebody else controlling the group's loot, every
+---member passes on whatever roll nobody has answered, so the looter alone deals with the items
+--- -- the same etiquette whoever the character is. It sits at the loot band, below the fighting
+---and above follow and rest, so rolls are cleared promptly without ever being answered ahead of
+---a swing.
+---
 ---A class that wants one of these somewhere else in its chain declares it itself: a profile
 ---entry naming the same state wins over the common one, priority and all. That is exactly how the
 ---melee classes keep their melee at `dps`.
@@ -63,6 +70,7 @@ local function CommonStates()
         -- states under it, so it has to be above them
         { state = FleeState, priority = Priorities.passive },
         { state = MeleeState, priority = Priorities.dps + 5 },
+        { state = AdvLootState, priority = Priorities.loot },
         { state = FollowState, priority = Priorities.follow },
         -- last of all, deliberately: resting is what a character does with the frames nothing
         -- else wants, and everything above it gets first refusal every pass

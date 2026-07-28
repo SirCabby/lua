@@ -83,8 +83,10 @@ function Owners:HasPermission(name)
     if name == nil then return false end
 
     -- we always take our own orders, without having to list ourselves as an owner. The local
-    -- channel (Commands.Dispatch, /cself, hotbar buttons) speaks as this character, and a
-    -- chat line that really did come from us is our own order too.
+    -- channel (Commands.Dispatch, /cself, hotbar buttons) speaks as this character, and that
+    -- trust stops there: a *chat* line spoken by our own name (our broadcast looped back by
+    -- eqbcs localecho) is owner-gated in protectChatHandler before any handler -- and so this
+    -- check -- ever runs, so saying yes here does not widen what chat can make us do.
     local myName = mq.TLO.Me.CleanName()
     if myName ~= nil and name:lower() == myName:lower() then
         return true

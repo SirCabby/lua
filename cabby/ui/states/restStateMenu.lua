@@ -75,7 +75,7 @@ function RestStateMenu.BuildMenu(restState)
             RestStateConfig.SetInCombat(inCombat)
         end
         ImGui.SameLine()
-        CommonUI.HelpMarker("Sit while there is a fight going on that this character has not joined. Being engaged stops it whatever this is set to, and so does having melee turned on.")
+        CommonUI.HelpMarker("Sit while there is a fight going on that this character has not joined. Being engaged stops it whatever this is set to.")
 
         ImGui.EndTable()
     end

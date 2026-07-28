@@ -133,6 +133,50 @@ function MeleeStateMenu.BuildMenu(meleeState)
         ImGui.Dummy(0, 0)
         ImGui.SameLine()
 
+        ---@type boolean
+        local clicked, result
+        result, clicked = ImGui.Checkbox("Engage on Attack", CombatConfig.GetEngageOnAttack())
+        if clicked then
+            CombatConfig.SetEngageOnAttack(result)
+        end
+        ImGui.SameLine()
+        CommonUI.HelpMarker("Your attack turning on -- the key, the client's button, /attack -- engages whatever you have targeted as an order, on the spot: stick and the melee actions act on it at once, so pressing attack at range is a charge. Without it, a hand-started fight is only picked up once real combat has begun. Only the press itself orders anything; a toggle left on from the last fight stays just a toggle.")
+
+        ImGui.SameLine()
+        ---@type boolean
+        local clicked, result
+        result, clicked = ImGui.Checkbox("Assist on Engage", CombatConfig.GetAssistOnEngage())
+        if clicked then
+            CombatConfig.SetAssistOnEngage(result)
+        end
+        ImGui.SameLine()
+        CommonUI.HelpMarker("Calls this character's own fights out to the group as (assist) lines the way the main tank's are called -- assist <id> on engaging, assist off on dropping it -- with no role required. For leading the group from whichever character you are actually driving. Speaks on the group channel unless /speak assist says otherwise.")
+
+        ImGui.Dummy(0, 0)
+        ImGui.SameLine()
+
+        ---@type boolean
+        local clicked, result
+        result, clicked = ImGui.Checkbox("Disengage on Attack Off", CombatConfig.GetDisengageOnAttackOff())
+        if clicked then
+            CombatConfig.SetDisengageOnAttackOff(result)
+        end
+        ImGui.SameLine()
+        CommonUI.HelpMarker("Switching your auto attack off -- the key, the client's button, /attack off -- calls the cabby fight off the way the Back Off button does. Only the switch-off itself orders anything: one taken from you by a mez, a charm or a stun orders nothing, and flee dropping auto attack during a run is ignored.")
+
+        ImGui.SameLine()
+        ---@type boolean
+        local clicked, result
+        result, clicked = ImGui.Checkbox("Disengage on Target Clear", CombatConfig.GetDisengageOnTargetClear())
+        if clicked then
+            CombatConfig.SetDisengageOnTargetClear(result)
+        end
+        ImGui.SameLine()
+        CommonUI.HelpMarker("Clearing your target (ESC) while it sits on the mob the fight is on calls the cabby fight off the way the Back Off button does. Clearing anything else -- a group member a heal landed on, a mob you were only inspecting -- does nothing, and the world taking the target (the mob dying, the corpse poofing) is not a clear.")
+
+        ImGui.Dummy(0, 0)
+        ImGui.SameLine()
+
         ImGui.SetNextItemWidth(40)
         ---@type integer
         local result

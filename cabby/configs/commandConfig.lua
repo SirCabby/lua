@@ -152,7 +152,7 @@ local function initAndValidate()
         end
 
         if overrides.speak ~= nil then
-            Commands.SetCommandSpeakOverrides(event, Speak.new(overrides.speak))
+            Commands.SetEventSpeakOverrides(event, Speak.new(overrides.speak))
         end
     end
 
@@ -271,19 +271,21 @@ function CommandConfig.Init()
                     return
                 end
 
+                -- /speak <event> -- checked before commands: a name registered as both
+                -- (telltome is its event and its on/off toggle) means the event, which is the
+                -- side that speaks
+                if TableUtils.ArrayContains(Commands.GetEventIds(), args[1]) then
+                    local event = args[1]:lower()
+                    print("(/speak " .. event .. "):")
+                    Commands.GetEventSpeak(event):Print()
+                    return
+                end
+
                 -- /speak <command>
                 if TableUtils.ArrayContains(Commands.GetCommsPhrases(), args[1]) then
                     local command = args[1]:lower()
                     print("(/speak " .. command .. "):")
                     Commands.GetCommandSpeak(command):Print()
-                    return
-                end
-
-                -- /speak <event>
-                if TableUtils.ArrayContains(Commands.GetEventIds(), args[1]) then
-                    local event = args[1]:lower()
-                    print("(/speak " .. event .. "):")
-                    Commands.GetEventSpeak(event):Print()
                     return
                 end
             elseif #args == 2 then
@@ -294,26 +296,27 @@ function CommandConfig.Init()
                     return
                 end
 
-                -- /speak <command> <channeltype | reset>
-                if TableUtils.ArrayContains(Commands.GetCommsPhrases(), args[1]) then
-                    print("(/speak " .. args[1] .. " " .. args[2] .. ")")
-                    CommandConfig.ToggleSpeakChannel(args[2]:lower(), nil, args[1]:lower())
-                end
-
-                -- /speak <event> <channeltype | reset>
+                -- /speak <event> <channeltype | reset> -- events first, and exclusive: a name
+                -- registered as both would otherwise write a dead command override alongside
+                -- the live event one
                 if TableUtils.ArrayContains(Commands.GetEventIds(), args[1]) then
                     print("(/speak " .. args[1] .. " " .. args[2] .. ")")
                     CommandConfig.ToggleSpeakChannel(args[2]:lower(), nil, args[1]:lower(), true)
+
+                -- /speak <command> <channeltype | reset>
+                elseif TableUtils.ArrayContains(Commands.GetCommsPhrases(), args[1]) then
+                    print("(/speak " .. args[1] .. " " .. args[2] .. ")")
+                    CommandConfig.ToggleSpeakChannel(args[2]:lower(), nil, args[1]:lower())
                 end
             elseif #args == 3 then
                 print("(/speak " .. args[1] .. " " .. args[2] .. " " .. args[3] .. ")")
 
-                -- /speak <command> <channeltype> [tellto]
-                if TableUtils.ArrayContains(Commands.GetCommsPhrases(), args[1]:lower()) then
-                    CommandConfig.ToggleSpeakChannel(args[2]:lower(), args[3], args[1]:lower())
-                -- /speak <event> <channeltype> [tellto]
-                elseif TableUtils.ArrayContains(Commands.GetEventIds(), args[1]) then
+                -- /speak <event> <channeltype> [tellto] -- events before commands, same as above
+                if TableUtils.ArrayContains(Commands.GetEventIds(), args[1]) then
                     CommandConfig.ToggleSpeakChannel(args[2]:lower(), args[3], args[1]:lower(), true)
+                -- /speak <command> <channeltype> [tellto]
+                elseif TableUtils.ArrayContains(Commands.GetCommsPhrases(), args[1]:lower()) then
+                    CommandConfig.ToggleSpeakChannel(args[2]:lower(), args[3], args[1]:lower())
                 end
             end
         end

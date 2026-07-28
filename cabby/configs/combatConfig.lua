@@ -68,6 +68,31 @@ local function initAndValidate()
         taint = true
     end
 
+    -- The four below are one driving style -- the player's own client running the group -- and
+    -- all default off, unlike call_assist: engage_on_attack turns a keypress into an order to
+    -- charge, assist_on_engage speaks with no role gate in front of it, and the two disengage
+    -- switches let go of a fight the group may still be winning, so a group shipping with any
+    -- of them on would be six characters charging, announcing and quitting at once.
+    if configRoot.engage_on_attack == nil then
+        configRoot.engage_on_attack = false
+        taint = true
+    end
+
+    if configRoot.assist_on_engage == nil then
+        configRoot.assist_on_engage = false
+        taint = true
+    end
+
+    if configRoot.disengage_on_attack_off == nil then
+        configRoot.disengage_on_attack_off = false
+        taint = true
+    end
+
+    if configRoot.disengage_on_target_clear == nil then
+        configRoot.disengage_on_target_clear = false
+        taint = true
+    end
+
     if taint then
         Global.configStore:SaveConfig()
     end
@@ -109,6 +134,54 @@ function CombatConfig.SetCallAssist(enable)
     getConfigSection().call_assist = enable == true
     Global.configStore:SaveConfig()
     print("Calling the assist is Enabled: [" .. tostring(enable) .. "]")
+end
+
+---@return boolean engageOnAttack whether the attack toggle turning on engages the target as an order
+function CombatConfig.GetEngageOnAttack()
+    return getConfigSection().engage_on_attack
+end
+
+---@param enable boolean
+function CombatConfig.SetEngageOnAttack(enable)
+    getConfigSection().engage_on_attack = enable == true
+    Global.configStore:SaveConfig()
+    print("Engage on attack is Enabled: [" .. tostring(enable) .. "]")
+end
+
+---@return boolean assistOnEngage whether this character's own fights are called out, role or no role
+function CombatConfig.GetAssistOnEngage()
+    return getConfigSection().assist_on_engage
+end
+
+---@param enable boolean
+function CombatConfig.SetAssistOnEngage(enable)
+    getConfigSection().assist_on_engage = enable == true
+    Global.configStore:SaveConfig()
+    print("Assist on engage is Enabled: [" .. tostring(enable) .. "]")
+end
+
+---@return boolean disengageOnAttackOff whether the attack toggle switching off calls the fight off
+function CombatConfig.GetDisengageOnAttackOff()
+    return getConfigSection().disengage_on_attack_off
+end
+
+---@param enable boolean
+function CombatConfig.SetDisengageOnAttackOff(enable)
+    getConfigSection().disengage_on_attack_off = enable == true
+    Global.configStore:SaveConfig()
+    print("Disengage on attack off is Enabled: [" .. tostring(enable) .. "]")
+end
+
+---@return boolean disengageOnTargetClear whether clearing the fight's own target calls the fight off
+function CombatConfig.GetDisengageOnTargetClear()
+    return getConfigSection().disengage_on_target_clear
+end
+
+---@param enable boolean
+function CombatConfig.SetDisengageOnTargetClear(enable)
+    getConfigSection().disengage_on_target_clear = enable == true
+    Global.configStore:SaveConfig()
+    print("Disengage on target clear is Enabled: [" .. tostring(enable) .. "]")
 end
 
 ---@diagnostic disable-next-line: duplicate-set-field

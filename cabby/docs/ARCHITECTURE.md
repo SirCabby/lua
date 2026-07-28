@@ -161,7 +161,7 @@ cabby/
   character.lua       capability snapshot: which skills exist (primary/secondary/melee lists)
   status.lua          shared predicates (IsFacingTarget)
   states/             baseState, fleeState, followState, meleeState, spellDpsState, healState,
-                      buffState, restState
+                      buffState, advLootState, restState
   classes/            priorities (the bands), baseClass (assembly), classes (the registry),
                       and one profile per EQ class
   commands/           the chat-command bus (see below), incl. the toggle/action command factories
@@ -193,8 +193,9 @@ local Warrior = BaseClass.new({
 `BaseClass` merges the profile's states with the **common** ones, sorts by priority, and then
 inits and registers each in that order. Rules it enforces:
 
-- **Every class flees, follows, rests, and melees.** FleeState, FollowState (which is also anchor
-  and click-to-zone — one state, one `Go()`), RestState, and MeleeState are the four jobs that have
+- **Every class flees, follows, rests, melees — and minds the loot window.** FleeState,
+  FollowState (which is also anchor and click-to-zone — one state, one `Go()`), RestState,
+  MeleeState and AdvLootState are the five jobs that have
   nothing to do with what the character is, so no profile has to remember to ask for them. Flee is
   there for a second reason as well: it is not a job at all but the absence of every job below it,
   so what it holds back is the same list whatever the character can do. It is also the only state
@@ -346,11 +347,14 @@ slots configured *right now*, each of the three ways they can be switched.
 name as the speaker, synthesizing the line the handler would have seen (`Speak.BuildLine`) so
 nothing downstream — `Respond()` included — can tell the difference; replies land in our own
 console via `/echo`. `/cself <command>` is the slash command form, and hotbar buttons use it.
-This is what makes an order meant for *this* character possible at all: EQBC runs with
-localecho off, so a `/bc followme` is heard by everyone except the character that said it.
-Local channels are excluded from active-channel lists and from `GetPhrasePatterns` — there is no
-chat line to listen for. `Owners:HasPermission` always says yes to our own name, so dispatching
-to ourselves does not require listing ourselves as an owner.
+This is what makes an order meant for *this* character possible at all: a `/bc followme` is an
+order to the others on the channel, not to its speaker. eqbcs localecho (on by default) loops
+our own broadcasts back to us as ordinary chat lines, so `protectChatHandler` owner-gates any
+channel line spoken by our own name — it runs only if we are listed as an owner or the list is
+open, the same terms as anybody else. Local channels are excluded from active-channel lists and
+from `GetPhrasePatterns` — there is no chat line to listen for. `Owners:HasPermission` always
+says yes to our own name, so dispatching to ourselves does not require listing ourselves as an
+owner; that unconditional trust belongs to the local channel alone.
 
 Cross-cutting per-command/event settings, each with a global default plus per-command
 overrides, persisted by CommandConfig:
@@ -419,20 +423,27 @@ Design rules that matter when adding a caller:
   readings, and FollowState asks `Movement.IsParked()` rather than measuring the distance itself.
   Nothing else inherits this — `m2m` is a `MoveTo` and still arrives exactly, and `Stick` holds
   its engage range for melee, where a buffer would be a swing missed.
-- **The trail is memory of where they went while we could not see them, and nothing else.**
-  `Follow` drops its whole trail on any frame the spawn is in line of sight and runs straight at
-  them; the breadcrumbs only accumulate once sight is lost. The trail exists for the corner — with
-  no wall between us it has nothing to say that we cannot see — and walking it anyway is what made
-  following look drunk, because it records the leader shuffling round camp and walking out to pull
-  and back. Setting off along *that* is a follower retracing every step before it heads anywhere,
-  and being carried past the leader on the way, since arriving is measured against the spawn and a
-  trail that loops out and back walks us out and back too. The wandering and the overshoot were the
-  same bug. What `Record` leaves behind each frame is one breadcrumb on where they are standing,
-  which is exactly the corner they went round on the frame they go out of sight. `Follow:Describe`
-  (so `/cmove` and the Follow State panel) says which of the two it is doing: **chasing** or
-  **trailing (N waypoints)**. The cost of the rule is that line of sight is not walkability — a
-  leader visible across a chasm gets a beeline into it, recovered by the stuck detector rather than
-  by routing, which is the same bargain `Stick` and `MoveTo` have always made.
+- **The trail is the route, and the route is walked exactly** (2026-07, replacing beeline-on-sight
+  at the user's direction — the `/afollow` model from MQ2AdvPath). `Follow` samples where the
+  target has been into breadcrumbs and replays them corner for corner whether or not the target is
+  visible, because line of sight is not walkability: a leader visible below a ledge, across a
+  chasm railing or down a switchback is one confident straight line away over a drop. The route
+  they walked is the one route known walkable, so it is the only thing we steer at; the spawn's
+  own position is used for arrival (the hold buffer above ends the replay wherever the trail
+  happens to be) and as the destination once the trail runs out, nothing else. What keeps the
+  replay from being the drunk walk that beelining was invented to avoid: every pulse the trail is
+  dropped through the furthest breadcrumb we are *standing on*, wherever in the trail it is, and
+  holding at the target retires the whole route that got us there — so the trail drains instead of
+  stockpiling camp wander, and a stale head reconnects the moment the target comes back to us or
+  their route crosses ours; a backward jog recorded off a rubber-banding
+  target is skipped by arc (MQ2AdvPath's ClearLag); and the radius that counts as "reached" widens
+  with our own per-pulse travel, so background frame rates do not orbit waypoints they can no
+  longer stop inside (the `leadPulses` actuation-lag reasoning applied to waypoints). A jump in
+  the target's position too big to be walking is recorded as a **warp seam**: the follower walks
+  the trail to the seam and parks there — `IsParked`, so resting works while waiting — rather than
+  walking a leg nobody walked, and a target that is gone fails the task at the seam so Travel's
+  zone-line logic takes over. `Follow:Describe` (so `/cmove` and the Follow State panel) reports
+  **trailing (N waypoints)** or **waiting out a warp**.
 - **Arriving leads by half a pulse, measured on the gap.** The stop test is
   `distance - closing/2`, where `closing` is how much the *distance to the target* shrank since the
   last pulse — not how far we moved. Stopping is decided once per pulse, so a pulse of closing is
@@ -678,8 +689,28 @@ it is worth it, and when to give up. What Combat does is narrow:
   main assist's target first and an extended-target sweep after it — see Assisting below.
   `Auto Hater` is the client's own word for "this is fighting you", which beats anything we could
   work out ourselves.
-- **Owns the `attack` order**, the `assist` call, the `autoengage` and `callassist` switches, and
-  reports on `/cattack`.
+- **Honors a fight started by hand**, above the `autoengage` gate: the player's attack being on
+  while the client says real combat has begun engages the client's target as an order. The combat
+  flag is asked as well as the toggle because the toggle alone is not intent — autoattack survives
+  a kill, and a leftover toggle plus a curious click must not order a charge. The `engageonattack`
+  switch (off by default) reads the *press itself* as the order instead: the moment the toggle
+  turns on, the target under it is engaged with no wait for the swing or the aggro, so pressing
+  attack at range is a charge. Only the turning-on reads that way — what a leftover toggle may do
+  is unchanged — and Combat watches the toggle every pulse without exception, so a press consumed
+  while engaged (our own melee turns the swing on) is never saved up to fire late.
+- **Honors calling it off by hand**, behind two switches (both off by default). With
+  `disengageonattackoff`, the player switching auto attack off closes the fight the way the Back
+  Off button does, seek and all — edge-read like the press, so only the act itself orders
+  anything, and a toggle *taken* rather than chosen (a mez, a charm or a stun dropping auto
+  attack) orders nothing. With `disengageontargetclear`, the player clearing the client's target
+  while it sits on the fight's own, still-standing mob does the same — a clear of anything else
+  (the group member a heal targeted, a mob being inspected) is not an order, and the world taking
+  the target (the death, the poofed corpse) is the seek's business, not this switch's. Neither
+  reads while flee is on: travel drops auto attack every pass as bookkeeping, and the flee order
+  has already said everything there is to say about the fight.
+- **Owns the `attack` order**, the `assist` call, the `autoengage`, `callassist`,
+  `engageonattack`, `assistonengage`, `disengageonattackoff` and `disengageontargetclear`
+  switches, and reports on `/cattack`.
 
 **It runs no game command that decides anything**, which is what makes `Combat.Engage` safe to call
 from an ImGui button. The Attack button used to call `MeleeState.EngageTargetId`, which ran
@@ -712,7 +743,7 @@ is what says whether something weaker may replace it:
 
 | Source | Set by | Replaced automatically? |
 |---|---|---|
-| `order` | `attack <id>`, the Attack button | no — somebody chose it |
+| `order` | `attack <id>`, the Attack button, attacking by hand | no — somebody chose it |
 | `assist` | an `assist` call, or the assist's target | only by the next call |
 | `hater` | the extended-target sweep | no, while it lives |
 
@@ -745,6 +776,15 @@ Rules the code depends on:
 `callassist` is the switch on the calling side, on by default and silent on every character that is
 not the tank; the call goes out on that command's own speak channels (`/speak assist`). `/cattack`
 reports all of it: the roles, what the assist is on, and where calls are being spoken.
+
+`assistonengage` (off by default) is the calling side with no role in front of it: a character
+carrying it announces its own fights — and calls them off — exactly as the tank does, on the same
+speak channels and through the same one-line-per-target machinery. It is how a group is led by
+whichever character the player is actually driving rather than by the group window's roles; with
+`engageonattack` beside it, the driver's own attack key is the whole chain — the press starts the
+fight, the fight is announced, the group joins it — and the `disengageonattackoff` /
+`disengageontargetclear` switches close the loop, turning the same key (or ESC) into the
+group-wide off-call.
 
 - **The call falls back to the group channel**, alone among the things cabby speaks. Every other
   `speak` is a *report* — "cannot see you to heal you", "I failed to click into the zone" — and a
@@ -916,6 +956,59 @@ standing still, without any of the `- 1` band juggling the two dps states needed
 `/cbuff` reports what it is doing and how many buffs each person is missing (worked out on demand;
 it is a whole pass over the list per person). `/cbuff off` calls off the buff in progress,
 `/cbuff refresh` forgets what was worked out about who has what.
+
+## AdvLoot state (`states/advLootState.lua`)
+
+Loot etiquette for the akk-stack advloot system: whoever controls the loot deals with the items,
+and everybody else answers **Pass** to every roll nobody has answered, so no roll ever waits on
+this character.
+
+This is written against the custom system, not live EQ's. The RoF2 client has no native advanced
+loot window, this MacroQuest build compiles its `AdvLoot` TLO out entirely (it exists only for
+clients dated 2015+), and the server never fills the client's master-looter group role — so
+`${AdvLoot}`, `/advloot shared <n> no` and `${Group.MasterLooter}` are all dead ends here. What
+exists instead is `lootwnd.asi` (akk-stack's client mod): a real SIDL window, **`AdvLootWnd`**,
+twelve rows of `ADLW_*` controls that MacroQuest can read with the `Window` TLO and click with
+`/notify`. The server decides who controls the loot — the group's delegated looter if one is set,
+otherwise the leader; solo and raid characters control their own — and tells the window.
+
+**The window is the world, and it already knows everything**, so the state asks nothing about the
+group at all:
+
+- a row is *showing* while its `ADLW_Name<r>` label is visible with text in it;
+- it is *rolling* while its `ADLW_Loot<r>` button says **Need** — free-for-all loot (solo kills,
+  and anything still locked when the corpse's decay clock runs short) relabels the row's buttons
+  Loot/Give/Sell, and that last one is why the mode is checked at all: **the Pass button of a
+  rolling row is the Sell button of a free-for-all row**;
+- it is *unanswered* while the vote buttons are still visible — the window hides them the moment
+  a vote goes out, and a vote is irrevocable;
+- it is *ours to deal with* while `ADLW_Roll<r>` (the controller-only Lock/Unlock button) is
+  visible. The state passes only on a row whose controller button it can **positively see
+  hidden** — an unreadable row is treated as ours, because passing wrongly is how the whole group
+  ends up passing, and a roll everybody passed on strands the item on the corpse.
+
+**Only Pass is ever clicked** (`/notify AdvLootWnd ADLW_Never<r> leftmouseup`, only while the row
+reads as a roll). Everything else on that window is somebody's decision or a permanent one: Give
+hands the item to whatever we happen to have targeted, the four Always buttons write per-item
+preferences into the database, Deny opts out of the coin split, and Need/Greed are wants this
+state does not have. A roll the player already answered is never touched, and rolls have no
+deadline of their own — the corpse's decay clock is the only timer, and it belongs to the server.
+
+**Every answer comes from a look taken this pass**, one click per settle window. The window
+compacts rows upward whenever one clears, so a row number even a quarter second old can name a
+different item by now; the scan and the click it decides on share a frame, and the passes in
+between hand their turn straight down. The settle window is an evidence window on our own click —
+the row disappears at once, but the server's tally messages are in flight around it, a vote is
+irrevocable, and a second one is answered with "You have already rolled".
+
+Where it sits does the rest (`Priorities.loot`, registered for every class by `BaseClass` — what
+to do with loot has nothing to do with what the character is): below the fighting bands, so
+nothing is answered ahead of a swing mid-fight, and above follow and rest, so a stack of rolls is
+cleared promptly once the fighting is over.
+
+`advloot` is the switch, `/cadvloot` reports the controller, what is waiting on us, and what is
+showing. (The phrase is cabby's own comm command over chat; the client mod separately owns the
+`/advloot` slash command, which this state never uses.)
 
 ## Rest state (`states/restState.lua`)
 

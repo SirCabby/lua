@@ -36,6 +36,8 @@ local Priorities = {
     dps = 79,
 
     -- out of combat --
+    -- what corpses dropped: AdvLootState answers the loot window's rolls here, and a corpse-walk
+    -- looting state would be its neighbour
     loot = 89,
 
     anchor = 99,     -- hold a spot

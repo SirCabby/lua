@@ -67,12 +67,35 @@ end
 ---timestamp on each chat line gets that timestamp captured along with the name, so the check
 ---fails against every owner and the character quietly ignores its own group. Cleaning it here
 ---rather than in each handler is the difference between one rule and thirty places to forget it.
+---
+---Our own name in that capture gets one more rule, for the same reason. Handlers trust their own
+---character unconditionally (Owners:HasPermission), which is right for the local channel --
+---/cself and a hotbar button are always our own order -- but a *chat* line carrying our own name
+---is our own broadcast looped back at us (eqbcs localecho, on by default, does exactly that),
+---and an order we spoke to the group is not automatically an order to ourselves. So a channel
+---line spoken by us runs only on the same terms as anybody else: listed as an owner, or the
+---list open. getOwners resolves at fire time so live per-command overrides are honored.
 ---@param sourceKey string
 ---@param handler function
+---@param getOwners fun(): Owners the ACL this handler answers to
 ---@return function
-local function protectChatHandler(sourceKey, handler)
+local function protectChatHandler(sourceKey, handler, getOwners)
     return protect(sourceKey, function(line, speaker, ...)
-        return handler(line, Speak.CleanSpeaker(speaker), ...)
+        speaker = Speak.CleanSpeaker(speaker)
+
+        local myName = mq.TLO.Me.CleanName()
+        if speaker ~= nil and myName ~= nil and speaker:lower() == myName:lower() then
+            local channel = Speak.GetRequestChannel(line)
+            if channel ~= nil and channel.isLocal ~= true then
+                local owners = getOwners()
+                if not (owners:IsOpen() or owners:IsOwner(speaker)) then
+                    DebugLog("Ignoring own chat line for [" .. sourceKey .. "]: we are not on the owner list")
+                    return
+                end
+            end
+        end
+
+        return handler(line, speaker, ...)
     end)
 end
 
@@ -367,7 +390,8 @@ function Commands.RegisterCommEvent(command)
     if not TableUtils.ArrayContains(TableUtils.GetKeys(Commands._.registrations.commands.registeredCommands), command.command) then
         Commands._.registrations.commands.registeredCommands[command.command] = command
         Commands._.registrations.commands.byPhrase[StringUtils.Split(command.command)[1]:lower()] = command
-        command.wrappedEventFunction = protectChatHandler("command:" .. StringUtils.Split(command.command)[1], command.eventFunction)
+        command.wrappedEventFunction = protectChatHandler("command:" .. StringUtils.Split(command.command)[1], command.eventFunction,
+            function() return Commands.GetCommandOwners(command.command) end)
         command.registeredEvents = {}
         UpdateCommEvent(command)
     else
@@ -445,7 +469,8 @@ end
 function Commands.RegisterEvent(event)
     if not TableUtils.ArrayContains(TableUtils.GetKeys(Commands._.registrations.events.registeredEvents), event.id) then
         Commands._.registrations.events.registeredEvents[event.id] = event
-        event.wrappedEventFunction = protectChatHandler("event:" .. event.id, event.eventFunction)
+        event.wrappedEventFunction = protectChatHandler("event:" .. event.id, event.eventFunction,
+            function() return Commands.GetEventOwners(event.id) end)
         event.registeredEvents = {}
         UpdateEventRegistration(event)
     else
@@ -488,6 +513,14 @@ function Commands.GetEventSpeak(eventId)
         return speakOverrides
     end
     return Commands._.speak
+end
+
+---The override alone, for an event that must not fall back to the default speak list -- a
+---private line (telltome) stays local unless the user explicitly pointed it somewhere.
+---@param eventId string
+---@return Speak? speakOverride nil when the event has no override of its own
+function Commands.GetEventSpeakOverride(eventId)
+    return Commands._.registrations.events.speakOverrides[eventId:lower()]
 end
 
 ---@param eventId string

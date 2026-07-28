@@ -143,10 +143,17 @@ function Locomotion.IsMoving()
 end
 
 ---Snap our heading toward a location. `fast` sets the heading outright instead of turning
----over several frames, `nolook` leaves the camera pitch alone.
+---over several frames. On land the camera pitch is left alone; given a `z` while swimming it
+---is aimed too, because swimming goes where the camera looks -- a follower that never noses
+---down cannot follow anyone down.
 ---@param y number
 ---@param x number
-function Locomotion.FaceLoc(y, x)
+---@param z? number aim the pitch as well when swimming
+function Locomotion.FaceLoc(y, x, z)
+    if z ~= nil and mq.TLO.Me.FeetWet() then
+        mq.cmdf("/face fast loc %.2f,%.2f,%.2f", y, x, z)
+        return
+    end
     mq.cmdf("/face fast nolook loc %.2f,%.2f", y, x)
 end
 

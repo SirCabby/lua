@@ -27,6 +27,11 @@ local UserInput = require("cabby.utils.userinput")
 ---dps state casts at it, a tank state will taunt it -- and each one decides for itself whether it
 ---is in range, whether it is worth it, and when to give up.
 ---
+---The engagement is *our* side of a fight. The world's side -- something out there actually
+---fighting us, agreed to or not -- is published alongside it as `IsUnderAttack`, because with
+---auto-engage off the two can disagree: a character can be under a beating it never picked up.
+---What to do about that is each reader's own question; this service only keeps the fact honest.
+---
 ---**It runs no game commands that decide anything.** Engaging is bookkeeping, which is what makes
 ---it safe to call from an ImGui button (the Attack button used to run `/mqtarget` from inside the
 ---render callback, which is the crash-to-desktop hazard the movement service is built around). The
@@ -37,9 +42,13 @@ local Combat = {
     key = "Combat",
     eventIds = {
         assist = "assist",
+        assistOnEngage = "assistonengage",
         attack = "attack",
         autoEngage = "autoengage",
-        callAssist = "callassist"
+        callAssist = "callassist",
+        disengageOnAttackOff = "disengageonattackoff",
+        disengageOnTargetClear = "disengageontargetclear",
+        engageOnAttack = "engageonattack"
     },
     ---How an engagement was decided, which is what says whether something weaker may replace it.
     ---An `order` is somebody's explicit choice and is never taken away automatically; the other
@@ -57,7 +66,11 @@ local Combat = {
         engagedAtMs = 0,
         lastScanMs = 0,
         fightOpenUntilMs = nil,
-        calledId = nil
+        calledId = nil,
+        underAttack = false,
+        lastUnderAttackMs = 0,
+        attackWasOn = false,
+        clientTargetWasId = 0
     }
 }
 
@@ -123,6 +136,16 @@ end
 ---@return boolean isSeeking the fight is open with its target lost, looking for the successor
 function Combat.IsSeeking()
     return Combat._.fightOpenUntilMs ~= nil
+end
+
+---Something out there is fighting *us* -- we are at the top of an auto-hater's hate list, the one
+---it is actually coming for -- whether or not we have decided to fight it back. Independent of the
+---engagement on purpose: engaged-but-not-under-attack is us beating on something that has not
+---turned around yet, and under-attack-but-not-engaged is a beating nobody agreed to, which is
+---exactly the case auto-engage off creates. Answers from the last scan; Pulse keeps it fresh.
+---@return boolean isUnderAttack
+function Combat.IsUnderAttack()
+    return Combat._.underAttack
 end
 
 ---@param id number
@@ -191,6 +214,25 @@ local function findAutoHater()
     return nil
 end
 
+---Whether anything with us on its hate list hates us *most*: `PctAggro` at 100 is the client's
+---aggro meter saying "you are the one it is coming for". Most-hated rather than merely listed,
+---and it matters -- a healer rides every fight's hate list off the heals alone, and a fact that
+---read "listed" would keep it on its feet through fights it is medding through on purpose. Gated
+---on the client's own combat flag for the same reason the auto-engage sweep is: a mob that hates
+---us from across the zone is not fighting us yet.
+---@return boolean isUnderAttack
+local function scanUnderAttack()
+    if mq.TLO.Me.CombatState() ~= "COMBAT" then return false end
+
+    for slot = 1, 20 do
+        local xtarget = mq.TLO.Me.XTarget(slot)
+        if xtarget.TargetType() == "Auto Hater" and (tonumber(xtarget.PctAggro()) or 0) >= 100 then
+            return true
+        end
+    end
+    return false
+end
+
 ---Spawn types worth picking a fight with: mobs, pets, and the destructible objects the client
 ---types as `Object` (a catapult, a cocoon cluster). Not players, and not corpses -- a dead mob
 ---keeps its spawn id, and a fight is never picked up from a body.
@@ -233,6 +275,11 @@ end
 ---Called off as loudly as it is called on: the tank dropping its target says `assist off`, which
 ---is how a group stops fighting on the tank's say-so rather than one character at a time. That
 ---covers backing off by hand and the `flee` order alike, since both end with the tank disengaged.
+---
+---`assistonengage` is the same mouth with no role in front of it: a character carrying that
+---switch announces its own fights -- and calls them off -- exactly as the tank would, for a group
+---led by whichever character the player is actually driving rather than by the group window's
+---roles. Off by default, since a whole group announcing at once is chat nobody reads.
 local function callAssist()
     -- Between targets the fight is not over and there is nothing to say yet: the next line is
     -- either the successor's id or the off-call, depending on how the seek resolves. Saying "off"
@@ -240,8 +287,10 @@ local function callAssist()
     if Combat.IsSeeking() then return end
 
     -- Not calling is not the same as having called nothing: forget what was said, so that taking
-    -- the role (or the switch) back re-announces the fight instead of assuming everyone heard.
-    if not CombatConfig.GetCallAssist() or not Roles.IsMainTank() then
+    -- the lead back -- the role, either switch -- re-announces the fight instead of assuming
+    -- everyone heard.
+    local tankCalls = CombatConfig.GetCallAssist() and Roles.IsMainTank()
+    if not tankCalls and not CombatConfig.GetAssistOnEngage() then
         Combat._.calledId = nil
         return
     end
@@ -267,6 +316,22 @@ end
 function Combat.Pulse()
     local now = Time.current_time()
 
+    -- The attack toggle and the client's target are watched every pulse without exception --
+    -- engaged, dead, mid-seek -- so that the "it just changed" answers below can never fire late
+    -- off a stale reading: a press seen while engaged is an edge consumed, not one saved up to
+    -- charge something after the fight closes. Our own melee state turning the swing on only
+    -- ever does it while engaged, which is how its edges die here too.
+    local attackOn = mq.TLO.Me.Combat() == true
+    local attackPressed = attackOn and not Combat._.attackWasOn
+    local attackReleased = not attackOn and Combat._.attackWasOn
+    Combat._.attackWasOn = attackOn
+
+    local clientTargetId = tonumber(mq.TLO.Target.ID()) or 0
+    -- what the client's target was cleared *from* this pulse; 0 while it was not cleared at all,
+    -- including when it merely moved to something else (a heal borrows the target constantly)
+    local clearedFromId = clientTargetId == 0 and Combat._.clientTargetWasId or 0
+    Combat._.clientTargetWasId = clientTargetId
+
     -- Our own death is the one end of a fight nothing below watches for: every close in this
     -- file reads the *target*, and the mob that killed us is usually still standing. Die to it
     -- in the zone we bind in and its id keeps resolving -- the seek never opens, and the
@@ -278,6 +343,8 @@ function Combat.Pulse()
     local myState = mq.TLO.Me.State()
     if myState == "DEAD" or myState == "HOVER" then
         Combat.Disengage("we died")
+        -- dead is not under attack; the fact starts over with the respawn
+        Combat._.underAttack = false
         callAssist()
         return
     end
@@ -296,11 +363,72 @@ function Combat.Pulse()
         Combat.Disengage("nothing came to continue the fight")
     end
 
+    -- The player calling the fight off in the client's language, honored the way the press is
+    -- honored below: switching attack off, or clearing the target the fight is on, is `attack
+    -- off` said with the keyboard. Both read edges, so only the act itself orders anything, and
+    -- neither reads while fleeing -- travel drops auto attack every pass as bookkeeping, and the
+    -- flee order has already said everything there is to say about the fight.
+    if attackReleased and Combat.IsEngaged() and CombatConfig.GetDisengageOnAttackOff()
+        and not Status.IsFleeing() then
+        -- Only a toggle let go of, never one taken: a mez, a charm or a stun drops auto attack
+        -- with nobody choosing to stop, and coming to with the whole fight called off is not
+        -- what this switch is for. A feign is a choice, and does count.
+        if not (mq.TLO.Me.Stunned() or mq.TLO.Me.Mezzed() ~= nil or mq.TLO.Me.Charmed() ~= nil) then
+            Combat.Disengage("attack switched off by hand")
+        end
+    end
+
+    if Combat._.targetId > 0 and clearedFromId == Combat._.targetId
+        and CombatConfig.GetDisengageOnTargetClear() and not Status.IsFleeing() then
+        -- Only a clear of the fight's own, still-standing target reads as an order. The world
+        -- clears the client's target too -- the mob dies, the corpse poofs -- but the continuity
+        -- above has turned those into a seek before this line; asking the spawn again covers the
+        -- one that goes down on exactly this pulse.
+        local spawn = mq.TLO.Spawn("id " .. tostring(Combat._.targetId))
+        if spawn.ID() ~= nil and not spawn.Dead() and spawn.Type() ~= "Corpse" then
+            Combat.Disengage("target cleared by hand")
+        end
+    end
+
+    -- The world's side of the fight, kept fresh outside every gate below: whether something is
+    -- coming for us is true or false regardless of what we have picked up, and auto-engage off
+    -- is a choice about fighting back, not about whether the beating exists. Same throttle as
+    -- the sweep, and for the same reason: twenty TLO reads is not free.
+    if now - Combat._.lastUnderAttackMs >= scanIntervalMs then
+        Combat._.lastUnderAttackMs = now
+        Combat._.underAttack = scanUnderAttack()
+    end
+
     -- before the gates below, and deliberately: a tank whose fight has just closed has something
     -- to say about it whether or not it is going to pick another one up
     callAssist()
 
     if Combat._.targetId > 0 then return end
+
+    -- The person playing pressed attack -- the key, the client's own button, `/attack` -- and the
+    -- client is swinging. That is an order like any other, given in the client's language instead
+    -- of ours, so it is honored above the auto-engage gate: that switch decides whether to pick
+    -- fights up unbidden, and this fight we were told about. The combat flag is asked as well as
+    -- the toggle because the toggle alone is not intent -- autoattack survives a kill, and a
+    -- leftover toggle plus a curious click on something far away must not order a charge; the
+    -- swing, or the aggro, is when the fight is real. The `engageonattack` switch reads the press
+    -- itself as the order instead: the moment the toggle turns on, the target under it is engaged
+    -- with no wait for the swing or the aggro, so pressing attack at range is a charge. Only the
+    -- turning-on reads that way -- the leftover toggle the combat flag exists to refuse still
+    -- orders nothing. Read only while unengaged, so a target switched mid-fight does not move an
+    -- engagement -- an order is never taken away automatically, by hand least of all.
+    if (attackOn and mq.TLO.Me.CombatState() == "COMBAT")
+        or (attackPressed and CombatConfig.GetEngageOnAttack()) then
+        local id = tonumber(mq.TLO.Target.ID()) or 0
+        if id > 0 then
+            local spawn = mq.TLO.Spawn("id " .. tostring(id))
+            if spawn.ID() ~= nil and not spawn.Dead() and fightableTypes[spawn.Type()] then
+                Combat.Engage(id, "attacking by hand")
+                return
+            end
+        end
+    end
+
     if not CombatConfig.GetAutoEngage() then return end
 
     -- Travel mode is exactly the case for not picking a fight up. Nothing would act on it -- every
@@ -482,7 +610,8 @@ function Combat.Init(stateMachine)
         summary = "Turns engaging without being told on or off",
         about = {
             "On, the main assist's target is taken first, and whatever is attacking us after that.",
-            "Off waits to be told what to fight: (attack <id>), an (assist) call, or the Attack button."
+            "Off waits to be told what to fight: (attack <id>), an (assist) call, the Attack button,",
+            "or your own attack key -- a fight started by hand is an order like any other."
         },
         get = CombatConfig.GetAutoEngage,
         set = CombatConfig.SetAutoEngage
@@ -498,6 +627,65 @@ function Combat.Init(stateMachine)
         },
         get = CombatConfig.GetCallAssist,
         set = CombatConfig.SetCallAssist
+    })
+
+    ToggleCommand.Register({
+        key = Combat.key,
+        phrase = Combat.eventIds.engageOnAttack,
+        summary = "Turns starting the cabby fight the moment your attack turns on, on or off",
+        about = {
+            "On, the instant your attack toggles on -- the key, the client's button, /attack --",
+            "whatever you have targeted is engaged as an order, with no wait for the swing or the",
+            "aggro that normally confirms a hand-started fight: pressing attack at range is a",
+            "charge. Only the press orders anything -- a toggle left on from the last fight stays",
+            "just a toggle. Off, a hand-started fight is still honored once real combat begins."
+        },
+        get = CombatConfig.GetEngageOnAttack,
+        set = CombatConfig.SetEngageOnAttack
+    })
+
+    ToggleCommand.Register({
+        key = Combat.key,
+        phrase = Combat.eventIds.assistOnEngage,
+        summary = "Turns calling this character's own fights out as (assist) lines on or off",
+        about = {
+            "Every fight this character picks up is announced the way the main tank's is --",
+            "(" .. Combat.eventIds.assist .. " <id>) on engaging, (" .. Combat.eventIds.assist .. " off) on dropping it -- with no role required.",
+            "For leading the group from whichever character the player is actually driving.",
+            "It goes out on the group channel unless /speak assist says otherwise."
+        },
+        get = CombatConfig.GetAssistOnEngage,
+        set = CombatConfig.SetAssistOnEngage
+    })
+
+    ToggleCommand.Register({
+        key = Combat.key,
+        phrase = Combat.eventIds.disengageOnAttackOff,
+        summary = "Turns calling the fight off when your attack switches off, on or off",
+        about = {
+            "On, switching your auto attack off -- the key, the client's button, /attack off --",
+            "closes the cabby fight the way the Back Off button does, seek and all. Only the",
+            "switch-off itself orders anything, and one that was taken from you rather than",
+            "chosen -- a mez, a charm or a stun dropping auto attack -- orders nothing.",
+            "Ignored while flee is on: travel drops auto attack itself, as bookkeeping."
+        },
+        get = CombatConfig.GetDisengageOnAttackOff,
+        set = CombatConfig.SetDisengageOnAttackOff
+    })
+
+    ToggleCommand.Register({
+        key = Combat.key,
+        phrase = Combat.eventIds.disengageOnTargetClear,
+        summary = "Turns calling the fight off when you clear its target, on or off",
+        about = {
+            "On, clearing your target -- ESC -- while it sits on the mob the fight is on closes",
+            "the cabby fight the way the Back Off button does. Clearing anything else (a group",
+            "member a heal landed on, a mob you were only inspecting) orders nothing, and the",
+            "world taking the target -- the mob dying, the corpse poofing -- is not a clear.",
+            "Ignored while flee is on."
+        },
+        get = CombatConfig.GetDisengageOnTargetClear,
+        set = CombatConfig.SetDisengageOnTargetClear
     })
 
     local cattackDocs = ChelpDocs.new(function() return {
@@ -521,6 +709,9 @@ function Combat.Init(stateMachine)
 
         print("Combat: " .. Combat.Describe())
         print(" -- auto-engage: " .. (CombatConfig.GetAutoEngage() and "on" or "off"))
+        print(" -- engage on attack: " .. (CombatConfig.GetEngageOnAttack() and "on" or "off"))
+        print(" -- disengage on attack off: " .. (CombatConfig.GetDisengageOnAttackOff() and "on" or "off"))
+        print(" -- disengage on target clear: " .. (CombatConfig.GetDisengageOnTargetClear() and "on" or "off"))
         print(" -- roles: " .. Roles.Describe())
 
         local assistTarget = Roles.GetAssistTarget()
@@ -531,15 +722,18 @@ function Combat.Init(stateMachine)
                 (assistTarget ~= nil and (assistTarget.name .. " (id " .. tostring(assistTarget.id) .. ")") or "nothing"))
         end
 
-        if not CombatConfig.GetCallAssist() then
-            print(" -- calling the assist: off")
-        elseif not Roles.IsMainTank() then
-            print(" -- calling the assist: on, but only the main tank calls it and that is not me")
-        else
+        local tankCalls = CombatConfig.GetCallAssist() and Roles.IsMainTank()
+        if tankCalls or CombatConfig.GetAssistOnEngage() then
+            -- both on is still one mouth; the role is the wider job, so its wording wins
+            local why = tankCalls and "as the main tank" or "for this character's own fights (assistonengage)"
             local speak, isFallback = assistSpeak()
-            print(" -- calling the assist: on, spoken on [" ..
+            print(" -- calling the assist: on, " .. why .. ", spoken on [" ..
                 StringUtils.Join(speak:GetActiveSpeakChannels(), ", ") .. "]" ..
                 (isFallback and " -- the default, since nothing is set; /speak assist <channel> to change it" or ""))
+        elseif not CombatConfig.GetCallAssist() then
+            print(" -- calling the assist: off")
+        else
+            print(" -- calling the assist: on, but only the main tank calls it and that is not me")
         end
         -- the one setting that makes this whole report a lie about what will happen next: an
         -- engagement is still recorded while fleeing, and nothing whatsoever acts on it

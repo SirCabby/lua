@@ -4,11 +4,12 @@ Companion to [ARCHITECTURE.md](ARCHITECTURE.md). Origin: design review 2026-07-1
 Vision: one script that bots any class/race — states for every band in the priority table
 (commands, passive, cure, heal, pull, mez, tank, dps, loot, anchor, follow, buff).
 
-Current coverage: Follow/Anchor/ClickZone, Melee, Spell DPS, Heal, Buff, Rest and Flee states, over
+Current coverage: Follow/Anchor/ClickZone, Melee, Spell DPS, Heal, Buff, AdvLoot, Rest and Flee
+states, over
 a shared engagement (`combat.lua`) that the group's main tank and main assist steer (`roles.lua`);
 all sixteen classes load as profiles over those (the nine melee
 classes melee, eleven cast damage, the three priests and three hybrids heal, the twelve with a
-spellbook buff, and everyone follows, rests and flees). The casting service and all five action
+spellbook buff, and everyone follows, rests, flees and minds the loot window). The casting service and all five action
 types exist (Phase 3), so an action list can hold a spell, clicky or AA and `/ccast` can fire
 anything by hand. Everything else below.
 
@@ -398,7 +399,10 @@ exemption set, plus a /cpause slash + comm command),
 camp radius), **Mez** (add control, in-combat priority above dps), **Tank** (taunt/hate
 action lists already modeled in MeleeStateConfig; needs aggro-loss detection for "as
 needed" usage),
-**Loot** (corpse scan, loot rules per item, master-loot coordination).
+**Loot** (the roll-etiquette half exists: `AdvLootState` answers the akk-stack loot window's
+rolls with *Pass* for everyone but whoever controls the loot; still to come are old-style
+corpse-walk looting and the controller's own side — per-item rules, give-to routing,
+lock/unlock automation).
 Each new state = state module + config section + UI panel + comm commands, which is why
 the Phase 1 module contract comes first. Landing one is also a sweep over `classes/*.lua`:
 the per-class view of this list is each profile's `unimplemented` lines, and a state that
@@ -483,10 +487,13 @@ backstab positioning; nothing asks for it).
    there (the commented HasSPA probe loop in that file helps).
 8. **Local channel**: `/cself <command>` for each registered comm command — nothing should
    appear in any chat window, and behavior should match the same command spoken by a group-mate.
-   Related: `Owners:HasPermission` now always says yes to our own name, so confirm our own
-   outgoing chat cannot re-trigger a command on ourselves (EQ renders our own group/raid lines
-   as "You tell your party, ...", which no registered pattern matches, and EQBC runs with
-   localecho off — verify both still hold).
+   Related: our own outgoing chat *can* come back to us — eqbcs localecho is on by default and
+   loops `/bc` lines back, which is how a commander used to anchor itself (2026-07). Own-name
+   chat lines are now owner-gated in `protectChatHandler`: verify in game that with ourselves
+   off the owner list a `/bc anchor` moves everyone else and not us, that adding ourselves (or
+   an open list) makes it include us, and that `/cself` works either way. (EQ renders our own
+   group/raid lines as "You tell your party, ...", which no registered pattern matches — that
+   half still holds on its own.)
 9. **Class profiles on a live character**: startup on a class that was never reachable before
    (a rogue, and any caster) — the notice should list its states and what it cannot do, and
    `/state` should list the chain in priority order. Every class registers MeleeState now, so

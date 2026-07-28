@@ -56,18 +56,18 @@ local Travel = {
     }
 }
 
--- How close the movement service closes us to the follow target. Comfortably outside melee range,
--- and deliberately so: a follower parked any nearer is stood on whoever it is following, and
--- everything the group does -- turning, backing up, looting -- happens through each other.
-local followDistance = 20
+-- How close the movement service closes us to the follow target. Tight spacing by preference
+-- (2026-07): about melee range, close enough to feel like a group -- but not so near that a
+-- parked follower is stood on whoever it is following.
+local followDistance = 13
 -- and how far they get before we close on them again, which is the buffer zone that keeps a
 -- follow from being a shadow: inside it they can turn around, back up and step past us without
--- anything of ours moving. Widened alongside followDistance rather than left where it was, since
+-- anything of ours moving. Scaled alongside followDistance rather than left where it was, since
 -- what matters is the room between the two -- a thin buffer is barely a buffer.
 -- Nothing here re-measures it -- the follow task owns it (Follow.WithinHold)
-local followResumeDistance = 35
+local followResumeDistance = 23
 -- how close we have to be before there is no point starting a follow at all
-local keepCloseDistance = 22
+local keepCloseDistance = 15
 -- how close to an anchor still counts as being parked on it
 local anchorRadius = 15
 -- how long to leave a failed attempt at clicking through a zone line alone. Without it, a door

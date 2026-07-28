@@ -93,10 +93,10 @@ local BuffState = {
         castId = nil,
         buffTarget = nil,   -- { id, name, spell } as it was when the cast started
         buffSlot = nil,     -- the configured slot chosen for it
-        buffCoverIds = nil, -- everyone this cast is expected to land on
+        buffCoverNames = nil, -- everyone this cast is expected to land on, by name
         buffLastsMs = 0,    -- how long what we are casting lasts
         order = nil,        -- { id, name, idleUntilMs } from a `buffnow <id>` or `buffme`
-        tryAgainAt = {},    -- { ["<slot>@<spawn id>"] = when that pairing is worth looking at again }
+        tryAgainAt = {},    -- { ["<slot>@<name>"] = when that pairing is worth looking at again }
         calledOff = false,
         lastResult = nil,
         holdReason = nil,
@@ -209,11 +209,15 @@ local function slotKey(slot)
     return tostring(slot.actionType) .. ":" .. tostring(slot.name)
 end
 
+---Pairings are named rather than numbered: a spawn id is the zone's name for somebody, and
+---zoning deals everybody a new one. These windows are the only record that a cast landed on
+---people whose buffs cannot be read back, so a record keyed by id was wiped by every zone line
+---and the whole group read as freshly unbuffed on arrival.
 ---@param slot Action
----@param id number
+---@param name string
 ---@return string key
-local function pairKey(slot, id)
-    return slotKey(slot) .. "@" .. tostring(id)
+local function pairKey(slot, name)
+    return slotKey(slot) .. "@" .. name
 end
 
 ---Drop retry windows that have run out. They are the only thing this state accumulates, and a
@@ -228,20 +232,20 @@ local function prune()
 end
 
 ---@param slot Action
----@param id number
+---@param name string
 ---@return boolean isDue whether this pairing is worth looking at again yet
-local function dueNow(slot, id)
-    local at = BuffState._.tryAgainAt[pairKey(slot, id)]
+local function dueNow(slot, name)
+    local at = BuffState._.tryAgainAt[pairKey(slot, name)]
     return at == nil or Time.current_time() >= at
 end
 
 ---@param slot Action
----@param ids table everyone the cast was expected to land on
+---@param names table everyone the cast was expected to land on
 ---@param delayMs number
-local function holdOff(slot, ids, delayMs)
+local function holdOff(slot, names, delayMs)
     local until_ = Time.current_time() + delayMs
-    for _, id in ipairs(ids or {}) do
-        BuffState._.tryAgainAt[pairKey(slot, id)] = until_
+    for _, name in ipairs(names or {}) do
+        BuffState._.tryAgainAt[pairKey(slot, name)] = until_
     end
 end
 
@@ -362,15 +366,15 @@ local function appliesTo(slot, aim, candidate)
 end
 
 ---@param candidates table
----@return table ids everyone a group cast from here would land on
+---@return table names everyone a group cast from here would land on
 local function groupCoverage(candidates)
-    local ids = {}
+    local names = {}
     for _, candidate in ipairs(candidates) do
         if candidate.inGroup and not candidate.isPet then
-            ids[#ids+1] = candidate.id
+            names[#names+1] = candidate.name
         end
     end
-    return ids
+    return names
 end
 
 ---@class BuffPick
@@ -378,7 +382,7 @@ end
 ---@field slot Action
 ---@field targetId number|nil nil for a group buff, which needs no target
 ---@field name string what is being buffed, for status output
----@field coverIds table everyone this cast is expected to land on
+---@field coverNames table everyone this cast is expected to land on, by name
 ---@field lastsMs number how long what it lands lasts
 
 ---Who this state is when it asks the casting service for something.
@@ -417,7 +421,7 @@ local function choosePickFor(slot, candidates)
     local needsTarget = subject:NeedsTarget()
 
     for _, candidate in ipairs(candidates) do
-        if appliesTo(slot, aim, candidate) and dueNow(slot, candidate.id) and needsBuff(spell, candidate) then
+        if appliesTo(slot, aim, candidate) and dueNow(slot, candidate.name) and needsBuff(spell, candidate) then
             -- a spell that aims itself is cast at nobody. EQ puts a self buff on us and a pet buff
             -- on our pet with nothing targeted, and a group buff on the group; targeting for one
             -- of those would drop whatever we were looking at to no purpose
@@ -432,7 +436,7 @@ local function choosePickFor(slot, candidates)
                     name = isGroupCast and "the group" or candidate.name,
                     -- one person short of it is enough to cast a group buff, and the rest of the
                     -- group gets it whether they were short of it or not
-                    coverIds = isGroupCast and groupCoverage(candidates) or { candidate.id },
+                    coverNames = isGroupCast and groupCoverage(candidates) or { candidate.name },
                     lastsMs = lastsMs
                 }
             end
@@ -472,7 +476,7 @@ function BuffState.Reset()
     BuffState._.castId = nil
     BuffState._.buffTarget = nil
     BuffState._.buffSlot = nil
-    BuffState._.buffCoverIds = nil
+    BuffState._.buffCoverNames = nil
     BuffState._.buffLastsMs = 0
 end
 
@@ -610,15 +614,15 @@ local function startBuff(pick)
     BuffState._.castId = castId
     BuffState._.buffTarget = { id = pick.targetId, name = pick.name, spell = pick.action:Name() }
     BuffState._.buffSlot = pick.slot
-    BuffState._.buffCoverIds = pick.coverIds
+    BuffState._.buffCoverNames = pick.coverNames
     BuffState._.buffLastsMs = pick.lastsMs
 
     -- an order is "give them everything they are missing", so every cast that reaches them is a
     -- reason to keep it open
     local order = BuffState._.order
     if order ~= nil then
-        for _, id in ipairs(pick.coverIds) do
-            if id == order.id then
+        for _, name in ipairs(pick.coverNames) do
+            if name == order.name then
                 order.idleUntilMs = Time.current_time() + orderIdleMs
             end
         end
@@ -649,7 +653,7 @@ end
 local function recordFinished(status, outcome, reason)
     local target = BuffState._.buffTarget or {}
     local slot = BuffState._.buffSlot
-    local ids = BuffState._.buffCoverIds or {}
+    local names = BuffState._.buffCoverNames or {}
 
     if status == Casting.status.succeeded then
         BuffState._.lastResult = tostring(target.spell) .. " on " .. tostring(target.name) ..
@@ -659,7 +663,7 @@ local function recordFinished(status, outcome, reason)
             -- covers the people whose buffs we cannot read: the client will not tell us it landed
             -- on them, so the fact that we cast it is the only record there is
             local delay = math.max(BuffState._.buffLastsMs - BuffStateConfig.GetRebuffMs(), minimumRecheckMs)
-            holdOff(slot, ids, delay)
+            holdOff(slot, names, delay)
         end
     else
         if not BuffState._.calledOff then
@@ -668,7 +672,7 @@ local function recordFinished(status, outcome, reason)
                 " failed: " .. tostring(reason)
         end
         if slot ~= nil then
-            holdOff(slot, ids, retryAfterFailureMs)
+            holdOff(slot, names, retryAfterFailureMs)
         end
     end
     BuffState._.calledOff = false

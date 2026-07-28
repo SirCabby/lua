@@ -72,8 +72,9 @@ local holdSettleMs = 5000
 ---the person playing the character on the very next frame is wrestling, not resting.
 ---
 ---What holds it back, in the order it reports them: a sit that is not ours, an open spellbook,
----having only just been stood up, being engaged (a character in a fight has a fight to be in), a
----cast in the air, the movement service driving, and -- while the client says the fight is on and
+---having only just been stood up, being engaged (a character in a fight has a fight to be in),
+---being fought by something we never picked up (the world does not ask before swinging), a cast
+---in the air, the movement service driving, and -- while the client says the fight is on and
 ---we are not in it -- the `in_combat` setting. That last one is the case worth naming: a caster
 ---that has not engaged would rather fill its bar than start something, which is why it is a
 ---setting rather than a rule.
@@ -110,6 +111,10 @@ local RestState = {
         -- when something last held us off sitting, so a reason that flickers cannot be answered
         -- with a posture change per flicker. nil means "nothing has held us back yet"
         lastHoldMs = nil,
+        -- the words that went with lastHoldMs. Through the settle window the hold is still in
+        -- force as far as this state is concerned, so these are what it keeps reporting: the
+        -- signal underneath is allowed to blink, the published reason is not
+        lastHoldReason = nil,
         isResting = false,
         holdReason = nil
     }
@@ -193,6 +198,15 @@ end
 local function holdReason()
     if Combat.IsEngaged() then
         return "we are fighting something"
+    end
+
+    -- The world's side of the same question. With auto-engage off a fight can be entirely real
+    -- with nothing engaged -- something is on us, swinging, and we have simply not agreed to
+    -- swing back -- and sitting under it is how a beating becomes crippling blows. Distinct from
+    -- the combat *flag* below, which is a fight somewhere near us and the user's setting to
+    -- weigh: this is a fight ON us, and no setting makes sitting through it right.
+    if Combat.IsUnderAttack() then
+        return "something is attacking us"
     end
 
     -- a cast we did not start, or one from a state that has been starving us since it began: either
@@ -364,8 +378,8 @@ function RestState.Init()
         phrase = RestState.eventIds.restCombat,
         summary = "Turns resting during a fight on or off",
         about = {
-            "Only ever covers a fight this character has not joined: being engaged stops it",
-            "resting whatever this is set to."
+            "Only ever covers a fight this character has not joined: being engaged, or being",
+            "fought by something, stops it resting whatever this is set to."
         },
         get = RestStateConfig.GetInCombat,
         set = RestStateConfig.SetInCombat
@@ -405,6 +419,7 @@ function RestState.Reset()
     RestState._.sitIsOurs = false
     RestState._.lastStandNotOursMs = nil
     RestState._.lastHoldMs = nil
+    RestState._.lastHoldReason = nil
     RestState._.isResting = false
     RestState._.holdReason = nil
 end
@@ -424,7 +439,10 @@ function RestState.Go()
 
     local hold = holdReason()
     RestState._.holdReason = hold
-    if hold ~= nil then RestState._.lastHoldMs = now end
+    if hold ~= nil then
+        RestState._.lastHoldMs = now
+        RestState._.lastHoldReason = hold
+    end
     local pools = RestState.GetPools()
 
     if posture == "SIT" then
@@ -469,8 +487,15 @@ function RestState.Go()
         return false
     end
 
+    -- Nothing short means nothing is being held back, and "standing by" is the whole story --
+    -- read before the hold on purpose, so a hold blinking around a character with full pools
+    -- cannot strobe the page between the two answers.
+    if not needsRest(pools) then
+        RestState._.holdReason = nil
+        return false
+    end
+
     if hold ~= nil then return false end
-    if not needsRest(pools) then return false end
 
     -- the group stopping for a moment mid-run is not a rest
     if RestState._.lastMovingMs ~= nil and now - RestState._.lastMovingMs < settleMs then
@@ -484,10 +509,15 @@ function RestState.Go()
     -- as long as the flicker lasts.
     if RestState._.lastHoldMs ~= nil then
         if now - RestState._.lastHoldMs < holdSettleMs then
-            RestState._.holdReason = "the reason we got up has only just gone"
+            -- Report the hold itself, not the window. As far as this state is concerned the
+            -- reason is in force until it has stayed away, and publishing anything else --
+            -- the reason one pass, a sentence about its absence the next -- strobes the page
+            -- at every flicker of a signal this window exists to ride out.
+            RestState._.holdReason = RestState._.lastHoldReason
             return false
         end
         RestState._.lastHoldMs = nil
+        RestState._.lastHoldReason = nil
     end
 
     -- Somebody put this character on its feet. Whoever it was had a reason -- and if the reason
