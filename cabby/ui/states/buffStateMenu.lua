@@ -64,13 +64,15 @@ local function DrawClassPicker(liveAction)
     end
 end
 
----What makes a buff slot a *buff* slot, drawn under the action itself: who it is for, and which
----classes are worth spending it on. What the spell can be aimed at, and how long it lasts, are
----the spell's own business and are only reported.
----@param liveAction Action
+---What makes a buff slot a *buff* slot, drawn under the action itself: who it is for, which
+---classes are worth spending it on, and how close to fading is too close. What the spell can be
+---aimed at, and how long it lasts, are the spell's own business and are only reported.
+---@param liveAction Action what the controls here write to
+---@param shownAction Action what the row is currently holding -- the staged pick while it is being
+---edited -- which is what the spell is read from
 ---@param buffState BuffState
-local function DrawBuffFields(liveAction, buffState)
-    local facts = buffState.DescribeSlot(liveAction)
+local function DrawBuffFields(liveAction, shownAction, buffState)
+    local facts = buffState.DescribeSlot(shownAction or liveAction)
 
     if facts.scoped then
         ImGui.SetNextItemWidth(110)
@@ -89,6 +91,13 @@ local function DrawBuffFields(liveAction, buffState)
         DrawClassPicker(liveAction)
         ImGui.SameLine()
     end
+
+    ImGui.SetNextItemWidth(110)
+    local rebuff, rebuffChanged = ImGui.DragInt("##rebuff", BuffStateConfig.GetRebuffSecs(liveAction), 5, 0, 3600, "rebuff at %ds")
+    if rebuffChanged then
+        BuffStateConfig.SetRebuffSecs(liveAction, rebuff)
+    end
+    ImGui.SameLine()
 
     if facts.problem ~= nil then
         ImGui.TextColored(1, 0.8, 0.2, 1, facts.problem)
@@ -163,15 +172,6 @@ function BuffStateMenu.BuildMenu(buffState)
         ImGui.Dummy(0, 0)
         ImGui.SameLine()
 
-        ImGui.SetNextItemWidth(70)
-        local rebuff, rebuffChanged = ImGui.DragInt("Rebuff under (s)", BuffStateConfig.GetRebuffSecs(), 5, 0, 3600)
-        if rebuffChanged then
-            BuffStateConfig.SetRebuffSecs(rebuff)
-        end
-        ImGui.SameLine()
-        CommonUI.HelpMarker("A buff is recast once this much time or less is left on it. 0 waits for it to fade completely.")
-
-        ImGui.SameLine()
         -- nothing here talks to the client, so it is safe from a render callback
         if ImGui.Button("Check everybody now", 150, 21) then
             buffState.Recheck()
@@ -187,13 +187,16 @@ function BuffStateMenu.BuildMenu(buffState)
         if ImGui.BeginTabItem("Buffs") then
             ImGui.TextDisabled("Cast in order, top to bottom: the first buff somebody is missing is the one that goes out.")
             ImGui.SameLine()
-            CommonUI.HelpMarker("Each row is a buff, who it is for, and which classes are worth spending it on. Whether it lands on the group, on a pet or on one person at a time is the spell's own business and is shown rather than set. Only memorized spells are used, so keep the ones you rely on on the spell bar.")
+            CommonUI.HelpMarker("Each row is a buff, who it is for, which classes are worth spending it on, and how much time may be left on it before it is recast -- rebuffing early keeps it from ever actually fading, and a buff shorter than that headroom is recast at half its own duration instead. Whether it lands on the group, on a pet or on one person at a time is the spell's own business and is shown rather than set. Only memorized spells are used, so keep the ones you rely on on the spell bar.")
 
             local actions = BuffStateConfig.GetActions()
             local availableActions = AvailableActions.new()
-            -- what this character can buff with: the beneficial half of the book, plus the AAs and
-            -- clickies that hold as many buffs as the book does
-            availableActions.spells = Spells.beneficial
+            -- what this character can buff with: the spells the book files under a buff heading,
+            -- plus the AAs and clickies that hold as many buffs as the book does. The rest of the
+            -- beneficial half is a switch away in the picker, for a buff filed somewhere
+            -- unexpected.
+            availableActions.spells = Spells.buffs
+            availableActions.allSpells = Spells.beneficial
             availableActions.aas = AAs.all
             availableActions.items = Items.all
 
@@ -203,7 +206,7 @@ function BuffStateMenu.BuildMenu(buffState)
 
             local extras = {
                 height = extrasHeight,
-                draw = function(liveAction) DrawBuffFields(liveAction, buffState) end
+                draw = function(liveAction, shownAction) DrawBuffFields(liveAction, shownAction, buffState) end
             }
 
             for index, action in ipairs(actions) do

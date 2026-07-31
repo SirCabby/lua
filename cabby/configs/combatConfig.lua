@@ -68,6 +68,23 @@ local function initAndValidate()
         taint = true
     end
 
+    -- On by default for the same reason: it costs nothing where it does not apply. Only a
+    -- character something is actually coming for says anything, only the main tank acts on what
+    -- is said, and the reports stop by themselves once the tank takes the mob's hate.
+    if configRoot.call_defend == nil then
+        configRoot.call_defend = true
+        taint = true
+    end
+
+    -- On by default, and on the same reasoning: it costs nothing where it does not apply. Only a
+    -- character that is *not* the group's main tank, in a group that has named one, holding the
+    -- top of the hate list of the very mob the tank should be holding, ever eases off anything --
+    -- which is the moment it exists for. A group with no tank named never sees it.
+    if configRoot.ease_off == nil then
+        configRoot.ease_off = true
+        taint = true
+    end
+
     -- The four below are one driving style -- the player's own client running the group -- and
     -- all default off, unlike call_assist: engage_on_attack turns a keypress into an order to
     -- charge, assist_on_engage speaks with no role gate in front of it, and the two disengage
@@ -134,6 +151,30 @@ function CombatConfig.SetCallAssist(enable)
     getConfigSection().call_assist = enable == true
     Global.configStore:SaveConfig()
     print("Calling the assist is Enabled: [" .. tostring(enable) .. "]")
+end
+
+---@return boolean callDefend whether beatings this character cannot shed are called out for the tank
+function CombatConfig.GetCallDefend()
+    return getConfigSection().call_defend
+end
+
+---@param enable boolean
+function CombatConfig.SetCallDefend(enable)
+    getConfigSection().call_defend = enable == true
+    Global.configStore:SaveConfig()
+    print("Calling for defense is Enabled: [" .. tostring(enable) .. "]")
+end
+
+---@return boolean easeOff whether damage is held back while we hold the mob the tank should have
+function CombatConfig.GetEaseOff()
+    return getConfigSection().ease_off
+end
+
+---@param enable boolean
+function CombatConfig.SetEaseOff(enable)
+    getConfigSection().ease_off = enable == true
+    Global.configStore:SaveConfig()
+    print("Easing off what we pull off the main tank is Enabled: [" .. tostring(enable) .. "]")
 end
 
 ---@return boolean engageOnAttack whether the attack toggle turning on engages the target as an order

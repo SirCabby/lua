@@ -53,6 +53,18 @@ local orderTimeoutMs = 10000
 ---rather than a give-up -- the target is reconsidered the moment it runs out.
 local retryAfterFailureMs = 3000
 
+---Where a slot's heal can be aimed, read off the spell rather than configured -- the same model
+---the buff state uses, and for the same reason: what a spell can land on is what it is, and
+---asking the user to say so is one more thing to get wrong.
+local aims = {
+    self = "self",     -- only ever lands on the caster
+    pet = "pet",       -- only ever lands on this character's pet
+    group = "group",   -- one cast covers the whole group and needs no target
+    single = "single"  -- one person at a time
+}
+
+local petTargetTypes = { ["pet"] = true, ["pet2"] = true }
+
 ---Keeping a group alive.
 ---
 ---One ordered list of heal slots decides everything (see `HealStateConfig`): who a slot is for,
@@ -60,6 +72,10 @@ local retryAfterFailureMs = 3000
 ---who is worst off, which slot fits them, and whether the heal already in the air is still the
 ---right heal -- because the casting service does the casting and the priority chain does the
 ---holding-everything-else-back.
+---
+---What a slot can be aimed at is not part of that configuration: the group heal, the self heal
+---and the pet heal are read off the spell (`aims` below), which is what lets one list serve a
+---cleric keeping six people up and a magician keeping one pet up.
 ---
 ---What it deliberately leaves out: heal-over-time management, cures, rezzes, and any awareness of
 ---what other healers in the group are doing. Those need a band of their own, a debuff model, or
@@ -211,24 +227,56 @@ end
 
 ---------------- Choosing a heal --------------------
 
----@param slot Action
----@param candidate HealCandidate
----@return boolean applies whether this slot is meant for this person
-local function scopeAllows(slot, candidate)
-    local scope = HealStateConfig.GetScope(slot)
-    if scope == HealStateConfig.scopes.Self.value then return candidate.isSelf end
-    if scope == HealStateConfig.scopes.Others.value then return not candidate.isSelf end
-    if scope == HealStateConfig.scopes.Tank.value then return candidate.isTank end
-    return true
+---What a heal can land on, read off the spell.
+---
+---A pet heal is the reason this is not simply "does it need a target": EQ aims one at the pet
+---with nothing targeted, exactly as it aims a group heal at the group, so the two are
+---indistinguishable by `NeedsTarget` alone -- and a pet class's only heal would have been chosen
+---for the group and cast because three people were scuffed.
+---@param subject CastSubject
+---@return string aim one of `aims`
+local function aimOf(subject)
+    local targetType = subject:TargetType()
+    if petTargetTypes[targetType] then return aims.pet end
+    if targetType == "self" then return aims.self end
+    -- everything else that aims itself covers the group: Group v1/v2, and the point-blank and
+    -- targeted AE heals that land on whoever is standing with us
+    if not subject:NeedsTarget() then return aims.group end
+    return aims.single
 end
 
----A slot whose spell heals the group rather than a target. Read off the spell itself rather than
----configured: a group heal is what it is, and asking the user to say so is one more thing to get
----wrong.
----@param action ActionType
----@return boolean isGroupHeal
-local function isGroupHeal(action)
-    return action.Subject ~= nil and not action:Subject():NeedsTarget()
+---@param action ActionType|nil
+---@return string? aim nil for an action this state cannot heal with at all
+local function aimOfAction(action)
+    -- casts only: this state polls the cast it started, which a skill or a discipline has no
+    -- equivalent of. Only casts are offered on the page; this is for a config edited by hand.
+    if action == nil or action.Subject == nil then return nil end
+    return aimOf(action:Subject())
+end
+
+---Is this slot meant for this person?
+---
+---Where the heal can be aimed comes first and scope cannot argue with it: a pet heal is for the
+---pet whatever the slot says, and a self heal is for us. Scope narrows what is left over, which
+---is the heals that could go to more than one person.
+---@param slot Action
+---@param aim string one of `aims`
+---@param candidate HealCandidate
+---@return boolean applies
+local function appliesTo(slot, aim, candidate)
+    if aim == aims.self then return candidate.isSelf end
+    if aim == aims.pet then return candidate.isPet end
+
+    local scope = HealStateConfig.GetScope(slot)
+    if scope == HealStateConfig.scopes.Self.value then return candidate.isSelf end
+    if scope == HealStateConfig.scopes.Pet.value then return candidate.isPet end
+    if scope == HealStateConfig.scopes.Tank.value then return candidate.isTank end
+    -- a pet is not one of the others: "anyone else" is the rest of the group, and a pet has a
+    -- scope of its own to be picked out with
+    if scope == HealStateConfig.scopes.Others.value then
+        return not candidate.isSelf and not candidate.isPet
+    end
+    return true
 end
 
 ---@param candidate HealCandidate
@@ -266,11 +314,11 @@ local function wouldChoose(candidate)
     if isHeldOff(candidate) or isSettling(candidate) then return false end
 
     for _, slot in ipairs(HealStateConfig.GetActions()) do
-        if candidate.pct <= HealStateConfig.GetThreshold(slot) and scopeAllows(slot, candidate) then
-            local action = Action.GetActionType(slot)
+        if candidate.pct <= HealStateConfig.GetThreshold(slot) then
+            local aim = aimOfAction(Action.GetActionType(slot))
             -- a group heal is chosen for the group, so it is not a reason to drop somebody's heal
-            if action ~= nil and Action.IsEnabled(slot) and not isGroupHeal(action)
-                and Action.GetLuaResult(slot) then
+            if aim ~= nil and aim ~= aims.group and appliesTo(slot, aim, candidate)
+                and Action.IsEnabled(slot) and Action.GetLuaResult(slot) then
                 return true
             end
         end
@@ -294,7 +342,9 @@ end
 ---@class HealPick
 ---@field action ActionType
 ---@field slot Action
----@field targetId number|nil nil for a group heal, which needs no target
+---@field targetId number|nil what the cast should target; nil for a heal that aims itself
+---@field forId number|nil who the heal is for, which a heal that aims itself still has; nil only
+---for a group heal, which is for everybody
 ---@field name string what is being healed, for status output
 ---@field threshold number the health the slot was chosen for
 
@@ -337,11 +387,14 @@ end
 local function chooseGroupHeal()
     for _, slot in ipairs(HealStateConfig.GetActions()) do
         local action = Action.GetActionType(slot)
-        if action ~= nil and isGroupHeal(action) then
+        if aimOfAction(action) == aims.group then
             local threshold = HealStateConfig.GetThreshold(slot)
             if countAtOrBelow(threshold) >= HealStateConfig.GetGroupMin(slot) then
                 if readySlotAction(slot, HealState.CastRequest()) ~= nil then
-                    return { action = action, slot = slot, targetId = nil, name = "the group", threshold = threshold }
+                    return {
+                        action = action, slot = slot, targetId = nil, forId = nil,
+                        name = "the group", threshold = threshold
+                    }
                 end
             end
         end
@@ -358,20 +411,30 @@ local function chooseFor(candidate, ignoreThreshold)
         local threshold = HealStateConfig.GetThreshold(slot)
         local covers = ignoreThreshold or candidate.pct <= threshold
 
-        if covers and scopeAllows(slot, candidate) then
+        -- the health first, and the action only for a slot that passes it: resolving one is a walk
+        -- through the spellbook, and this runs per slot per person every pass
+        if covers then
             local action = Action.GetActionType(slot)
+            local aim = aimOfAction(action)
+
             -- a group heal is chosen for the group, never for one person
-            if action ~= nil and not isGroupHeal(action) then
-                if readySlotAction(slot, HealState.CastRequest(candidate.id)) ~= nil then
+            if aim ~= nil and aim ~= aims.group and appliesTo(slot, aim, candidate) then
+                -- a heal that aims itself is cast at nobody: EQ puts a self heal on us and a pet
+                -- heal on our pet with nothing targeted, and targeting for one of those would drop
+                -- whatever we were looking at to no purpose
+                local targetId = aim == aims.single and candidate.id or nil
+
+                if readySlotAction(slot, HealState.CastRequest(targetId)) ~= nil then
                     return {
                         action = action,
                         slot = slot,
-                        targetId = candidate.id,
+                        targetId = targetId,
+                        forId = candidate.id,
                         name = candidate.name,
-                        -- what "they no longer need this" means for this heal. Normally the
-                        -- health the slot was written for; for an order, the health they were
-                        -- at when it was given, since the slot's threshold was not what chose
-                        -- it and would call the heal off before it left the ground.
+                        -- what "they no longer need this" means for this heal. Normally the health
+                        -- the slot was written for; for an order, the health they were at when it
+                        -- was given, since the slot's threshold was not what chose it and would
+                        -- call the heal off before it left the ground.
                         threshold = ignoreThreshold and math.max(threshold, candidate.pct) or threshold
                     }
                 end
@@ -481,6 +544,77 @@ function HealState.GetCandidates()
     return HealState._.candidates
 end
 
+---Which scopes a slot holding this may be given.
+---
+---A spell that can only land on one kind of person has already answered the question scope asks,
+---so there is exactly one answer to offer -- and offering the others would be offering settings
+---that do nothing, which is how a pet heal comes to be scoped "the tank" and its owner to be
+---waiting for a heal that was never going to be chosen for one.
+---@param aim string one of `aims`
+---@return table scopes set of scope values, empty when there is nothing to scope at all
+local function scopesFor(aim)
+    if aim == aims.self then return { [HealStateConfig.scopes.Self.value] = true } end
+    if aim == aims.pet then return { [HealStateConfig.scopes.Pet.value] = true } end
+    -- a group heal lands on whoever is standing there; there is no choosing to be done
+    if aim == aims.group then return {} end
+
+    local all = {}
+    for _, known in pairs(HealStateConfig.scopes) do all[known.value] = true end
+    return all
+end
+
+---@class HealSlotFacts
+---@field aim string one of `aims`
+---@field aimText string what that means, in words
+---@field scopes table set of scope values this slot may be given; one entry means it is decided
+---@field isGroup boolean whether this slot is the one cast that covers everybody
+---@field problem string|nil why this slot will never fire, when it will not
+
+---What a configured slot amounts to, for whatever is showing it to a user. Everything here is
+---read off the spell rather than configured, so it is also the answer to "why is this one not
+---firing" -- which is otherwise a silent puzzle.
+---@param slot Action
+---@return HealSlotFacts facts
+function HealState.DescribeSlot(slot)
+    local facts = {
+        aim = aims.single,
+        aimText = "one at a time",
+        scopes = scopesFor(aims.single),
+        isGroup = false,
+        problem = nil
+    }
+
+    -- a row being filled in has nothing to report yet, and "this character does not have it" is a
+    -- strange thing to say about a spell nobody has picked
+    if slot.name == nil or slot.name == "" then return facts end
+
+    local action = Action.GetActionType(slot)
+    if action == nil then
+        facts.problem = "this character does not have it"
+        return facts
+    end
+    if action.Subject == nil then
+        facts.problem = "only spells, clickies and AAs can heal"
+        return facts
+    end
+
+    facts.aim = aimOf(action:Subject())
+    facts.aimText = ({
+        [aims.self] = "on me",
+        [aims.pet] = "on my pet",
+        [aims.group] = "on the group, in one cast",
+        [aims.single] = "one at a time"
+    })[facts.aim]
+    facts.scopes = scopesFor(facts.aim)
+    facts.isGroup = facts.aim == aims.group
+
+    if facts.aim == aims.pet and not HealStateConfig.GetHealPets() then
+        facts.problem = "'Heal my pet' is off, so this never fires"
+    end
+
+    return facts
+end
+
 ---Start the heal this pass decided on.
 ---@param pick HealPick
 ---@return boolean isBusy
@@ -494,7 +628,9 @@ local function startHeal(pick)
 
     DebugLog("Healing [" .. pick.name .. "] with [" .. pick.action:Name() .. "]")
     HealState._.castId = castId
-    HealState._.healTarget = { id = pick.targetId, name = pick.name, spell = pick.action:Name() }
+    -- who it is for, not what the cast targets: a pet heal aims itself, and the settle window and
+    -- the abandon check are both about the person whose health this was chosen for
+    HealState._.healTarget = { id = pick.forId, name = pick.name, spell = pick.action:Name() }
     HealState._.healSlot = pick.slot
     HealState._.healThreshold = pick.threshold
     return true
@@ -688,7 +824,13 @@ function HealState.Init()
         key = HealState.key,
         phrase = HealState.eventIds.healGroup,
         summary = "Turns healing the rest of the group on or off",
-        about = { "Off heals nobody but this character (and its pet, if that is on)." },
+        about = {
+            "Whether group members are somebody this character heals at all.",
+            "Off watches nobody but this character (and its pet, if that is on), so a",
+            "group-mate at 10% is left to somebody else.",
+            "Not about group heal spells: one of those is cast because enough of the people",
+            "being watched are hurt, so this changes what is counted, not whether it is used."
+        },
         get = HealStateConfig.GetHealGroup,
         set = HealStateConfig.SetHealGroup
     })

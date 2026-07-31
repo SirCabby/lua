@@ -30,9 +30,14 @@ local Unsticker = require("utils.Movement.Unsticker")
 ---   trail: the leg into it is not walkable, so on reaching it we stand and wait rather than
 ---   walk a line the leader never walked (see `Pulse`)
 --- - every pulse drops the trail through the furthest waypoint we are standing on, wherever
----   in the trail it is, and holding at the target retires the whole route that got us there
----   -- which is what keeps the trail draining instead of stockpiling the leader's camp
----   wander and replaying it drunk when they leave
+---   in the trail it is
+--- - standing on a waypoint means being inside `waypointGap` of it or having run past it;
+---   being merely *near* one we are still running at is not reaching it (see `PopReached`)
+--- - a route that comes back to itself has the loop cut out of it, which is what keeps the
+---   leader's camp wander from stockpiling while we are parked (see `PruneLoop`)
+--- - standing at the target clears a warp seam and nothing else; what is *between* us and them
+---   is the part of their route that is not history yet, and it is what we walk when they
+---   move off (see `ClearSeams` and the hold branch of `Pulse`)
 --- - a backward jog the trail makes right where we stand (a laggy link records the target
 ---   rubber-banding) is skipped by arc rather than replayed -- see `TrimBacktrack`
 --- - a big jump in our own position (summon, port, gate) invalidates the trail entirely
@@ -55,9 +60,22 @@ local doorDistance = 12
 local doorArcDegrees = 50
 -- how far from a warp seam we stand and wait, rather than walk a leg nobody walked
 local warpWaitDistance = 50
--- cap on how much one pulse of our own travel can widen the reached radius: comfortably past
--- any honest pulse of running, small enough that one hitch cannot swallow a real corner
-local reachTravelCap = 20
+-- cap on how much of one pulse of our own travel counts as having run past a waypoint:
+-- comfortably past any honest pulse of running, small enough that one hitch cannot swallow a
+-- whole corner leg
+local passedTravelCap = 20
+-- heading error at which a waypoint is back the way we came rather than ahead of us
+local passedArcDegrees = 90
+-- How much of one pulse of running counts as standing on a breadcrumb (see Pulse). Both edges of
+-- this are failure modes, and a corridor harness swept over corner shapes, start offsets and
+-- speeds (2026-07) puts the floor of the bowl at 0.75:
+--  - too wide (1.0 and up) is a radius that reaches the far side of a corner apex, so corners are
+--    clipped; by 1.5 it is the travel-widened reach that wedged followers on corners outright
+--  - too narrow (0.5 and down) is a pop scan that cannot keep up with the ground we cover: the
+--    breadcrumbs we walk over are missed instead of retired, the trail drains at the one a pulse
+--    `PassedHead` can manage, and a follower steering at breadcrumbs it has long since passed
+--    stops making sense of its own route
+local gapTravelScale = 0.75
 -- how far past a backtracking head the arc trim looks, how much of that is judged by the
 -- looser arc, and the arcs themselves (degrees half-width; the far stretch must be squarely
 -- ahead). These are MQ2AdvPath's ClearLag numbers with its 512-unit angles read as degrees.
@@ -76,8 +94,8 @@ end
 ---@param options? table
 --- - distance: how close we close to the spawn, default 10
 --- - resumeDistance: how far the spawn gets before we close it again, default distance
---- - sampleDistance: how far the spawn moves before a new waypoint, default 5
---- - waypointGap: how close counts as reaching a waypoint, default 5
+--- - sampleDistance: how far the spawn moves before a new waypoint, default 3
+--- - waypointGap: how close counts as reaching a waypoint, default 3
 --- - maxWaypoints: trail cap, oldest dropped first, default 250
 --- - warpDistance: a jump in the spawn's position larger than this is recorded as a warp
 ---   seam rather than a leg to walk, default 100
@@ -109,8 +127,19 @@ function Follow.new(spawnId, options)
     -- the gap last pulse, and how fast it is closing, which is what we aim the stop with
     self._.lastDistance = nil
     self._.closing = 0
-    self._.sampleDistance = options.sampleDistance or 5
-    self._.waypointGap = options.waypointGap or 5
+    -- How finely the leader's route is recorded, and the closest we ever require to have walked
+    -- it. A corner only exists in the trail if a breadcrumb landed near its apex, and the follower
+    -- only walks the corner if it has to reach that breadcrumb rather than clip past it -- so
+    -- these are one setting in two halves and neither is worth moving alone. Tightened from 5
+    -- (2026-07, at the user's direction: followers were catching corners in dungeon halls).
+    --
+    -- `waypointGap` is the floor rather than the whole answer: the gap in force is scaled to how
+    -- far we are actually travelling per pulse (see Pulse), because standing on a breadcrumb is
+    -- not a distance a character moving 11 units a frame can hold to. The floor is what a
+    -- standstill and a creep get, and it is never wider than the spacing -- a route recorded more
+    -- finely than it is walked is a route not walked.
+    self._.sampleDistance = options.sampleDistance or 3
+    self._.waypointGap = math.min(options.waypointGap or 3, self._.sampleDistance)
     self._.maxWaypoints = options.maxWaypoints or 250
     self._.warpDistance = options.warpDistance or 100
     self._.openDoors = options.openDoors ~= false
@@ -181,6 +210,66 @@ function Follow:PushWaypoint(y, x, z, warp)
     end
 end
 
+---Cut the loop out of a route that has come back to itself.
+---
+---A target standing at a breadcrumb they already left has walked a loop, and nobody needs to walk
+---a loop: the camp wander around a parked follower, the pacing sentry, the two-step rubber-band a
+---laggy link records. So the excursion between the breadcrumb they are back on and the newest one
+---is dropped, and the route resumes from the one they returned to.
+---
+---This is the only thing keeping the trail short while we are parked, now that arriving retires
+---the route once instead of every pulse -- and unlike a retire it cannot invent a shortcut. The
+---join it leaves is between two points a breadcrumb apart, so what is left is always a stretch of
+---the route the target actually walked, never a line across the middle of one. That is the whole
+---reason the test is "are they back *on* a breadcrumb" rather than anything about distance to us:
+---the follower's position says nothing about which of the target's ground is walkable.
+---
+---A seam in the dropped stretch stops it. Everything after a warp is on the far side of a jump,
+---and rejoining across one would claim a leg nobody walked -- the one thing this must never do.
+---@param y number
+---@param x number
+---@param z number
+function Follow:PruneLoop(y, x, z)
+    -- oldest first: the earliest breadcrumb they are back on cuts the biggest loop
+    for i = self._.first, self._.last - 1 do
+        local waypoint = self._.trail[i]
+        if Geometry.Distance3D(y, x, z, waypoint.y, waypoint.x, waypoint.z) <= self._.sampleDistance then
+            for j = i + 1, self._.last do
+                if self._.trail[j].warp then return end
+            end
+
+            DebugLog("Follow target came back to a breadcrumb, cutting " ..
+                tostring(self._.last - i) .. " waypoints of loop")
+            for j = i + 1, self._.last do
+                self._.trail[j] = nil
+            end
+            self._.last = i
+            return
+        end
+    end
+end
+
+---Drop the trail through the newest warp seam, for a follower standing at the target.
+---
+---A seam says the leg into it is a jump nobody walked, which is why the trail is walked *to* one
+---and no further. Being at the target settles that question a different way: however they got
+---there and however we got here, we are together, so every jump their route records is behind us.
+---This is the one thing being parked genuinely proves, and the only thing it is allowed to retire.
+function Follow:ClearSeams()
+    local newest = nil
+    for i = self._.first, self._.last do
+        if self._.trail[i].warp then newest = i end
+    end
+    if newest == nil then return end
+
+    DebugLog("Standing with the follow target, clearing " ..
+        tostring(newest - self._.first + 1) .. " waypoints through their last warp")
+    for i = self._.first, newest do
+        self._.trail[i] = nil
+    end
+    self._.first = newest + 1
+end
+
 ---Extend the trail when the spawn has moved far enough from the last breadcrumb
 ---@param spawn spawn
 function Follow:Record(spawn)
@@ -188,6 +277,10 @@ function Follow:Record(spawn)
     local x = spawn.X()
     local z = spawn.Z()
     if y == nil or x == nil or z == nil then return end
+
+    -- before measuring against the newest breadcrumb, because a target back on an old one has no
+    -- new route to record: the loop cut leaves them standing on the head of the trail again
+    self:PruneLoop(y, x, z)
 
     local last = self._.trail[self._.last]
     if last == nil then
@@ -211,29 +304,36 @@ end
 ---scan is the whole trail rather than a window because staleness is not local -- a target who
 ---wanders around a parked follower, or ports away and later walks back past us, leaves the
 ---fresh part of the trail joined at our feet and the stale part somewhere else entirely, and
----skipping to the join is the only honest reading. The head waypoint alone is also tested
----against `reach`: at speed one pulse covers real ground, and a waypoint we will be past by
----the time the next decision lands has been reached (the same actuation lag
----`Locomotion.leadPulses` exists for -- a fixed radius orbits at background frame rates).
+---skipping to the join is the only honest reading.
 ---
 ---Standing on a waypoint is a 3D fact. Measured flat, the breadcrumb three units away but
 ---thirty below -- the ledge hop, the bottom of the ramp we are at the top of -- reads as
 ---reached, and dropping it skips the one place the leader's route went *down*: the follower
 ---aims past the descent point and walks off whatever the leader climbed down. Cut corners in
 ---trail mode traced back to exactly this.
+---
+---One waypoint is reachable without being stood on: the head, when we have already run past it
+---(`PassedHead`). Overshooting is what a background frame rate does to a fixed radius -- a pulse
+---covers real ground, and a waypoint stepped over from five units short to five units long is
+---never inside its radius, so it is faced again, run back to, and orbited.
 ---@param myY number
 ---@param myX number
 ---@param myZ number
----@param reach number reached radius for the head waypoint; the rest use waypointGap
+---@param gap number how close counts as standing on a waypoint this pulse
+---@param passedRadius number how far past the head waypoint one pulse could have carried us
 ---@return number popped how many waypoints were dropped
-function Follow:PopReached(myY, myX, myZ, reach)
+function Follow:PopReached(myY, myX, myZ, gap, passedRadius)
     local reached = nil
     for i = self._.first, self._.last do
         local waypoint = self._.trail[i]
-        local radius = i == self._.first and reach or self._.waypointGap
-        if Geometry.Distance3D(myY, myX, myZ, waypoint.y, waypoint.x, waypoint.z) <= radius then
+        if Geometry.Distance3D(myY, myX, myZ, waypoint.y, waypoint.x, waypoint.z) <= gap then
             reached = i
         end
+    end
+    -- asked only when nothing was stood on, both because a later waypoint already covers the
+    -- head and because this is the branch that reads our heading
+    if reached == nil and self:PassedHead(myY, myX, myZ, passedRadius) then
+        reached = self._.first
     end
     if reached == nil then return 0 end
 
@@ -243,6 +343,38 @@ function Follow:PopReached(myY, myX, myZ, reach)
     end
     self._.first = reached + 1
     return popped
+end
+
+---Whether the head waypoint is behind us: run past rather than run up to.
+---
+---Overshoot is the one thing a fixed reached-radius cannot see, and the first fix for it was to
+---widen that radius by our own per-pulse travel. That is what a follower cutting corners looks
+---like from the inside: at background frame rates the widened radius reached tens of units, so
+---the breadcrumb sitting *on* the corner was retired while we were still a hallway short of it,
+---the aim moved to the waypoint around the corner, and the follower drove into the wall between
+---them -- the corner apex being exactly where a trail follow can least afford to steer early.
+---Distance was never the question. A waypoint dead ahead has not been reached however close it
+---is; one behind us has been, however we got there. So this asks direction, and asks it only
+---within the ground one pulse could have covered -- a waypoint far behind us is not an overshoot,
+---it is us being off the route, and the way back onto the route is to walk to it.
+---
+---Our heading is the reading it is because of when this is asked: at the top of a pulse we are
+---still facing wherever last pulse aimed us, which was this waypoint (`Pulse` calls `FaceLoc`
+---after this). So a head that now reads as behind us is one we ran through.
+---@param myY number
+---@param myX number
+---@param myZ number
+---@param radius number how far past it one pulse could have carried us
+---@return boolean passed
+function Follow:PassedHead(myY, myX, myZ, radius)
+    if radius <= 0 then return false end
+
+    local head = self._.trail[self._.first]
+    if head == nil then return false end
+    if Geometry.Distance3D(myY, myX, myZ, head.y, head.x, head.z) > radius then return false end
+
+    local toHead = Geometry.HeadingTo(myY, myX, head.y, head.x)
+    return math.abs(Geometry.HeadingDiff(Locomotion.GetHeading(), toHead)) > passedArcDegrees
 end
 
 ---Skip a backward jog the trail makes right where we stand.
@@ -333,8 +465,20 @@ function Follow:Pulse()
     end
     self._.lastSelf = { y = myY, x = myX, z = myZ }
 
-    local reach = self._.waypointGap + math.min(reachTravelCap, travelled) * Locomotion.leadPulses
-    local popped = self:PopReached(myY, myX, myZ, reach)
+    -- Both reached tests are measured in the ground this pulse of running actually covered,
+    -- because that is the resolution the character has: a fixed radius means one thing to a
+    -- walker and another to a sprinting Sow'd bard, and it is the pulse of travel -- not the run
+    -- speed the client reports -- that says which. Travel is the honest number twice over: it is
+    -- already the frame rate, the lag and the wall we are pressed against, all folded in.
+    -- - `gap`: how close counts as standing on a breadcrumb, under a step so the trail is walked
+    --   rather than clipped, and floored at waypointGap for a standstill.
+    -- - `passedRadius`: how far past the head one pulse could already have carried us, the only
+    --   distance an overshoot can be hiding in (see PassedHead), leaning past a full pulse for
+    --   the actuation lag `Locomotion.leadPulses` exists for.
+    local pulseTravel = math.min(passedTravelCap, travelled)
+    local gap = math.max(self._.waypointGap, pulseTravel * gapTravelScale)
+    local passedRadius = pulseTravel * Locomotion.leadPulses
+    local popped = self:PopReached(myY, myX, myZ, gap, passedRadius)
 
     local spawn = mq.TLO.Spawn("id " .. tostring(self._.spawnId))
     local spawnExists = (spawn.ID() or 0) > 0
@@ -366,18 +510,25 @@ function Follow:Pulse()
         local holding = distance ~= nil and self:WithinHold(distance - closing * Locomotion.leadPulses)
         self._.holding = holding
         if holding then
-            -- Being at the leader retires the route that got us here, seams and all: the trail
-            -- restarts from the newest breadcrumb (theirs, where they stand), so what is
-            -- replayed on unpark is only where they go next -- never the camp wander they did
-            -- around us, and never a warp seam they have since walked back across. The hop
-            -- this leaves for unpark -- our parked spot to theirs -- is bounded by the hold
-            -- buffer, between two spots the group stood at together.
-            if self:TrailSize() > 1 then
-                for i = self._.first, self._.last - 1 do
-                    self._.trail[i] = nil
-                end
-                self._.first = self._.last
-            end
+            -- Standing with them retires a warp seam, and only a warp seam. Whatever jump their
+            -- route records, we are past it: we are next to them. Nothing else in the task can
+            -- clear one -- a seam is never walked over, so `PopReached` will not drop it -- and a
+            -- follower that unparks onto a stale seam stands at it waiting for a world that has
+            -- already changed.
+            --
+            -- What this used to do was retire the *whole* trail, every parked pulse, on the
+            -- reasoning that arriving makes everything before it history. It does not: their
+            -- route between us and them is exactly the part that is not history yet. Discarding
+            -- it as fast as it is recorded leaves nothing to steer at on unpark but wherever they
+            -- have already got to -- a blind straight line of up to `resumeDistance` through
+            -- whatever is in between. A follower that keeps catching up (a leader on foot, boxes
+            -- at the same speed or better) does that at every corner, and drives into the wall at
+            -- every corner (2026-07: 11 of 14 wedged runs in the corridor harness, and the last
+            -- two were this same retire firing while the leader was mid-corner). Parked is not a
+            -- reason to stop banking where they went; it is a reason to stop walking. What keeps
+            -- the trail short is what has always kept it short -- walking it (`PopReached`) --
+            -- plus their own loops coming out of it (`PruneLoop`).
+            self:ClearSeams()
             self._.warpWaiting = false
             Locomotion.ReleaseAll()
             self._.stuck:Reset()

@@ -22,6 +22,7 @@ cabby.lua
        ├─ CommandQueue.Init  — registers the command queue service (what UI presses run through)
        ├─ CabbyCasting.Init  — registers the casting service, its priority gate + /ccast
        ├─ CabbyMovement.Init — registers the movement service + /cmove
+       ├─ CabbyGiving.Init   — registers the giving service + /cgive
        ├─ Character.Init     — registers the discovery service + /crefresh
        ├─ Roles.Init         — registers /croles (who holds which job in the group)
        ├─ Combat.Init        — registers the engagement service, /cattack + the attack order
@@ -43,14 +44,19 @@ fall through until one of them finds something worth doing.
 
 **Services** run every frame regardless of which state is busy (`RegisterService`, anything
 with `key` + `Pulse()` and optionally `Stop()`). They are for work that cannot wait for its
-requesting state to get another turn. Five exist: **Movement**, which has to release its keys
+requesting state to get another turn. Seven exist: **Movement**, which has to release its keys
 on the frame its task ends rather than whenever FollowState next runs; **Casting**, whose whole
 point is that the caster is starving everything below it while the cast runs, so the cast has to
 progress without a turn of its own; **CommandQueue** (`commandQueue.lua`), which runs command
 lines pushed to it by callers that must not run commands themselves — every ImGui callback,
 hotbar buttons above all; **Character** (`character.lua`), which watches for the character
-gaining a level, an AA or a bag of clickies and re-reads what it can do; and **Combat**
-(`combat.lua`), which holds what we are fighting for the several states that fight it.
+gaining a level, an AA or a bag of clickies and re-reads what it can do; **Combat**
+(`combat.lua`), which holds what we are fighting for the several states that fight it; **Mobs**
+(`mobs.lua`), which holds what is *in* the fight — a wider question than Combat's and one several
+jobs need the same answer to, assembled from four angles including a sweep that has to be paced;
+and **Giving** (`utils/Giving`, wired by `giving.lua`), which walks the four commands and three
+waits that put an item in somebody else's hands, because a state that walked them itself would
+leave a give window standing open with an item in it the first time a fight took the frame away.
 
 This is a **priority-chain cooperative scheduler**: state order = priority; `Go()` returning
 `false` yields to lower states. The priority bands live in `classes/priorities.lua`:
@@ -65,8 +71,10 @@ This is a **priority-chain cooperative scheduler**: state order = priority; `Go(
 | 59 | Mez (in combat) | 119/129 | Buff / Rest (misc) |
 
 A bigger number is weaker. The gaps of ten are room for "the same job, but not as strongly":
-`Priorities.heal + 5` is a hybrid healing below the class that heals for a living. Classes
-name a band per state rather than ordering their `Register` calls by hand — see below.
+`Priorities.heal + 5` is a hybrid healing below the class that heals for a living — and a pet
+class keeping its own pet up, which is healing that must beat the nukes without pretending to be
+the group's. Classes name a band per state rather than ordering their `Register` calls by hand —
+see below.
 
 **Priority gates** (`RegisterPriorityGate`) are how a *service* is busy at a band. A state that
 yields hands the frame to whatever is below it, which is right for work that can be picked up
@@ -150,6 +158,9 @@ cabby/
   setup.lua           plugin checks, config init order, class dispatch (16-way if/elseif)
   character.lua       service: what this character has, discovered and kept current
   combat.lua          service: what this character is fighting; every state that fights reads it
+  mobs.lua            service: what is *in* the fight -- the engagement, the extended target
+                      window, the group's defend reports and a sweep for anything in combat
+                      stance nearby, merged into one roster that records which angle saw what
   roles.lua           reader: main tank / main assist, out of the group and raid windows
   travel.lua          the traveling core: follow/anchor orders, trail-follow, and following
                       through zone lines -- clicking a switch, or walking through after a target
@@ -159,18 +170,23 @@ cabby/
   stateMachine.lua    priority-chain loop + per-frame services + priority gates (instance class)
   movement.lua        wiring only: registers the movement service and /cmove
   casting.lua         wiring only: casting service, its priority gate, movement arbiter, /ccast
+  giving.lua          wiring only: registers the giving service and /cgive
   commandQueue.lua    service: runs command lines pushed from ImGui callbacks, a frame later
   character.lua       capability snapshot: which skills exist (primary/secondary/melee lists)
   status.lua          shared predicates (IsFacingTarget)
-  states/             baseState, fleeState, followState, meleeState, spellDpsState, healState,
-                      buffState, advLootState, restState
+  pet.lua             what the client will say about this character's pet, and the words it takes
+                      back (`/pet attack <id>`, back off, the four toggles); also what *kind* of
+                      pet it is (summoned, an enchanter's animation, or charmed) and which of
+                      those words it is listening for; no frames
+  states/             baseState, fleeState, followState, mezState, meleeState, spellDpsState,
+                      petDpsState, healState, buffState, petSetupState, advLootState, restState
   classes/            priorities (the bands), baseClass (assembly), classes (the registry),
                       and one profile per EQ class
   commands/           the chat-command bus (see below), incl. the toggle/action command factories
   configs/            per-domain config modules (see below)
   actions/            ActionType interface + implementations + registries
   ui/                 ImGui menu shell + per-domain panels (states/, actions/, hotbars)
-  utils/ (sibling)    Movement/ and Casting/ (see below), Time/Timer/StopWatch, Config,
+  utils/ (sibling)    Movement/, Casting/ and Giving/ (see below), Time/Timer/StopWatch, Config,
                       Debug/FlowTracer, FileSystem, Json, PriorityQueue (unused), Stack,
                       StringUtils, TableUtils
 ```
@@ -233,11 +249,39 @@ priests heal, and so do the three hybrids that can (PAL, RNG, BST) — but a ban
 (`Priorities.heal + 5`), which is the whole reason the bands are numbers: a paladin's heal has to
 land below a cleric's, and that is only checkable if both name the same band. A druid or shaman in
 a group with no cleric should tighten to the full band, which needs the runtime priority
-adjustment that does not exist yet. The twelve classes with a spellbook register **BuffState** at
+adjustment that does not exist yet. **HealState is also how a pet class keeps its pet up**, so MAG,
+NEC and SHD register it at the same `heal + 5` — pet heals are heals, and the heal state already
+had the aim model, the settle window and the reconsidering; a second state for them would be the
+same state with a smaller list. It is not a claim that a magician heals the group: what those slots
+hold is pet heals (the Renewal, Mending and Companion lines) and the empathy line a necromancer or
+a shadow knight spends its own health on, and the band puts them above the nukes for the same
+reason a paladin's heal is above its swing. A shadow knight has no *pet* heal — that line is
+MAG/NEC/BST — and an enchanter has no heal at all, which is why ENC is the one pet class left out:
+a page with nothing to put on it is not a capability. The twelve classes with a spellbook register **BuffState** at
 the buff band; the four with none (WAR, MNK, ROG, BER) do not, since a buff list holding nothing
-but clickies is not enough of a job to be a state. Everything
+but clickies is not enough of a job to be a state. **PetSetupState** goes to the six classes that
+keep a pet as a companion — MAG, NEC, BST, ENC, SHD and SHM — at `Priorities.buff - 1`, one band
+above buffing so that a pet is here, and holding what it is owed, before any mana goes on buffing
+one; a pet buff cast on a pet about to be replaced is a wasted gem timer. Those same six register
+**PetDpsState** at `Priorities.dps - 2`, because a pet is two jobs in two bands: keeping one is
+work done between fights, and using one is work done in a fight and above the rotation that would
+starve it. ENC is in both and out of
+the heal list for the same reason each way round: it has a pet to summon and no heal to give it.
+Three classes with pet spells are left out — a cleric's hammer, a wizard's sword and the druid's
+behest — and the line is what the pet is *for* rather than what the spell is: those are cast into a
+fight for the fight, which is a rotation slot, and the setup state does its work between fights by
+default. Any of them is one profile line away from having the page. Everything
 narrower than "can this class do this at all" — does it have bash, does it have taunt discs —
 stays where it already is, in `character.lua` and the action registries.
+
+**MezState is the first state registered at a band above dps that is not about damage at all**, and
+only the enchanter has it so far (`Priorities.mez`). It is a class judgment of exactly the kind this
+file makes: the state reads its whole list off the spellbook, so registering it costs a class with
+no mez nothing but a page it would never fill in — and the two other classes that genuinely mez are
+each one profile line away. The bard is deliberately not that line yet: a bard's mez is a song sung
+on the move with no cast bar and an instant refresh, which is a different shape of the same job and
+wants its own verification rather than an assumption. The necromancer's undead mez is the smaller
+gap of the two.
 
 Tanking currently rides inside MeleeState (the taunt and hate action lists), so the tank band
 is unused; when tanking splits out, the plate classes gain a second entry at
@@ -328,7 +372,8 @@ twice and still leave the checkbox as the one path that says nothing. MeleeState
 `stick`, `tanking`, and `bashoverride` for characters that can bash; Combat registers `autoengage`
 and `callassist`; HealState
 registers `healing`, `healgroup` and `healpets`; BuffState registers `buffing`, `buffgroup`,
-`buffpets` and `buffcombat`. Switches that have to call off work in progress
+`buffpets` and `buffcombat`; MezState registers `mezzing` and the Mobs service registers
+`mobsweep`. Switches that have to call off work in progress
 rather than only stopping new work go through the *state* rather than the config, so the
 checkboxes get the same behavior: `melee off` resets the state, `stick off` releases the stick
 Movement is still holding, `healing off` interrupts the heal in the air, and `resting off` stands
@@ -337,8 +382,8 @@ RestState registers `resting` and `restcombat`.
 
 **Action lists are commands too** (`commands/actionCommand.lua`). Any state with configured action
 slots gets `<phrase> <on | off | toggle> <part of an action's name>` from the same factory —
-`action` for the melee lists, `healaction` for the heal list, `nukeaction` and `buffaction` for
-theirs. Exact name wins; failing that every
+`action` for the melee lists, `healaction` for the heal list, `nukeaction`, `buffaction` and
+`mezaction` for theirs. Exact name wins; failing that every
 slot whose name contains the fragment is switched together, so they end up agreeing rather than in
 opposite states. `/chelp action` lists those slots with their current state, which is also what the
 button editor's docs pane shows while the command is picked, and the choices it offers are the
@@ -400,6 +445,11 @@ Design rules that matter when adding a caller:
   each state pokes. Keys get released the frame a task ends, and the pause gate (dead, bind,
   feign, stun, mez, charm, mid-cast for non-bards; stands up out of sit/duck) is enforced
   even while the state that asked for the move is starved.
+- **Rooted holds a stick without ending it.** A root is the world refusing the run, not a reason
+  to give the task up or to lean on the keys against it: `Stick` releases every key, keeps facing
+  the target (turning is the one thing a root leaves), and reports `blocked` until the root fades
+  — the pulse after it does is the one that runs. Follow and MoveTo still hold their keys through
+  a root; their stuck detectors just ignore the rooted stretch, so no unsticker flails.
 - **Requests never touch the client; only `Pulse()` does.** `Stick`/`Follow`/`MoveTo*`/`Stop`
   record intent, and `Locomotion` holds a desired-vs-applied key state that `Pulse()`
   reconciles. This matters because callers are not all on the main loop: the MeleeState menu
@@ -415,8 +465,8 @@ Design rules that matter when adding a caller:
   works around corners because it replays the trail the target actually walked. Real navmesh
   pathing remains out of scope (that is MQ2Nav's job).
 - **Follow holds a buffer zone, sticks and moves do not.** `Follow` takes two ranges — it closes
-  to `distance` (20 for `followme`/`followtarget`, comfortably outside melee range and deliberately
-  so) and then holds until the target is `resumeDistance` away (35), rather than re-closing the moment
+  to `distance` (13 for `followme`/`followtarget`, about melee range: close enough to feel like a
+  group) and then holds until the target is `resumeDistance` away (23), rather than re-closing the moment
   they take a step. The two are tuned together — what matters is the room between them, so moving
   one without the other either parks the group on the leader or thins the buffer to nothing. One threshold
   makes a follower a shadow, matching the target's every move to the inch, which is what being
@@ -425,6 +475,15 @@ Design rules that matter when adding a caller:
   readings, and FollowState asks `Movement.IsParked()` rather than measuring the distance itself.
   Nothing else inherits this — `m2m` is a `MoveTo` and still arrives exactly, and `Stick` holds
   its engage range for melee, where a buffer would be a swing missed.
+- **Parking stops the walking, not the recording.** The target's route while we sit is precisely the
+  part that is *not* history yet, so a parked follow keeps banking it and walks it when they move
+  off. All that being parked retires is a warp seam — standing with them is proof that a jump in
+  their past is behind us, and nothing else in the task can clear one. Retiring the whole trail on
+  every parked pulse is what this used to do, and it meant a group that keeps catching up (a leader
+  on foot, boxes at the same speed or better) had nothing left to steer at on unpark but wherever
+  the leader had already got to: a blind straight line of up to `resumeDistance` through whatever
+  was in between, which is a wall at every corner the leader walked around (2026-07 — it was the
+  single largest source of followers stuck on corners, ahead of the reached-radius above).
 - **The trail is the route, and the route is walked exactly** (2026-07, replacing beeline-on-sight
   at the user's direction — the `/afollow` model from MQ2AdvPath). `Follow` samples where the
   target has been into breadcrumbs and replays them corner for corner whether or not the target is
@@ -434,13 +493,29 @@ Design rules that matter when adding a caller:
   own position is used for arrival (the hold buffer above ends the replay wherever the trail
   happens to be) and as the destination once the trail runs out, nothing else. What keeps the
   replay from being the drunk walk that beelining was invented to avoid: every pulse the trail is
-  dropped through the furthest breadcrumb we are *standing on*, wherever in the trail it is, and
-  holding at the target retires the whole route that got us there — so the trail drains instead of
-  stockpiling camp wander, and a stale head reconnects the moment the target comes back to us or
-  their route crosses ours; a backward jog recorded off a rubber-banding
-  target is skipped by arc (MQ2AdvPath's ClearLag); and the radius that counts as "reached" widens
-  with our own per-pulse travel, so background frame rates do not orbit waypoints they can no
-  longer stop inside (the `leadPulses` actuation-lag reasoning applied to waypoints). A jump in
+  dropped through the furthest breadcrumb we are *standing on*, wherever in the trail it is — so it
+  drains as it is walked, and a stale head reconnects the moment the target comes back to us or
+  their route crosses ours; a route that comes back to itself has the loop cut out of it, so a
+  target circling a parked follower stockpiles about one lap and never more (`PruneLoop`, which can
+  only ever leave a stretch the target actually walked — the join it makes is a breadcrumb wide, so
+  unlike a retire it cannot invent a shortcut); a backward jog recorded off a rubber-banding
+  target is skipped by arc (MQ2AdvPath's ClearLag); and the head breadcrumb also counts as reached
+  once it is *behind* us, within the ground one pulse of running covers, so background frame rates
+  do not orbit a waypoint they stepped over (the `leadPulses` actuation-lag reasoning applied to
+  waypoints). That overshoot test used to be a radius widened by per-pulse travel instead, and at
+  background frame rates it reached tens of units: the breadcrumb sitting on a corner was retired
+  while the follower was still short of it, the aim moved to the breadcrumb around the corner, and
+  the follower drove into the wall between them — which is what "my followers keep getting stuck on
+  corners" turned out to be (2026-07). Distance was never the question; a waypoint dead ahead is not
+  reached however close it is. Breadcrumb spacing came down to 3 in the same pass, and the radius
+  that counts as standing on one is **scaled to the ground covered in a pulse** — 0.75 of it, floored
+  at 3 for a standstill — because a fixed radius means one thing to a walker and another to a
+  Sow'd bard, and per-pulse travel is the honest measure of which (it has the frame rate, the lag
+  and the wall you are pressed against already folded in, which `Me.Speed` does not). Both edges of
+  the scale are failure modes and the swept optimum sits between them: above 1.0 the radius reaches
+  the far side of a corner apex and clips it (1.5 is the wedging reach again), below 0.5 the pop
+  scan cannot keep up with the ground covered, so breadcrumbs are stepped over unretired and the
+  follower ends up steering at ones it passed long ago. A jump in
   the target's position too big to be walking is recorded as a **warp seam**: the follower walks
   the trail to the seam and parks there — `IsParked`, so resting works while waiting — rather than
   walking a leg nobody walked, and a target that is gone fails the task at the seam so Travel's
@@ -473,6 +548,7 @@ Casting.lua         the service: one cast, arbitration by priority, the floor, s
   Immobilizer.lua   "have we stopped moving long enough", including standing up and autorun
   CastOutcome.lua   why a cast ended, and the client lines that say so
   CastStatus.lua    idle | preparing | casting | succeeded | failed
+  ReagentNames.lua  what the items spells ask for are called (generated)
 ```
 
 Rules that matter when adding a caller:
@@ -519,6 +595,15 @@ Rules that matter when adding a caller:
   character asks first; MeleeState's stick goes through it. A cast weaker than the asker does
   not hold it back, because a buff that cannot be cast while the group is running is a buff that
   fails and says so, not a reason to stop following.
+- **A missing component is named, not numbered.** A cast whose expendable reagents are not in the
+  bags is refused before anything is spent, which matches what the server does with them (bank
+  copies do not count there either). Saying *which* item is harder than it sounds: a component is
+  an id in the spell data, and nothing in the client maps an id to a name on its own — `FindItem`
+  answers only for what we are carrying and `FindItemBank` only for what is in the bank, so the one
+  moment the name is needed is the one moment the client cannot supply it. Both are still asked
+  first, since between them they also say *where* the item is; behind them sits `ReagentNames`, a
+  generated id → name table covering every component id in the client's own spell file, and an id
+  is the last resort. "missing item 10015" is a puzzle; "missing Malachite" is a trip to a vendor.
 - **It never retries.** A fizzle or an interrupt is reported and the caller decides whether
   casting again is still the right thing to do; by then the mob may be dead or the heal no longer
   needed. MQ2Cast loops internally because a macro has nowhere else to put that decision. A state
@@ -551,8 +636,64 @@ cancels it. Settings (memorize gem, settle window, preparation budget) live in
 `configs/castingConfig.lua`, whose menu page also shows the live status.
 
 Callers today are `/ccast`, any configured action slot holding a spell, clicky or AA (see Action
-system below), and the three states that ask for casts directly: heal, spell dps and buff. Cure
-and mez do not exist yet.
+system below), and the five states that ask for casts directly: heal, spell dps, buff, pet and
+mez. Cure does not exist yet.
+
+**Mez is the caller that reads a result twice**, and it is worth knowing why before writing
+another one: a resist arrives *after* the cast bar closes, so the service reports the cast a
+success and refines that a beat later — which is what the note about reading `GetResult` on the
+frame after it first goes terminal is for. For every other caller the refinement is a nicety. For
+mez it is the whole of a feature: "it resisted" is the only way that state ever learns a mob needs
+a tash before a mez will stick, so it writes down what it thinks landed on the first terminal pass
+and takes the answer on the next, undoing the optimism if the answer changed.
+
+## Giving (`utils/Giving/`, wired by `cabby/giving.lua`)
+
+Putting an item into somebody else's hands, as a task requested and polled the way a cast is. It
+is the smallest of the three services and it exists for the same reason as the other two: the
+sequence is not one action, it is four commands with a wait on the client after each — get the
+item onto the cursor, get on the target, click on them, answer the window that opens — and a
+caller that walked it inside its own `Go()` would leave a give window standing open with an item
+in it the first time something above it took the frame away mid-sequence.
+
+```
+Giving.lua          the service: one hand-off at a time, request + poll by id
+  GiveTask.lua      the sequencer: validate → pick up → target → offer → hand over
+GiveStatus.lua      idle | preparing | giving | succeeded | failed
+```
+
+Rules that matter when adding a caller:
+
+- **One hand-off at a time, and the one in flight keeps it.** There is no priority to arbitrate
+  by here and an item halfway into a window is not something to interrupt for somebody else's, so
+  a second request is refused with a reason rather than queued. `StopFor(owner)` is how the caller
+  that owns one takes it back; `Stop()` is unconditional.
+- **Requests never touch the client; only `Pulse()` does** — the pick-up, the `/mqtarget`, the
+  click, the notify. Same rule as movement and casting, same reason.
+- **Every step is answered by the world, not by a delay.** The cursor either holds the item, the
+  target either took, the window is either open. What each step keeps is an *evidence window*: a
+  command that produced no visible change in a second and a half did not take, and the client has
+  nothing else to say about it. Those windows are the only clocks in here, and none of them runs
+  while something is actually happening.
+- **Both shapes of a give are handled.** On this client, clicking a spawn with an item on the
+  cursor opens `GiveWnd` and the Give button hands it over; a client that instead takes the item
+  straight off the cursor has simply finished early, and the offer step reads that as the success
+  it is.
+- **What the player put on the cursor is theirs.** A hand-off asked for while the cursor is loaded
+  with something else is refused rather than stowing it. A hand-off that *fails* puts back what it
+  moved, and in two parts, because the client answers on its own clock: the window is cancelled in
+  the frame it ends, and the item it gives back a frame or two later is watched for and
+  `/autoinventory`'d over the next few. An `/autoinventory` fired alongside the cancel would find
+  the cursor still empty and leave the item there — which is the mess this exists to avoid, since
+  a loaded cursor blocks looting and every later hand-off. A hand-off that *lands* stows nothing:
+  the item is with them, so anything of that id on the cursor afterwards is the player's.
+- **It decides nothing.** Whether the pet already has one of these, and whether handing one over
+  is worth doing, are the caller's questions and the caller's records — see the pet state. This
+  service knows about one item and one spawn.
+
+`/cgive <item name> [targetid|<#>]` drives it by hand and reports the outcome when it lands;
+`/cgive` alone reports what giving is doing and `/cgive off` cancels it. Callers today are `/cgive`
+and the pet state.
 
 ## Action system (`actions/`)
 
@@ -595,6 +736,15 @@ editing of these slots; `MeleeStateConfig` stores three lists (actions, taunt_ac
 hate_actions) with usage modes (always / as-needed / off), reachable as one set through
 `GetActionLists()`.
 
+The state's own per-slot controls (`ActionUI`'s `extras` hook: a heal's threshold and scope, a
+buff's rebuff point and classes) sit outside the staging in both directions. They **write** to the
+live action, like `enabled` below and for the same reason. They **read the chosen spell** from
+whichever action the row is currently showing — the staged edit while one is open, the live action
+otherwise — which is what `extras.draw(liveAction, shownAction)` hands them. Reading the live
+action for that was a real defect: picking a pet heal left the scope dial offering "the tank" until
+Save was pressed, so the control that exists to say what a spell can do was describing the spell it
+replaced.
+
 The slot's `enabled` switch is the exception to that staging: it is not part of *describing* an
 action, it is how one is taken out of the rotation while the character is fighting, so
 `Action.IsEnabled/SetEnabled` read and write the live action and persist immediately. Staged, a
@@ -614,14 +764,32 @@ for each thing (so one disc's cooldown timer is one timer, however many lists it
 |---|---|---|
 | `skills.lua` | static list, filtered by `Me.Ability` | facing, targeted, primary, secondary, melee |
 | `disciplines.lua` | `Me.CombatAbility(1..200)` | taunt (SPA 199), hate (SPA 92/192), melee (Single) |
-| `spells.lua` | `Me.Book(1..720)` | beneficial, detrimental; sorted by level, newest rank first |
+| `spells.lua` | `Me.Book(1..720)` | beneficial, detrimental, then heals/buffs/damage by category, and control, pet summons and item summons by effect; sorted by level, newest rank first |
 | `aas.lua` | `Me.AltAbility(groupId)` over the id space | taunt, hate, by the AA's own spell SPAs |
 | `items.lua` | worn slots 0-22 and bags 23-34 | clickies only (`Clicky`, not `Spell`) |
 
-Three things about this are worth knowing before changing it:
+Four things about this are worth knowing before changing it:
 
 - **The spellbook has holes.** A spell sits on the page the player put it on, so an empty slot
   says nothing about the ones after it — the whole 720-slot array is read every time.
+- **Spell categories are the game's filing, not a promise.** `spells.lua` narrows the book into
+  heals, buffs and damage by `CategoryID`/`SubcategoryID` — the numbers of EverQuest's own
+  `eEQSPELLCAT`, matched by number rather than by the name the client prints, because that name
+  comes out of the server's string table and a server that rewords a heading would silently empty
+  a list. A spell qualifies on either field, since the two share one table and the game is not
+  consistent about which carries the meaning (an invulnerability is a heading of its own on one
+  line and a subheading on the next). The sets lean wide for the same reason: a list missing a
+  spell the character has is a puzzle with no way out of it from the menu, so the heal set carries
+  Health as well as Heals — which is where the client files most pet heals — and a few pet buffs
+  filed the same way turn up beside them. Which *half* of the book it is stays the outer question:
+  the heal and buff lists are drawn from the beneficial half, so no miscategorisation can offer a
+  nuke as a heal. The damage list is the one that is drawn from both, and only through one
+  heading — Damage Shield, which is damage cast on a friend. It is a separate set (`damageBuffs`)
+  from the harmful one for exactly that reason: the half a spell is in decides who it gets pointed
+  at, so the two cannot be one list of numbers. The **control** set is the exception to this whole
+  paragraph: it consults no heading at all, because all three jobs in it — mez, stun, resist debuff
+  — have an exact answer in the effect data, and every heading tried was wrong in its own direction
+  (see "Mez state"). Where a category *is* only a coarse label, an effect is the thing itself.
 - **AAs cannot be listed.** `Me.AltAbility[#]` answers for one *group id* and returns nothing
   for one this character does not own, so finding them means walking the id space (bounded at
   5000). That single scan is the reason discovery is not on a timer.
@@ -639,6 +807,14 @@ against them and returns nil when the character no longer has the thing, which i
 stale config harmless rather than an error; the action editor offers exactly what they hold, with
 a filter box once a list passes a dozen entries, because a spellbook is not something anyone
 scrolls.
+
+A spell picker that narrows by category also carries the list it narrowed *from*
+(`availableActions.allSpells`), behind a **Show every spell** switch that also prints what each
+spell is filed under and lets the filter box match on it. A category is data rather than a
+promise, and a spell the filing put somewhere unexpected would otherwise be unreachable from the
+menu with no way to see that that was what happened. For the same reason the *type* dropdown
+decides whether to offer "Spell" at all from the wider list, never the narrowed one — an empty
+category list must not hide the switch that widens it.
 
 ## Roles (`roles.lua`) — who holds which job
 
@@ -687,10 +863,19 @@ it is worth it, and when to give up. What Combat does is narrow:
   bottom of the chain in the middle of a pull. It did, once: that was the warrior sitting down
   mid-fight. The linger is deliberately shorter than any real gap between pulls, because between
   pulls the fight *is* over and falling through to rest is the design working.
-- **Picks one up.** With `autoengage` on (throttled to 250 ms; every pulse while seeking), the
-  main assist's target first and an extended-target sweep after it — see Assisting below.
-  `Auto Hater` is the client's own word for "this is fighting you", which beats anything we could
-  work out ourselves.
+- **Picks one up.** With `autoengage` on (throttled to 250 ms; every pulse while seeking): for
+  the main tank a live `defend` report first, then the main assist's target, then an
+  extended-target sweep — see Assisting and Defending below. `Auto Hater` is the client's own
+  word for "this is fighting you", which beats anything we could work out ourselves.
+- **Defends the group.** The mob eating the healer is invisible to the tank's client — the
+  extended target window only lists what hates *you* — so the fact is spoken from where it is
+  knowable: any character something is actually coming for (`PctAggro` 100, the same reading
+  `IsUnderAttack` is built on) says `defend <ids>` out loud, once per NPC group-wide, and the
+  main tank keeps the heard reports as standing facts and engages one the moment its hands are
+  free. Every character keeps that same table, which is what makes the dedup group-wide: it is
+  the tank's radar and everyone else's record of what has already been called. An engaged tank
+  never switches targets off a report — the reports are the memory, and the fight's own end is
+  when they are read. See Defending below.
 - **Honors a fight started by hand**, above the `autoengage` gate: the player's attack being on
   while the client says real combat has begun engages the client's target as an order. The combat
   flag is asked as well as the toggle because the toggle alone is not intent — autoattack survives
@@ -699,20 +884,58 @@ it is worth it, and when to give up. What Combat does is narrow:
   turns on, the target under it is engaged with no wait for the swing or the aggro, so pressing
   attack at range is a charge. Only the turning-on reads that way — what a leftover toggle may do
   is unchanged — and Combat watches the toggle every pulse without exception, so a press consumed
-  while engaged (our own melee turns the swing on) is never saved up to fire late.
+  while engaged is never saved up to fire late. Cabby's own toggles go through
+  `Combat.SetAutoAttack`, which marks each one so the edge it makes is excused by name: the
+  script's hand on the toggle is never read as the player's.
 - **Honors calling it off by hand**, behind two switches (both off by default). With
   `disengageonattackoff`, the player switching auto attack off closes the fight the way the Back
   Off button does, seek and all — edge-read like the press, so only the act itself orders
   anything, and a toggle *taken* rather than chosen (a mez, a charm or a stun dropping auto
-  attack) orders nothing. With `disengageontargetclear`, the player clearing the client's target
+  attack) orders nothing. Neither does one the script flipped itself: melee holding the swing off
+  out of melee range goes through `SetAutoAttack`, and its marked edge is swallowed before either
+  switch reads it — stepping out of reach must not close the fight, or call a group off it from
+  a tank. With `disengageontargetclear`, the player clearing the client's target
   while it sits on the fight's own, still-standing mob does the same — a clear of anything else
   (the group member a heal targeted, a mob being inspected) is not an order, and the world taking
   the target (the death, the poofed corpse) is the seek's business, not this switch's. Neither
   reads while flee is on: travel drops auto attack every pass as bookkeeping, and the flee order
   has already said everything there is to say about the fight.
-- **Owns the `attack` order**, the `assist` call, the `autoengage`, `callassist`,
-  `engageonattack`, `assistonengage`, `disengageonattackoff` and `disengageontargetclear`
-  switches, and reports on `/cattack`.
+- **Says what is coming for us, and not only that something is.** `IsUnderAttack` in detail is
+  `GetUnderAttackIds`, and the *leaving* of that list is a fact too: a mob somebody else has taken
+  is one we are no longer most hated by, which is how the pet dps state knows a peel took without
+  timing anything.
+- **Publishes each angle separately as well as merged.** `GetHaterIds` is the whole extended target
+  window rather than the most-hated subset, and `GetDefendIds` is the standing reports on their own.
+  Both existed as private facts and are published because a merged list cannot say *which* angle
+  saw what, and that is precisely what `cabby.mobs` is built to record — "the client told us" and
+  "we found it ourselves" are different levels of confidence and a reader has to be able to tell
+  them apart.
+- **Says what the whole fight is, not just what is being killed.** `GetFightIds` is the engagement
+  first, then every `Auto Hater` on the extended target window whatever its aggro, then the
+  standing defend reports — the adds beating on group members, which our own window cannot see
+  because it lists only what hates *us*. All three are already this service's facts, already swept
+  for death, zone and flee, and nothing here sweeps the room: a mob nobody is fighting can never
+  appear in it. One sweep of the window fills this and `GetUnderAttackIds` both, because both are
+  twenty TLO reads off the same list. It is what a debuff spread across the fight is aimed by (see
+  Damage: melee and spells), and it says nothing about whether any of them can be *reached* —
+  that is the caller's question, asked of the world every pass.
+- **Says what the group's main tank is fighting**, which is the one thing a client is ever told
+  about another character's target — `Combat.GetTankTargetId`, assembled from the tank being us,
+  the tank's own heard `assist` call, or the client's assist record when the tank holds that role
+  too. Nil is "nobody here can say", not "the tank is on nothing"; see Assisting below.
+- **Says when we have taken the mob off the tank**, which is the two facts above read together:
+  `ShouldEaseOff` is true while the mob we are hurting is at the top of *our* hate list and holding
+  it is somebody else's job. Answered here rather than in both dps states, because it is one
+  question about the fight and two states hurting things would otherwise answer it twice and drift.
+  Four things say no: the `easeoff` switch being off, being the main tank ourselves (that aggro is
+  the job), no tank named at all (nobody to hand it back to), or the tank being on something else —
+  an add that picked us is not a mob we pulled off anybody, and `defend` is what is already being
+  said about it. Not knowing what the tank is on reads as *the tank has this one*, the same way the
+  pet state reads it for its taunt and for the same reason. What each state does about it is its
+  own (see The two dps states).
+- **Owns the `attack` order**, the `assist` call, the `defend` report, the `autoengage`,
+  `callassist`, `calldefend`, `easeoff`, `engageonattack`, `assistonengage`, `disengageonattackoff`
+  and `disengageontargetclear` switches, and reports on `/cattack`.
 
 **It runs no game command that decides anything**, which is what makes `Combat.Engage` safe to call
 from an ImGui button. The Attack button used to call `MeleeState.EngageTargetId`, which ran
@@ -720,7 +943,9 @@ from an ImGui button. The Attack button used to call `MeleeState.EngageTargetId`
 built around. Targeting is now the melee state's business, done from its own pulse, because
 swinging is what needs the client's target; a cast targets through the casting service. The one
 thing Combat says out loud — the tank calling the assist — is said from `Pulse` and nowhere else,
-for that same reason.
+for that same reason. `SetAutoAttack` is the one function here that runs a game command for its
+caller — it lives in Combat because the edge watcher has to know whose hand flipped the toggle —
+and it carries the corresponding warning: states and services only, never a render callback.
 
 ### Assisting — how a group ends up on one mob
 
@@ -748,6 +973,7 @@ is what says whether something weaker may replace it:
 | `order` | `attack <id>`, the Attack button, attacking by hand | no — somebody chose it |
 | `assist` | an `assist` call, or the assist's target | only by the next call |
 | `hater` | the extended-target sweep | no, while it lives |
+| `rescue` | a `defend` report, picked up by the main tank | no, while it lives |
 
 Rules the code depends on:
 
@@ -775,9 +1001,21 @@ Rules the code depends on:
   there would drop the one call that mattered. Whether the thing is reachable is each state's own
   question, asked again every pass.
 
+**A heard call is also a record of what that character is on**, kept per speaker and read back for
+one question: what is the main tank fighting (`Combat.GetTankTargetId`, above). It is the only
+answer to it that does not depend on the server keeping assist targets current, because it is a
+character saying out loud what its own client knows. The record is a live fact rather than the last
+thing anybody shouted: `assist off` takes the speaker's back, a zone or a flee empties the table
+(an id means nothing across a zone line, and what the tank was on before a run is not what it is on
+now), and the 250 ms sweep drops a call whose mob the world has taken — which is what stops a tank
+that quietly stopped calling from leaving a statement standing forever. Whether the answer is
+knowable at all is the reader's problem, and the readers differ: the pet dps state's automatic taunt
+treats "cannot say" as "the tank has it".
+
 `callassist` is the switch on the calling side, on by default and silent on every character that is
 not the tank; the call goes out on that command's own speak channels (`/speak assist`). `/cattack`
-reports all of it: the roles, what the assist is on, and where calls are being spoken.
+reports all of it: the roles, what the assist is on, what the main tank is on, and where calls are
+being spoken.
 
 `assistonengage` (off by default) is the calling side with no role in front of it: a character
 carrying it announces its own fights — and calls them off — exactly as the tank does, on the same
@@ -794,6 +1032,304 @@ group-wide off-call.
   not a report: it **is** assisting, it is on by default, and with an empty speak list the group
   hears nothing and is told nothing about why. An empty list is not how the feature is turned off;
   `callassist off` is.
+
+### Defending — how the tank finds the mob on the healer
+
+A mob that jumped the healer and has never touched the tank is invisible to the tank's client:
+the extended target window only lists what hates *you*, and no local read fixes that (a group
+member's XTarget slot shows what they *target*, which for a healer under attack is a friendly).
+So the fact is spoken from where it is knowable, and the two halves are deliberately asymmetric:
+
+- **Whoever is being beaten says so — once per mob, group-wide.** Any character something is
+  actually coming for — the top of a mob's hate list, `PctAggro` 100, the same reading
+  `IsUnderAttack` is built on, combat-flag gate included — says `defend <ids>`, one line per NPC
+  for as long as it lives in this zone. Saying it is what puts the mob on the tank's radar, the
+  tank keeps it there until the world takes it back, and **every character hears the same lines
+  the tank does**, so the standing reports double as the group's shared record of what has
+  already been called, whoever called it. That is what makes the dedup group-wide rather than
+  per-reporter: a mob bouncing tank → healer → tank → wizard is announced by the first victim
+  and by nobody after. What clears its entry is what would clear the tank's radar of it — its
+  death, a zone, a flee — and only then is it news again. A reporter records its own spoken ids
+  at the mouth as well as at the ear, because a character's own broadcast coming back through
+  localecho is owner-gated and may never reach its own handler.
+
+  Two silences are deliberate: the **main tank never reports** (everything coming for the tank
+  is its own hater sweep's business), and the **fight the group was put on is not reported** (an
+  engagement from an assist call or the assist's target is the group already knowing) — though a
+  fight the reporter picked up for *itself*, its own hater sweep, is reported even while it
+  fights back, because that is exactly the unattended beating the report exists for; and a
+  filtered mob is left off the record rather than marked, so a beating that outlives the group's
+  fight is announced the moment it becomes unattended. `calldefend` is the switch, on by default.
+- **The main tank picks one up when its hands are free — never sooner.** A heard report is a
+  standing fact that lives until the world takes it back: re-verified at the moment of acting —
+  dead, gone, or not fightable drops the entry for good — and the whole table is dropped by a
+  **zone** (spawn ids do not survive one, so a kept id is meaningless at best and a collision
+  with a fresh spawn at worst) or a **flee** (a run is the player taking the fight back; kept, a
+  report would charge the tank across ten zones the moment the run ends — new ones are refused
+  meanwhile, exactly as `assist` calls are). With `autoengage` on, an unengaged tank engages the
+  longest-standing live report — the group's attackers before even the group's target, for the
+  one character whose job is protecting it — as source `rescue`, named for its victim ("it is
+  attacking Lieph"), and `callassist` then announces it so the whole group converges. An engaged
+  tank never switches targets off a report: the reports are the memory, and the fight's own end
+  is when they are read — a fight whose target just died reads them from inside its seek, so a
+  pull's add is the same continuous fight and `IsEngaged` never blinks. The pickup sits
+  deliberately above the tank's own `CombatState` gate, because the tank is precisely *not* in
+  combat while the add is only on the healer; the reporter already asked the combat-flag
+  question on the client where the fact lives.
+
+The listener's ACL is the usual owner list **widened by the group**: reports are machine-spoken
+by whichever characters happen to be grouped with the tank, and a group assembled fresh would
+otherwise need every member added to the tank's owner list before the tank would defend any of
+them. The invitation is the trust that matters here; a speaker outside the group still needs the
+owner list, and costs nothing without it. Spoken by hand, `defend <id>` is a request to peel —
+`defend ${Target.ID}` on a hotbar button asks the tank to come take your target off you. The
+report falls back to **bc** rather than the group channel: it is as load-bearing as the assist
+call (an unheard report is a healer eaten in silence), but it is machine-to-machine traffic for
+one listener, not something the group reads; `/speak defend <channel>` sends it elsewhere.
+What this deliberately does not cover: a mob beating on a *pet* is on nobody's extended target
+window, and a group member not running cabby reports nothing.
+
+## Mob roster (`mobs.lua`) — what is in the fight
+
+`combat.lua` answers *what we are killing*. This answers *what is here*, and they are different
+questions: the mob nobody has hit yet is invisible to the first and is precisely what crowd control
+exists for. It is a service rather than a table inside the one state that needed it first, because
+"which mobs are in this fight" is a fact a puller's leash and a tank's add sweep will want the same
+answer to, and a second copy of it assembled from scratch is a second copy to be wrong.
+
+**Four angles, merged, and each entry records which of them saw it** — because *how* we know is
+what says how far a reader may lean on it:
+
+| Source | Where it comes from | Can it be wrong? |
+|---|---|---|
+| `engaged` | `Combat.GetTargetId` | no — somebody chose it |
+| `hater` | the extended target window's `Auto Hater` entries (`Combat.GetHaterIds`) | no — the client saying "this is fighting you" |
+| `defend` | the standing `defend` reports (`Combat.GetDefendIds`) | no, but it needs somebody else running cabby |
+| `nearby` | a sweep for NPCs in combat stance within reach | **yes** — see below |
+
+The first three are free (Combat has already paid for them) and are re-read every pulse; only the
+sweep is throttled, at the same 250 ms Combat sweeps the target window at, with its last answer
+folded in until the next replaces it — so a mob that walked out of radius lingers for a quarter
+second rather than flickering out of the list under a state that is acting on it.
+
+**The sweep is the angle that needed designing.** `playerstate 4|8` is the search — the client's
+own "this thing is in combat stance", the bits `Spawn.Aggressive` reads — which is why merchants,
+guards at a post and wandering critters never enter the list to be filtered out of it. What the
+search cannot express is the other half of friendly, so that is asked per spawn: an NPC, a pet or a
+destructible object; alive; targetable; and **not something a player owns** (`Master.Type()`),
+which is the one a naive sweep gets wrong — a group member's warder and our own charmed pet are
+both NPCs in combat stance standing right next to us.
+
+What is left over is the one way the sweep is loose: it says the mob is in combat with *somebody*,
+and that somebody is usually us and occasionally the guards across the room. `Mobs.IsConfirmed(id)`
+is the question a reader asks when being wrong is expensive — an AE mez aimed into a group of
+unconfirmed mobs is the classic way a camp pulls the room, so that is exactly what MezState's AE
+safety switch is built on, while a single-target mez spent on a mob that was not coming for us
+anyway just reads off `GetIds`.
+
+**It also samples where each mob is and which way it is facing**, every 250 ms, and publishes when
+each last moved (`Mobs.LastMovedMs`, `Mobs.StillForMs`). That lives here rather than in the state
+that wanted it for a reason worth generalising: a *sample over time* only means anything if
+somebody takes it at a steady cadence, and a state being starved by the fight above it cannot
+promise one. Position and heading together, because turning is movement for this purpose — a mob
+handed back its own will faces its victim before it takes a step, and a rooted one may never take
+one at all.
+
+**It decides nothing and says nothing** — no engaging, no targeting, no chat — which is also what
+makes it safe to read from an ImGui callback. Zoning empties it (spawn ids do not survive one) and
+so does a flee (the fight the group ran from is not a fight). `mobsweep` is the switch, its reach is
+two numbers on the Mez page, and `/cmobs` reports every mob with the angles that saw it.
+
+## Mez state (`states/mezState.lua`)
+
+Holding the fight still: mezzing the adds, keeping them mezzed, and stunning whatever has turned
+around and reached us. **This is the state the priority chain was drawn for.** A mez that waits its
+turn behind a damage rotation is a mez that lands after the add has already killed somebody, so it
+sits at `Priorities.mez` — above tanking, above both dps states, below healing and the passive band
+— and everything below it is starved for exactly as long as a mez is in the air and not one frame
+longer, which the casting priority floor does without this state holding anything.
+
+**What is in the fight is not this state's question** (see Mob roster above). That split is the
+reason the roster exists at all: crowd control acting on a list it assembled privately is crowd
+control nobody else can audit, and `/cmobs` and `/cmez` answering out of the same reading is what
+makes "why is that add loose" a question with an answer.
+
+**What a slot in the list is for is read off the spell.** One ordered list, walked in order, first
+slot with something to do wins — and which of three jobs a slot does comes off its effects, never
+out of a dropdown:
+
+| Role | Read from | What it does |
+|---|---|---|
+| mez | `SPA_ENTHRALL` (31) | holds a mob still; the job |
+| stun | `SPA_STUN` (21) **or `SPA_SPIN_STUN` (64)**, nothing damaging | buys the seconds a mez needs to be cast at all |
+| soften | a resist debuff (`SPA_RESIST_*` with a negative base) | the tash cast at a mob so the mez after it takes |
+
+Both stun effects, because an enchanter's Whirl Till You Hurl and Dyn's Dizzying Draught carry
+`SPA_SPIN_STUN` and nothing else at all — a stun read that knows only about `SPA_STUN` silently
+loses a line the class has had since level nine. Deliberately not `SPA_FEARSTUN` (502), which stuns
+and *fears*: a feared mob runs, which is the opposite of holding one still.
+
+**Those three and nothing else** — there is no default role, and a spell that does none of them is
+refused with that written on its row. A slow, a cripple, a snare, a root and a lull are all useful
+spells that hold nothing still and make no mez land; each one belongs in the damage rotation, where
+`dps_timing` and `dps_spread` already say when and how widely to cast it. Letting anything unmatched
+fall through to "softener" was a real defect: an enchanter's Languid Pace, an attack-speed slow, was
+being offered by the picker and would have been cast at every mob before every mez as though it made
+them land.
+
+**The stun's place in the list is the strategy, not a convenience.** A mez is a long cast and a mob
+that has reached this character interrupts it — so the mob swinging at us is stunned first and
+mezzed during the seconds that buys. That is why a stun is here rather than in the damage rotation:
+it is not damage and it is not crowd control on its own, it is what makes the crowd control
+castable. And it is never aimed at a mob that is already mezzed, because **a stun landing on a
+mezzed mob breaks the mez** — not "adds nothing", but actively undoes the three seconds just spent.
+
+The mez read is the same one the client uses to fill in `Target.Mezzed`, so cabby and the client
+agree about what is on a mob by construction rather than by coincidence. It matters that this is
+the *effect* and not the Enthrall heading: that heading also holds calms and lulls, and a lull cast
+at an add is a pull rather than a lockdown.
+
+**Nothing in this list may do damage, and that rule does more work than it looks like.** Damage is
+precisely what breaks a mez, so a slot holding a nuke works against every other slot — but the rule
+is also the *only* thing that tells a stun from a nuke. An enchanter's Anarchy is a two hundred
+point AE that stuns, and it carries the identical `SPA_STUN` that Color Shift, which stuns and does
+nothing else, carries. Read by the stun effect alone the two are the same spell. So `Spells.Damages`
+reads the *sign* of the base value on the three hit-point effects (`SPA_HP`, `SPA_INSTANT_HP`,
+`SPA_HP_NPC_ONLY` — the same numbers heal when the base is positive), and anything damaging is
+refused by the list, kept out of the picker, and told why on its row.
+
+**This list consults no heading at all** (`Spells.Controls`), which makes it the second set after
+the pet and item summons to be read purely off effects — and it got there the hard way. Every
+heading tried was wrong in its own direction: *Slow* put Languid Pace in a mez list, *Enthrall*
+holds lulls beside the mezzes, *Utility Detrimental* is the catch-all the damage list already leans
+on and made the two near-copies, and *Root*/*Snare* are already first-class in the damage rotation,
+where offering them a second time with different meanings is how a root gets configured twice and
+cast neither time. All three jobs have an exact answer in the effect data, so nothing is left for a
+heading to get wrong.
+
+**Is it still under? Four readings, strongest first — and the third is the one every other mez
+script leaves out.**
+
+1. **We just landed one.** For the couple of seconds it takes the server to tell the client, what
+   we did is the only record there is. It answers "held" rather than "two seconds left": the
+   window bridges a round trip, it is not the mez's duration, and reading it as one would make
+   every mez read as nearly-out against the refresh margin and be cast twice.
+2. **The world said it woke up.** The awakened line (`%1 has been awakened by %2.`); the mob having
+   **moved or turned since the mez we put on it landed**; and the mob's animation showing it doing
+   something other than standing there.
+3. **The client's cached reading**, `Spawn[id].CachedBuff[^mezzed].Duration` — the same
+   `SPA_ENTHRALL` search, filled in whenever the mob was last targeted (which for a mob we mez is
+   every time we mez it) and ageing by itself from there, so a stale cache decays into "it needs
+   one" rather than lying about it.
+
+Reading 2 exists because **nothing tells a cached buff about a break.** A mez ended by a backstab
+sits in the cache counting down the two minutes it had left, and a state that trusted the cache
+alone would leave that add loose for two minutes. So the cache answers *how long has it got* and
+the break signals answer *is it still under*, and it is the second question a mez state exists for.
+Three signals carry it, and they are deliberately different in kind:
+
+- **Movement since the mez landed** is the strongest and needs no window and no threshold: the mez
+  landed at one instant, the mob moved at another, and which came second is the whole answer. A
+  mezzed mob is *perfectly* still — the same coordinates and the same heading, sample after sample
+  — so anything else is the mez not holding. Heading is half of it and the half position alone
+  misses: a mob handed back its own will faces whoever it is about to hit before it takes a step,
+  and one that is rooted or snared may never take one. `mobs.lua` samples the pair every 250 ms
+  (`Mobs.LastMovedMs`), which is where it belongs — a sample over time only means anything if
+  somebody takes it at a steady cadence, and a state being starved by the fight above it cannot
+  promise one. This is `MobMoved` from `macros/bots/enchanterBot.mac`, which is also where the
+  argument for heading comes from.
+- **The awakened line** is the instant one: it arrives at the moment of the break, before the mob
+  has physically done anything about it. See below.
+- **The passive animation list** is carried over from `macros/bots/mez.mac`, where it has been the
+  break test on this server for years. It is the weakest of the three — a lookup table that can be
+  incomplete, where "it is somewhere else now" cannot be — and worth noting that
+  `enchanterBot.mac`'s equivalent check is commented out in its own source, so the two public
+  macros disagree about it. It is kept because one of them is field evidence for *this* server, and
+  all three err the same way: any of them calling the mob active makes it active. Silence is read
+  as "standing there" rather than as "loose", since calling every mob we cannot see loose would
+  mean re-mezzing the camp on the strength of not knowing.
+
+**Which mob woke is a question the line cannot answer, and the mobs answer it themselves.** The
+line carries a name, and two of a kind mezzed side by side is the ordinary case in a camp — so it
+is treated as what it actually is, a prompt to look harder:
+
+- **One mob of that name held** — that settles it, and it is marked loose outright.
+- **Several** — all of them are suspected, and the first to move or turn since the line arrived is
+  the one that woke; the rest are then cleared, because **one line is exactly one mob**. Two waking
+  is two lines.
+- **A name we are holding nothing of** — somebody else's business, ignored.
+
+An unsettled suspicion costs nothing in the ordinary case, and the reason is the chain: **only one
+mez can be in the air at a time**, so the order the loose list is walked in *is* which mob gets the
+cast. Anything that has provably moved sorts first, so the single cast this pass goes at the right
+mob, and by the time a three-second cast has finished the others have given themselves away or been
+cleared. A suspicion nothing ever resolves simply stands — the worst it can do is buy that mob a mez
+it may not have needed — and it is dropped by the mob dying, by a mez of ours landing, or by a zone.
+
+**"Still mezzed" is never the question — "will it still be mezzed when the next one could land" is.**
+The margin is the cast time plus a configured lead, which is arithmetic rather than a timer: a mez
+with four seconds left that takes three to cast has to be started *now* or it wears off with the
+caster stood still mid-cast, which is the worst moment in the fight to hand an add back.
+
+**Is it worth mezzing?** Not what the group is killing (`Combat.GetTargetId` — mezzing that is
+mezzing the tank's mob out from under the damage). **Not something we cannot see** — nothing in
+this list reaches through a wall, so a mob out of line of sight is neither mezzed, nor counted
+toward an AE being worth casting, nor waited for; it comes back on the pass it rounds the corner,
+and the page says *unseen* rather than leaving it silently absent. Not something the world has said
+cannot be mesmerized, which is the `immune` outcome the casting service already reports and is
+remembered against the spawn until it dies. Not something above the mez's own level, read off the mesmerize
+effect's `Max` rather than off `Spell.MaxLevel` (which reads the first effect slot whatever is in
+it) — and an unreadable level is not a refusal, since the cast is the cheapest way to find out and
+the answer comes back as the immune line. And not something already hurt past `stop_pct`, which
+reads backwards until you have watched it go wrong: a mob *below* the line is not too healthy to
+mez, it is too nearly dead — somebody has been killing it, there is damage in the air aimed at it,
+and a mez landing takes it out of reach of all of that so the group starts again on a full-health
+add instead. **Range** is not asked here: a slot's `IsReady` is judged against the mob the cast
+would be aimed at, so the casting service answers it per slot, because a mob out of reach of one mez
+is in reach of another. **Line of sight is**, and the difference is worth the paragraph below.
+
+**Line of sight is read once per mob per pass and shared by every slot**, rather than left to the
+casting service's own check. Every cast in cabby is LOS-gated already — `CastAction:IsReady`
+raycasts against the request's `targetId`, and the `CastTask` sequencer checks again before the
+spell goes out, so no cast anywhere reaches a mob through a wall. But being *refused* is not the
+same as being able to *decide*: an AE mez is worth casting because of how many mobs it will catch,
+and counting one on the far side of a wall toward that is how a blast goes off for two mobs when it
+was judged worth casting for four. So this state asks the question itself, which also turns a
+raycast per slot per mob into one per mob. A wall is a wall — the answer is the same for every
+spell in the list. Both macros this state is built from filter mez targets the same way. Unreadable
+is read as visible, since the client declining to answer is not a refusal and the cast will be
+refused for real if it turns out to be blocked.
+
+**Softening is what "sometimes we have to tash it first" turns into.** A softener slot's default
+is *once it resists a mez*, which is the honest one: we find out that a mob resists by having a mez
+bounce off it, and that record is what the world said rather than something guessed. *Before every
+mez* is the zone where they all resist, and is a real answer — it just costs a cast and a gem timer
+per add to find out nothing when they do not. The one piece of coordination between slots in this
+list is that a mob waiting on a softener is left out of the mez slots' candidates entirely, and it
+earns the exception: without it a mez slot above the tash keeps choosing the mob we already know it
+bounces off and the softener below never gets a turn. The deferral only holds while a softener that
+could actually act on the mob is enabled and in the list, so a character with no tash configured
+goes on trying the mez, which is the only thing it has.
+
+**AE mez is read off the spell's reach, not off its target type string.** `AERange` above zero is
+what makes it an AE at all, and whether it needs a target is what says whether the blast is centred
+on the mob or on us. It waits for `ae_min` loose mobs — one is never worth it, since an AE wakes
+what it does not land on and a single-target mez covers one mob anyway — and it is aimed at
+whichever mob has the most loose neighbours inside the radius. Nothing is credited to a mob from an
+AE's immune or resist line, because those cannot be pinned on any one of the several it went off
+around; the mobs it failed on show up loose on the next pass, which costs a pass and is the honest
+answer.
+
+**Two things this deliberately does not do.** It never runs a game command of its own — targeting
+is the casting service's, so a mez aimed at an add borrows the client's target for exactly as long
+as the cast takes, the way a spread debuff does. And it does not touch auto attack: the melee state
+swings at what `Combat` is on, which is never what this state mezzes, so the ordering already
+answers what every other mez script answers with an `/attack off` before each cast.
+
+`mezzing` is the switch, `mezaction` switches slots on the list, and `/cmez` reports what every mob
+in the fight is doing — held, loose, immune, or the one being killed — with the reason and the
+roster angles beside it. The phrase is `mezzing` rather than `mez` because no registered phrase may
+be a prefix of another and `mezaction` sits inside the shorter name.
 
 ## The two dps states
 
@@ -814,10 +1350,18 @@ What each one holds:
 |---|---|---|
 | Gets on target | yes, `/mqtarget` from its own pulse | no, the casting service targets |
 | Movement | sticks, at the configured engage distance | none; it casts from where it is |
-| Actions offered | skills, discs, AAs, clickies | detrimental spells, AAs, clickies |
-| Holds back for | nothing — swinging is free | target above `start below %`, below `stop below %`, mana under the floor |
+| Actions offered | skills, discs, AAs, clickies | damage spells and damage shields, AAs, clickies |
+| Holds back for | a mob pulled off the main tank (`easeoff`) — otherwise nothing, swinging is free | the same, plus target above `start below %` (shields excepted), below `stop below %`, mana under the floor, a slot's own moment |
 | Switch | `melee` | `nuke` |
 | Action command | `action` | `nukeaction` |
+
+The swing itself is range-gated both ways: auto attack goes on inside melee range (facing
+checked), and is held off past the spawn's true reach (`MaxRangeTo`) until we are back inside it
+— the on-ring sits a few units inside the off-line, so a mob dancing on one boundary cannot flap
+the toggle. Both toggles go through `Combat.SetAutoAttack`, so the bookkeeping is never read as
+the player's hand on the attack key (see Combat). Rooted, the stick lets the movement keys go and
+keeps facing: the run resumes the pulse after the root fades, and a mob dragged into reach
+meanwhile finds us already square to it, swinging.
 
 The restraints on the spell side are all the same idea: a caster with none pulls the mob off the
 tank, runs itself out of mana, and spends a four second cast on something that dies in two.
@@ -825,9 +1369,100 @@ tank, runs itself out of mana, and spends a four second cast on something that d
 Anything more specific than those three numbers goes in a slot's Lua predicate, which is the
 escape hatch the action list already had.
 
+**`easeoff` is the same aggro management arriving late** — after the mob has already turned around
+— and it is the one restraint both states share, because pulling the tank's mob onto a caster and
+onto a rogue is the same mistake. Combat answers it (`Combat.ShouldEaseOff`, see Combat above)
+and each state decides what to do about it: melee drops the swing through `SetAutoAttack` and skips
+the whole offense — abilities, taunts and hate included, since taunting the mob the main tank should
+be holding is the state pulling one way and the group the other — while the rotation holds
+everything aimed at the mob and lets a damage shield through, exactly as `start below %` does and
+for the same reason. Melee keeps a stick already running and starts no new one: hate is not shed by
+walking away — it is shed by the tank building more while we add none — so standing off would only
+mean crossing that ground again, while a mob already coming for us needs no ground crossed. Both
+resume on the pass the tank is back on top of that hate list, with nothing remembered in between and
+no timer anywhere — "it has been a while, start again" would be starting again into a mob that is
+still coming for us. The switch is on by default, and a group that has named no main tank never sees
+it.
+
+**A slot aimed at the mob also carries its own moment** (`dps_timing`), because the numbers above
+are one answer for the whole rotation and a debuff is the case where that is not enough. The same
+root is three different orders — put it up at the top of the fight, save it for the mob that is
+about to run, or wait until it has actually turned and gone — and which one it is cannot be read
+off the spell. So it is a dial: *right away* (the default, and what every nuke stays on), *once it
+is hurt* at a health of the slot's own (`dps_timing_pct`), or *once it runs*. It only ever narrows:
+the slot still has to come up in the order and get past the three numbers. Two slots may hold the
+same spell with different answers, and the first whose moment has come is the one that fires, which
+is how "root it now, and again if it runs later" is expressed without an and/or in the config.
+
+Nothing here says "and reapply it if it fades", because nothing has to. A spell that leaves an
+effect behind is already left alone for as long as that effect is on the mob — the same
+`alreadyWorking` reading the damage shields use, answered from the client's cached buffs for
+whatever is targeted — so a root that breaks goes back up on the next pass the gate is still open
+for, and one that holds is never cast twice. The fade is the world's to report; the dial only says
+when we are interested in the first place.
+
+**A slot aimed at the mob can also say *how many*** (`dps_spread`), which is the one thing the
+order in the list cannot express. A slow, a tash or a snare belongs on everything in the fight
+before a second nuke belongs on the one being killed — so a slot switched to *every mob* is not
+finished while any mob in the fight still lacks its effect, and a rotation walked strongest-first
+never reaches what is under it until they all have it. Nothing enforces that: the slot simply
+still has something to do, which is the same answer `alreadyWorking` gives for one mob, asked of
+each of them. Nothing is remembered between passes either, so an add that arrives late is picked
+up on the pass it arrives, and the moment they are all covered the slot yields and the nukes
+resume.
+
+Which mobs those are is `Combat.GetFightIds` and never this state's own guess — what we are
+killing first, then the extended target window, then what the group has called a `defend` on. Each
+is asked its own timing question, because *when* is a fact about the mob the cast is aimed at:
+*once it runs*, spread, is a snare on each mob as it turns. One that cannot be cast at right now —
+out of range, out of sight, on the far side of a wall from the group member it is beating on — is
+passed over rather than waited for, exactly as a friend out of range is in the shield half; it says
+nothing about the next mob, and the next pass asks again anyway.
+
+The switch is offered only where it means something: aimed at the mob (a shield's slot already
+says who it is for) and holding a spell that leaves an effect behind, since a nuke has nothing to
+be finished with. It also changes what a landed cast is trusted on: a spread slot borrows the
+client's target for exactly as long as each cast takes and moves on, so those mobs are recorded the
+way a group member's buff bar is — for as long as the spell lasts — rather than for the couple of
+seconds a mob we keep looking at is. `readable` is that question and nothing else.
+
+*Once it runs* is the one fact here the client does not keep. `Spawn.Fleeing` is pure geometry —
+is the mob *facing* away from me — which reads yes for the whole of every fight a caster stands
+behind the tank for, so it is asked together with `Spawn.Moving`: a mob in melee with anybody
+stands still, and one that is moving and pointed away from us is going somewhere that is not us.
+Honest rather than perfect, and wrong in the cheap direction — a mob running past us at somebody
+behind reads as running, and rooting that is not a bad thing to have done.
+
+**Not every slot in a rotation is aimed at the mob.** A damage shield is damage by the only
+measure that matters here and a buff by every other one — beneficial, cast on a person, sitting on
+their bar — and this is the band it belongs in: below the melee state nothing gets a frame while a
+fight is on, so a shield only the buff state could cast would go up *after* the fight rather than
+for it. A slot holding one carries `dps_scope` (anyone, the tank, myself, anyone else, my pet) and
+reads exactly like a heal slot's: scope only narrows a spell that could go to more than one
+person, and where the spell can be aimed is the spell's own business and outranks it — a self
+shield lands on us and a pet shield on the pet whatever the slot says, so the page offers those
+the one scope they can have. Which half a slot is in is read off the spell (`Beneficial`), never
+configured. Two consequences follow from that half:
+
+- **`start below %` does not hold it back.** That number is aggro management for damage *we* do to
+  the mob, and a shield put on somebody else is not that; held back by it, it would go up a fifth
+  of the way into every fight. `stop below %` and the mana floor still apply to everything.
+- **A landed shield is remembered by name, for as long as it lasts.** Another player's buffs are
+  visible only once the client has cached them, which happens when they are targeted — and what
+  we target in a fight is the mob, so their cache reads empty and every pass would otherwise cast
+  again. Our own bar and our pet's are read back for real after the usual couple of seconds. It is
+  the same domain TTL the buff state keeps, and an observed death voids it, so a rezzed tank is
+  shielded again rather than left bare until the record ran out.
+
 Both states fight whatever `Combat` says, so `attack <id>` starts both, `attack off` ends both, an
 `assist` call from the tank starts both, and `melee off` on a paladin stops the swinging while the
 spells carry on.
+
+A third state stacks above the pair on the same reading: **PetDpsState** at `dps - 2`, which fights
+with something that is neither a weapon nor a spell (see Pet dps state). The ladder reads
+`dps - 2` / `dps - 1` / `dps` in order of how little of the frame each one takes: the pet state
+speaks only when the pet is on the wrong thing, the rotation only when it starts a cast, and the
+melee state for as long as the fight lasts.
 
 ## Heal state (`states/healState.lua`)
 
@@ -839,12 +1474,28 @@ for it.
 
 **One ordered list of heal slots decides everything.** A slot is an action (a spell, an AA or a
 clicky) plus the health it is *for* (`hp_threshold` — use it on someone at or below this) and who
-it is for (`heal_scope`: anyone, the tank, myself, anyone else). Walking that list in order and
-taking the first slot that fits is how every heal macro since AFCleric has chosen a heal; what is
-different is that one mechanism covers what those macros spelled out one setting at a time. A slot
-at 85% scoped to the tank is TankHealPoint. A slot at 50% scoped to yourself is SelfHealPoint. A
-group heal at 60% is DivArbPoint. There is no separate setting for any of them, and a class the
+it is for (`heal_scope`: anyone, the tank, myself, anyone else, my pet). Walking that list in order
+and taking the first slot that fits is how every heal macro since AFCleric has chosen a heal; what
+is different is that one mechanism covers what those macros spelled out one setting at a time. A
+slot at 85% scoped to the tank is TankHealPoint. A slot at 50% scoped to yourself is SelfHealPoint.
+A group heal at 60% is DivArbPoint. There is no separate setting for any of them, and a class the
 author never thought about needs no new setting either.
+
+**Where a heal can be aimed is read off the spell, not configured** — the same `aims` model the
+buff state uses, and the reason one list serves a cleric keeping six people up and a magician
+keeping one pet up. A spell is *self*, *pet*, *group* or *single*, taken from its target type, and
+that decision outranks scope: a pet heal is for the pet whatever the slot says, a self heal is for
+us, and only a single-target heal has anybody to choose between. The page offers accordingly — a
+pet heal's scope dial holds "My pet" and nothing else and is not editable, a self heal's holds
+"Myself", and a group heal has no dial at all. Showing the answer rather than hiding the control is
+deliberate: an absent dial reads as "this heal is for nobody", and a dial listing four scopes that
+cannot apply is how a pet heal comes to be scoped to the tank and its owner to be waiting for a
+heal that was never going to be chosen for one. Self and pet heals are cast at nobody, since EQ aims
+them itself and targeting for one would drop whatever we were looking at; the state still records
+*who* the heal was for, so the settle window and the abandon check work the same for a pet as for a
+person. This is not cosmetic: `NeedsTarget` is false for a pet heal exactly as it is for a group
+heal, so before the aims model a magician's only heal was chosen for the group and cast because
+three people were scuffed.
 
 The order things are decided in, every pulse:
 
@@ -854,11 +1505,11 @@ The order things are decided in, every pulse:
    full health is refused out loud rather than healed, and an order that cannot be acted on within
    ten seconds is dropped rather than landing long after it mattered.
 2. **A group heal**, when enough of the group is at or below the slot's threshold (`group_min`).
-   Whether a slot *is* a group heal is read off the spell (`NeedsTarget` is false for Group v1/v2),
-   not configured — a group heal is what it is, and asking the user to say so is one more thing to
-   get wrong. Skipped entirely while anyone is below the emergency point: three people at 60% is
-   what a group heal is for, and one person at 15% is not, however many others are scuffed.
-3. **Whoever is worst off**, with the first slot whose scope and threshold fit them.
+   Whether a slot *is* a group heal is the spell's aim, not a setting — a group heal is what it is,
+   and asking the user to say so is one more thing to get wrong. Skipped entirely while anyone is
+   below the emergency point: three people at 60% is what a group heal is for, and one person at
+   15% is not, however many others are scuffed.
+3. **Whoever is worst off**, with the first slot whose aim, scope and threshold fit them.
 
 **A heal in the air is reconsidered every pulse.** It is called off when the target dies or leaves,
 when they climb back above the threshold that triggered it (plus a margin, so a heal landing from
@@ -875,8 +1526,18 @@ Two smaller rules worth knowing:
 - **Only memorized spells are used**, because that is what `CastAction:IsReady` requires of every
   action slot (see Action system). A heal that stops to memorize stops for eight seconds.
 
+**Who is watched is what the two switches decide**, and it is worth saying plainly because the
+names invite the other reading: `healgroup` is whether group members are somebody this character
+heals *at all*, not whether group heal *spells* are used. A heal is only ever chosen for somebody
+being watched, so switching it off leaves this character and its pet and hands a group-mate at 10%
+to whoever else is healing — and a group heal, which is cast because enough of the people being
+watched are hurt, is then judged against a much smaller count rather than taken out of the list.
+The Watching tab is the honest answer to what either switch is currently doing.
+
 Who is watched: this character, the group (`healgroup`), and this character's pet (`healpets`, off
-by default — a pet is cheaper to summon than the mana spent keeping it up). Members who are out of
+by default — a pet is cheaper to summon than the mana spent keeping it up; a pet class keeping its
+own pet up turns it on, and the page says so in the row of any pet heal while it is off, which is
+otherwise a slot that never fires for no visible reason). Members who are out of
 zone or offline are skipped rather than counted as healthy, since a missing member counted as a
 full one is a quiet way to get the group-heal count wrong. The tank is whoever `roles.lua` says
 holds the role, which is also how a hybrid holding it is tank-scoped to *itself* — reading the flag
@@ -887,7 +1548,9 @@ Main Tank set has no tank-scoped heals firing, and the Heal State page says so.
 progress. The order is `healnow` rather than `heal` because a registered phrase also matches every
 longer line starting with it — a plain `heal` would fire on `healme`, `healing off` and every other
 switch in the family, complaining about spawn ids nobody typed. Worth knowing before naming the
-commands for the next state: **no registered phrase may be a prefix of another**.
+commands for the next state: **no registered phrase may be a prefix of another** — and where a name
+is worth the collision anyway (`petgear` inside `petgearing`, see Pet setup state), the handler has
+to drop lines whose next character is not a space, which only a command with no arguments can do.
 
 ## Buff state (`states/buffState.lua`)
 
@@ -906,17 +1569,22 @@ reading group heals off `NeedsTarget`. The spell's target type says where it can
 me (`self`), at a pet (`pet`, `pet2`), at the whole group in one cast (`group v1/v2`), or at one
 person at a time — so a pet buff is for pets whatever the slot says, and scope is only offered
 where there is somebody to choose between. The spell's duration says how long what it lands
-lasts, and a slot whose spell has *no* duration is not a buff at all: the picker offers the whole
-beneficial half of the spellbook, heals included, so a heal ending up in a buff list is a mistake
-worth catching rather than one worth casting on a loop. The page says so on the row.
+lasts, and a slot whose spell has *no* duration is not a buff at all: the picker narrows to buff
+headings, but the game's filing is not a promise and the narrowing can be switched off, so a heal
+ending up in a buff list is a mistake worth catching rather than one worth casting on a loop. The
+page says so on the row.
 
 **Three questions decide every pairing**, cheapest first:
 
-1. **Is it on them, and how long has it got?** `Me.Buff[x].Duration` for ourselves,
+1. **Is it on them, and how long has it got?** `Me.Buff[x].Duration` (or `Me.Song` — a short
+   buff sits in the song window and is no less on us for it) for ourselves,
    `Me.Pet.BuffDuration[x]` for the pet, `Spawn[id].CachedBuff[x].Duration` for anybody else —
-   all three in milliseconds. Under `rebuff_secs`, it is worth recasting; over, it is not. That
-   one dial is the whole of the timing model, and the escape hatch for anything more specific is
-   the slot's own Lua expression, as it is everywhere else.
+   all three in milliseconds. Under the slot's own `buff_rebuff_secs` (default three minutes,
+   set on the row), it is worth recasting; over, it is not. Per slot because a two-hour buff and
+   a ten-minute one have nothing in common about "nearly gone", and clamped to half of what the
+   buff actually lasts, so a buff shorter than the headroom is not recast the moment it lands.
+   The escape hatch for anything more specific is the slot's own Lua expression, as it is
+   everywhere else.
 2. **Would it land?** `Spell.Stacks` / `StacksPet` / `StacksSpawn[id]`, which answer more than
    "do they already have it": a better buff in the same line, or a buff too powerful for them to
    take, both come back as no without a cast being spent to find out. For ourselves,
@@ -927,10 +1595,24 @@ worth catching rather than one worth casting on a loop. The page says so on the 
    `StacksSpawn` says yes to a spawn it knows nothing about. So the fact that we cast something is
    sometimes the only record there is, and each (slot, spawn) pairing carries a time before it is
    worth asking about again: the buff's own duration less the rebuff window after one lands, a few
-   seconds after one fails. It is not a give-up timer, and it is dropped wholesale by
-   `/cbuff refresh` or the Check Everybody Now button — which is what to reach for after somebody
-   has been dispelled. A cached entry ages by itself (it reports what is left *now*), so a stale
-   cache decays into "they need it" rather than lying about it.
+   seconds after one fails. It is not a give-up timer, and a record is dropped the moment the
+   world contradicts it rather than waited out. Dying strips every buff at once, so an observed
+   death — the scan seeing a member down, `Me.State` reading DEAD/HOVER, or the world's slain
+   line arriving mid-fight, when the scan cannot look — voids every window held for that name,
+   and they are rebuffed the moment they are back on their feet. Ourselves and our pet, who can
+   be read back, only ever get a short window (the hand-removal grace), after which the buff
+   itself is consulted again. And everybody else is *verified* about once a minute while there is
+   nothing to cast: the state borrows the target long enough for the server to send what is
+   actually on them (`Target.BuffsPopulated`, a status re-checked each pass — never a held frame,
+   called off by a fight, timing out inconclusive after a second), squares every window against
+   the answer, and puts the target back. Only for somebody in line of sight and inside the reach
+   of a spell whose window is live — the reach read off the spell (`MyRange`/`Range`/`AERange`),
+   the same way the cast checks it. Borrowing the player's target is an intrusion, and the answer
+   buys nothing when the recast it might call for would be refused for range or sight anyway; the
+   skipped keep their unread mark, so they are read on walking back into reach rather than a
+   minute later. All of it is dropped wholesale by `/cbuff refresh` or
+   the Check Everybody Now button. A cached entry ages by itself (it reports what is left *now*),
+   so a stale cache decays into "they need it" rather than lying about it.
 
 The order things are decided in, every pass that looks:
 
@@ -958,6 +1640,286 @@ standing still, without any of the `- 1` band juggling the two dps states needed
 `/cbuff` reports what it is doing and how many buffs each person is missing (worked out on demand;
 it is a whole pass over the list per person). `/cbuff off` calls off the buff in progress,
 `/cbuff refresh` forgets what was worked out about who has what.
+
+## Pet setup state (`states/petSetupState.lua`)
+
+Keeping the pet: summoning it, conjuring what it should be holding, and handing that over. One job
+in three steps, and the order between them is most of the logic — there is nothing to conjure a
+weapon for while there is no pet, and nothing to hand one to that is about to be replaced. So each
+pass asks *is there a pet*, then *has this pet been given what the list says*, and starts at most
+one thing.
+
+**A charmed pet is not a pet this state keeps.** There is nothing to summon while one is standing
+there — the client allows one pet and the charm *is* that pet — and nothing is conjured for it or
+handed to it, because what a charmed mob is given leaves with it the moment the charm breaks. So the
+gear list is walked only for pets this character made, and `gearpet` answers with why rather than
+going quiet. `pet.lua` is what says the pet is charmed (see Pet dps state); using one is that
+state's half.
+
+**Two ordered lists, and almost nothing configured.** The pet list is what summons a pet, first
+ready one wins, so its order is which pet this character would rather have and its Enabled switches
+are how a magician picks today's elemental without deleting the others. The gear list is what gets
+conjured and handed over, in order. What each slot *is* comes off the spell's own effects rather
+than off a heading or a setting: a pet slot summons a pet because the spell carries the effect that
+does (`SPA_SUMMON_PET` and the four related lines, never the swarm effect — a swarm is several pets
+for a few seconds, which is a rotation slot), and a gear slot conjures an item because the spell
+carries `SPA_CREATE_ITEM`, whose base value *is the item's id*. So nothing has to be told which item
+a spell makes, and the pickers on the page are narrowed by the same reading (`spells.lua` holds
+both, beside the category-based lists the other states use). The one dial a gear slot carries is
+how many of that item the pet should end up with — one for a hand, two for a pet that dual wields —
+because no spell can answer that.
+
+**What a pet has been handed is remembered, because nothing else can say.** A pet's inventory is
+not readable; the client will say what it is *wielding* (the weapon models in its equipment slots)
+and nothing more. So the record of what we handed to *this* pet is the only answer there is, and it
+is the "progress through a procedure the world cannot describe" the base state's contract allows.
+It is kept honest the only way such a record can be: it belongs to one pet by spawn id, and a pet
+that is replaced takes it with it — the new one is kitted out from nothing, without anything
+needing to be cleared.
+
+**A pet we did not summon is left as we found it**, and there are two of those with two different
+answers. The pet standing here **when the script started** is left alone outright, hands unread: it
+may have been fighting all evening with everything it is owed, nothing in the client can say
+(`Equipment` is a weapon model, silent about anything a pet does not wield), and re-arming one on
+every reload is a bar of mana and a pair of daggers spent on a pet that had them already — which is
+what a crash, a `/lua restart` or an evening of reloads used to cost. A pet that turns up unsummoned
+**while we are watching** is one the player just cast by hand, so it is plainly new and the hands
+are worth reading: wielding something it is left alone, since a second weapon into a full pair of
+hands is mana spent for nothing; holding nothing at all it is kitted out. `gearpet` (and the page's
+button) overrules either way of being wrong and hands over the whole list again, which is also how
+the record is reset deliberately.
+
+**Nothing is cast more than the pet is owed.** A summon that lands and produces no item is the one
+failure a retry cannot fix, so the count of casts made for a slot is bounded by the count of items
+that pet should end up with. A failed cast or a refused hand-off is paced by the usual five second
+window instead; the row and `/cpet` say which of the two happened.
+
+**Why a slot did not fire is kept per slot**, and it is two different questions. What is wrong with
+the slot as configured — a spell that summons nothing — is read off the spell and shown on the row.
+What the *world* said the last time it was tried is remembered from the attempt itself and shown
+the same way, because that is the half no amount of reading can predict: no mana, no line of sight,
+and above all **a missing component**. Most pet spells eat one every cast (malachite for a
+magician's elementals, a bone chip for the undead lines), the casting service refuses a cast whose
+reagents are not in the bags — matching the server, which enforces the same thing unless
+`Character:PetsUseReagents` is turned off — and a page where everything looks configured and
+nothing happens is exactly what that refusal used to look like. The component is named rather than
+numbered (see Casting), which is the difference between a puzzle and a trip to a vendor.
+
+Three things hold everything: being dead, a fight (`petsetupcombat`, off by default — a summon is a
+long cast and a bar of mana, and an item cannot be handed to a pet that is off fighting), and moving. A
+fight starting also calls off the cast or the hand-off in the air. Like buffing, this state gets its
+frames because follow yields the moment it has caught up; unlike buffing it sits one band above, at
+`Priorities.buff - 1`, so a pet buff is never cast on a pet that is about to be replaced.
+
+**A pet that vanished gets a moment before it is replaced.** The world does not say whether it died
+or was let go, and re-summoning on the next frame would undo `/pet get lost` before the player had
+finished typing it — the same courtesy the rest state pays a stand it did not order. Five seconds,
+because the common case is a pet that died; anybody who means to play without one has the
+`petsummoning` switch, and `summonpet` is the order that skips both the grace and the switch.
+
+Handing an item over is not this state's own work: `utils/Giving` owns that sequence and runs it on
+the service pulse (see Giving). The state asks for one hand-off and polls it, and holds the frame
+while it runs — the sequence owns the target and the cursor, and anything below that targets
+somebody else would take them out from under it.
+
+**`petgear` is the same work for somebody else's pet.** Every other class's pet arrives bare and a
+magician is the one carrying the spell that fixes it, so the group says `petgear` and whoever has a
+gear list walks it once for the asker's pet: same list, same per-slot counts, same conjure-then-hand
+sequence, and a record of the same shape keyed to that pet's spawn id. It is a **request** and not a
+switch — it ends when there is nothing left to hand over and forgets the pet, because arming
+somebody's warder is a favour asked for once rather than a standing arrangement with every pet in
+the group — and a character with **nothing on its gear list says nothing at all**, which is what
+keeps one spoken line from being six characters all answering. The asker's pet is found through
+their spawn (`Spawn.Pet`), so the only thing they have to do is stand next to the magician; being
+out of reach is the giving service's own report.
+
+That name is the one deliberate exception to the prefix rule below: `petgear` sits inside
+`petgearing` and therefore hears every line that switch does. It is the word a group would actually
+say, so the collision is handled in the handler instead — a line whose next character is not a
+space (`petgearing off` arrives as this phrase plus `ing off`) is somebody else's command and is
+dropped. That works only because this one takes no arguments; a command that did could not be named
+this way.
+
+`petkeeping`, `petsummoning`, `petgearing` and `petsetupcombat` are the switches, `summonpet`,
+`gearpet` and `petgear` the orders, `petaction` switches slots on either list, and `/cpet` reports
+what the pet has been given (`/cpet off`, `/cpet gear`, `/cpet summon` as well). The names are the
+ones this state had when it was the only pet state; `petsetupcombat` is the one that changed, because
+"pet" and "combat" in one word now reads like the other state's master switch and is not it.
+
+**An order does not go stale while the state is held.** The TTLs on `summonpet`, `gearpet` and
+`petgear` mean "this ask has stopped meaning anything", and being in a fight for twenty seconds is
+not that — so their clocks only run across the passes where the work could have been started.
+Without it a `gearpet` said as a fight starts is dropped in silence and the first pass afterwards
+reports it as finished having done nothing.
+
+What it deliberately leaves out: telling the pet what to do. That is PetDpsState, below.
+
+## Pet dps state (`states/petDpsState.lua`)
+
+The other half of a pet, and the half that belongs in the fight: sending it at what this character
+is fighting — or at what is fighting *us*, if that is the job it has been given — calling it back
+when the fight ends, and keeping the four switches the client holds for a pet where the page says
+they should be.
+
+**Two states rather than one, because they are two bands.** Keeping a pet is a long cast and a
+hand-off that needs it standing next to us, which is work for the gaps between fights at
+`buff - 1`; using one is four words said inside a fight, and a word that waits for the rotation to
+finish is a pet arriving after the mob has picked somebody. So this registers at
+`Priorities.dps - 2`, above SpellDpsState for the same reason SpellDpsState is above MeleeState:
+the melee state reports busy for the whole fight, so anything below it is starved, and a state
+above it costs one frame on the pass where it actually says something.
+
+**Not every pet is listening, and which one this is gets read before anything is said.** Three of
+these words go to a pet that hears them; an enchanter's *animation* hears none of them. It is a pet
+in every other way — it fights, it follows, the client keeps a pet window and the four switches for
+it — but the pet commands are not among the things it answers to, and the only thing that changes
+that is `Animation Empathy`, the alternate ability whose whole purpose is buying an enchanter the
+right to talk to one. Its ranks say which words: guard and follow at one (neither of which this
+script ever says), attack at two, back off and the toggles at three. A **charmed** pet is the
+opposite — a mob held by a spell, and an ordinary pet as far as the commands go — which is what
+makes an enchanter with one a character this state can fight with in full.
+
+`pet.lua` answers both questions and nothing downstream carries a second copy of them:
+
+- **What kind of pet it is** is one reading and one fact about the character, in that order. A charm
+  effect (`SPA_CHARM`, read off the pet's own buffs — the client shows a *pet's* buffs in full,
+  which it will not do for anything else in the zone) says charmed whatever class we are; everything
+  else is ours, and an enchanter's own pet is an animation because nobody else summons one. The
+  reading comes first because it is the one that can be wrong in the direction that matters: an
+  enchanter's charmed pet mistaken for an animation is a pet this script would refuse to fight with.
+- **It is asked once per pet and then remembered**, because a pet cannot change kind — a charm that
+  breaks does not leave a summoned pet behind, it leaves no pet at all, and the id goes with it. The
+  answer is keyed by spawn id and dies with the pet. A new pet is given a moment for the client to
+  fill its buff list in before "nothing is holding it" is written down; during that moment the
+  answer is the one a pet of ours would have, so nothing waits on it.
+- **Nothing is concluded from silence.** There is no counting of orders that went unanswered and no
+  window after which a pet is written off as deaf. Refusals here are not observed, they are read:
+  what kind of pet this is, and what this character has bought the right to say to one.
+
+So this state simply never says what cannot be heard — no order, no flip, no peel worked out for a
+pet that cannot be sent anywhere — and the page and `/cpetdps` say which pet it is and what is
+missing rather than showing four dials that do nothing. The same read gates the flee state's
+`/pet back off`, and the setup state uses the charmed half of it (a charmed pet is never geared).
+
+**It decides nothing about what is fought.** `cabby.combat` holds the engagement, so `attack <id>`,
+the tank's assist call and auto-engage move the pet exactly as they move the swing — this state
+adds only the pet's side of it. Every pass reads three things: who the pet is, what Combat is on,
+and what the pet is on. Nothing else is held.
+
+**The pet is sent by id.** `/pet attack <spawnid>` is MacroQuest's own extension of the client
+command (`MQCommands.cpp`, `PetCmd`), which is why nothing here touches the client's target — the
+client's own `/pet attack` sends the pet at whatever *we* are looking at, so without the id this
+state would have to snap the target first and would fight the heal state for it. The order is
+repeated every second and a half for as long as the pet is not on what the fight is on, which is
+also what re-sends it at the successor mob of a fight without anything having to notice a
+successor. No count, no window after which it stops asking.
+
+**It only calls the pet off what this fight put it on.** The one number held between passes is the
+mob the fight last put the pet on, and it is dropped the moment the pet is not on it. A pet that
+has moved to something else picked that up for itself — an add on the healer, something that turned
+on the pet — and calling it off *that* is calling it off a fight nobody else is having. A pet that
+went in on its own on the mob Combat is on is adopted, since that is this fight whoever started it,
+and it is called off with the rest of it. `/pet back off` is repeated on the same pacing until the
+world shows it took.
+
+**The one dial about this fight is `send in below %`**, the pet's version of the rotation's `start
+below %` and the same aggro management: a pet in before the tank has a hold of the mob is a pet
+with the mob on it. It ships at 100 — in as soon as there is a fight, which is what the classes
+that carry a pet expect — and an order (the page's button, `/cpetdps in`) outranks it. It answers
+one question — when to join a fight the group is having — so anything that is not that question
+skips it: an order, and a mob already beating on us, which has no aggro left to manage.
+
+**The job dial says what the pet is *for*.** It ships as **fight what we fight**, which is all of
+the above and is what a pet has always done here. Set to **protect me first**, one thing outranks
+the fight: a mob actually coming for this character is taken off it. That is a setting rather than
+something this state works out, because it is a trade nobody else can make — a pet peeling adds is a
+pet not killing what the group is killing, and a magician stood in the open wants that trade where a
+beastlord in melee beside a tank usually does not.
+
+The whole cycle is `Combat.GetUnderAttackIds` read fresh every pass, and nothing else:
+
+- **What is on us** is the extended target window's `Auto Hater` entries at 100% aggro — the client
+  saying "this one is coming for *you*", the same reading the `defend` report is built on.
+- **A peel is done when the mob leaves that list**, because a mob the pet has pulled off us is one
+  we are no longer most hated by. There is no timer, no "did it work" window and no record of what
+  was peeled: the world stops saying it, and the pet is free on the next pass.
+- **Then the next one on us, or back to the fight.** Which is chosen is three rules, all about not
+  making things worse: the one the pet already has while it is still on us (moving a pet between two
+  mobs that are both on us throws away the aggro it just built and leaves us holding both); anything
+  the group is *not* already on, first (the mob nobody else is answering is what a pet is worth);
+  and what the fight is on only if that is all that is on us — then the pet is already there and the
+  peel is the taunt.
+- **It does not wait on there being a fight.** With `autoengage` off a beating is a beating nobody
+  agreed to, and the pet is the answer to it this state has.
+
+While the pet is peeling, **the job outranks the dials on two switches**: taunt on, because taunt is
+the only thing a pet does that takes a mob off somebody and a peel that will not hold what it takes
+is a mob walking straight back to us; and focus off, because focus is a standing order to stay on
+what it was sent at and ignore everything else, which is precisely the switching this job is made
+of. Hold and greater hold are deliberately untouched — they gate what a pet picks up *unbidden* and
+every target in this job is bidden, so flipping them would be flipping a switch for a reason this
+state cannot name. A switch the player set to "leave alone" is **borrowed, not taken**: where it
+stood is written down and put back when the peel ends, because otherwise "leave alone" would quietly
+mean "leave alone until the first add" — a switch changed once and never changed back is how you
+break somebody's pet without them ever seeing it happen. A dial that has an opinion of its own needs
+no loan: it restores the switch itself.
+
+**The four switches are dials, not checkboxes.** Taunt, hold, greater hold and focus are kept by
+the client per *pet*, which means a new pet arrives with all four off whatever the last one was
+set to — so they cannot be set once and forgotten, and something has to keep putting them back.
+Each ships as "leave alone", which is this script having no opinion rather than an opinion that the
+switch should be off. On or off is a standing order: the state reads where the switch stands, flips
+it if it disagrees, and reads back again. It flips rather than sets because this client's pet
+command list (`ePetCommandType` in eqlib) carries only the toggle forms — there is no way to *say*
+"taunt off", which makes the read the only way to know anything. A switch flipped by hand after
+having stood where it was asked to gets fifteen seconds before the dial wins again: the grace the
+doctrine pays a deliberate act, not a surrender.
+
+**Taunt has a fourth position, because it is the one of the four whose right answer is not a
+setting.** Hold, greater hold and focus are a player's standing preference about how their pet
+fights. Taunt is a question about the group — *is anybody else holding what the pet is on* — and it
+changes inside one fight: the add the pet was sent to hold becomes the tank's the moment the tank
+picks it up, which cabby's own `defend` machinery exists to make happen. So the dial offers
+**Automatic**, answered every pass from two facts and nothing else:
+
+- **No main tank in the group → on.** Nobody else is holding anything, so the pet holds what it has.
+  This is the duo and the solo pull, where the pet *is* the tank.
+- **A main tank on what the pet is on → off.** A taunting pet standing next to a warrior is a pet
+  pulling the mob off the character built to hold it.
+- **A main tank on something else → on.** The pet is on its own mob — an add, a second pull — and
+  the alternative is handing that mob to whoever is softest, usually the character whose pet it is.
+- **A main tank whose target cannot be seen → off.** `Combat.GetTankTargetId` returning nil is
+  "nobody here can say", and the two ways of being wrong cost differently: ripping a mob off a
+  warrior is how a group wipes, while a pet that fails to hold an add is what the defend report and
+  the tank's own pickup already answer.
+
+What the pet is on is read first and what Combat is on second, because taunt decides the first swing
+as much as the tenth and a pet held back by the health dial is one pass from being sent. Mid-fight
+with neither readable — the beat between two mobs — the **last answer stands** rather than falling
+back to the resting one: taunt off between two mobs of one fight and on again afterwards is two
+commands that changed nothing. And when the automatic answer *moves*, the marks that make a
+disagreement "somebody's hand" are dropped with it, or a switch that agreed with "off" and now wants
+"on" would read as a deliberate flip and sit out its fifteen seconds — a pet not taunting the add it
+was just sent to hold. Everything else is unchanged: the answer is enforced by the same read, the
+same flip and the same hand grace as a dial set by hand, and it ships as "leave alone" like the rest.
+The position is offered only for switches an answer exists for (`PetDpsStateConfig.autoSwitches`),
+and a stored `auto` on any other switch reads as "leave alone" rather than as something to act on.
+
+`petattack` is the switch — off calls the pet off and stops sending it, which is also how to get a
+pet back mid-fight without calling the fight off — and `/cpetdps` reports what the pet is on, what
+its job is, where each switch stands, and takes `in`, `on`, `off` and `job fight|protect`.
+
+Two silences are deliberate. There is **no action list**: a pet is not a rotation, and the pet AAs
+and discs a class fires at a fight are ordinary damage the spell dps rotation already casts. And
+nothing here reacts to the pet's *health* — keeping it alive is healing, and the heal state does it
+with `healpets`.
+
+**Fleeing is the one case this state cannot cover.** `flee` is busy at the passive band, so the
+whole dps band is starved and the pet would keep chewing on what the group is running from. So the
+flee state drops the pet the same way and for the same reason it drops auto attack: read
+`Pet.IsFighting()` every pass, say `/pet back off` when it is true, pace it at a second and a half.
+The verbs and the reads both come from `pet.lua`, so the two states are not carrying separate
+ideas of what the client answers to.
 
 ## AdvLoot state (`states/advLootState.lua`)
 
@@ -1132,10 +2094,15 @@ A stick started by the melee state is exactly the one to drop: it would go on ho
 very thing we are running from. Each of those is a *request* rather than a game command, which is
 what makes the menu checkbox and a hotbar button safe.
 
-Two things are read every pass instead of being done once. Auto attack, because `/attack on` is the
-one commitment nothing else takes back — the melee state issues it and never issues the other half,
-and it is not getting another turn in which to notice — so `Go()` reads `Me.Combat` and drops it
-whenever it finds it on, which also covers the player switching it back on by hand. And the
+Three things are read every pass instead of being done once. Auto attack, because `/attack on` is the
+one commitment nothing else takes back — the melee state issues it, and its range gate, the one
+thing that ever takes it back, is not getting another turn — so `Go()` reads `Me.Combat` and drops it
+whenever it finds it on, which also covers the player switching it back on by hand. The pet, for
+exactly the same reason: PetDpsState would have called it off when the fight closed and is starved
+at the dps band, so `Go()` reads `Pet.IsFighting()` and says `/pet back off` when it finds it true,
+paced at a second and a half so a client that is a beat behind is not told twice a frame — and only
+to a pet that takes the word at all (`Pet.TakesOrders`), since an enchanter's animation would
+otherwise be told for the length of the run by something that cannot be heard. And the
 auto-engage sweep, which `Combat.Pulse` skips while `Status.IsFleeing()`: nothing would act on a new
 engagement, but one recorded now is one that resumes the moment the run ends, against whatever we
 ran past ten zones ago.

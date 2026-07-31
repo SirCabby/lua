@@ -14,6 +14,7 @@ local ChelpDocs = require("cabby.commands.chelpDocs")
 local Combat = require("cabby.combat")
 local Command = require("cabby.commands.command")
 local Commands = require("cabby.commands.commands")
+local Event = require("cabby.commands.event")
 local Menu = require("cabby.ui.menu")
 local SlashCmd = require("cabby.commands.slashcmd")
 local Status = require("cabby.status")
@@ -36,14 +37,31 @@ local idleLookIntervalMs = 1000
 ---nothing, so this is only here to stop the same hopeless cast being asked for every pass.
 local retryAfterFailureMs = 5000
 
----The floor under the "it landed, leave it alone" window. A buff that reports no duration we can
----read still should not be recast on the next pass.
+---The floor under the "it landed, leave it alone" window -- and the *whole* of that window for
+---anybody whose buffs can be read back (ourselves, our pet). Past it the buff itself is consulted
+---rather than the memory of having cast it, which is what notices one stripped early -- a death,
+---a dispel -- inside this long rather than trusted for its full duration. What is left of the
+---window doubles as the grace that keeps a buff the player clicked off by hand from being slapped
+---straight back on.
 local minimumRecheckMs = 30000
 
 ---How long an order waits with nothing left to cast before it is treated as finished. A buff
 ---order is not one cast, it is "give them everything they are missing", so it ends when there is
 ---nothing more to give rather than when the first cast lands.
 local orderIdleMs = 15000
+
+---How stale a verified answer about another player may grow before it is worth borrowing the
+---target to re-read them. Verification exists to catch what the windows cannot know -- a dispel,
+---a death nobody saw -- so it only needs to be fast relative to how long anybody would care,
+---not relative to the machine.
+local verifyIntervalMs = 60000
+
+---How long the buff packet gets to arrive after the target swap before the read is called off.
+---An evidence window on the one action verification fires: the target took, so the packet is
+---the world's only remaining way of answering, and a second is several server beats. Running
+---out is *inconclusive* -- the world said nothing, not "they are naked" -- so the windows stand
+---un-contradicted rather than being voided into a blind recast.
+local verifyEvidenceMs = 1000
 
 ---Where a slot's spell can be aimed, read off the spell rather than configured.
 local aims = {
@@ -65,7 +83,16 @@ local petTargetTypes = { ["pet"] = true, ["pet2"] = true }
 ---cached them, which happens when they are targeted, and an empty cache reads exactly like a
 ---clean target. So this state reads what it can, casts when what it reads says to, and does not
 ---ask the same question again for a while afterwards -- which is what the per-pairing retry
----window below is. It is not a give-up timer: it is how long an answer is good for.
+---window below is. It is not a give-up timer: it is how long an answer is good for -- and an
+---answer can be voided early. Dying strips every buff at once, so an observed death (the scan
+---seeing them down, or the world's slain line arriving mid-fight) drops every window held for
+---that name, and they are looked at afresh the moment they are back on their feet. Windows on
+---the people we *can* read back -- ourselves, our pet -- are kept short instead, so the buff
+---itself is re-read and a strip noticed even when no death was seen. And everybody else gets
+---the same honesty a minute at a time: when there is nothing to cast, the state borrows the
+---target long enough for the server to send what is actually on somebody -- a swap, then a
+---status re-checked every pass until the packet lands or a second runs out, never a held frame
+----- squares every window it holds for them against the answer, and puts the target back.
 ---
 ---What it deliberately leaves out: buff *begging* beyond the `buffnow`/`buffme` orders, other
 ---people's pets, curing, and any awareness of what the other buffers in the group have already
@@ -83,7 +110,11 @@ local BuffState = {
         buffGroup = "buffgroup",
         buffPets = "buffpets",
         buffCombat = "buffcombat",
-        buffAction = "buffaction"
+        buffAction = "buffaction",
+        -- not orders: the world's own death notices, which void the buff records held for
+        -- whoever they name
+        slain = "buffslain",
+        died = "buffdied"
     },
     _ = {
         isInit = false,
@@ -97,6 +128,8 @@ local BuffState = {
         buffLastsMs = 0,    -- how long what we are casting lasts
         order = nil,        -- { id, name, idleUntilMs } from a `buffnow <id>` or `buffme`
         tryAgainAt = {},    -- { ["<slot>@<name>"] = when that pairing is worth looking at again }
+        verify = nil,       -- { id, name, startedMs, restoreId } a target-swap re-read in flight
+        verifiedAt = {},    -- { [name] = when another player's buffs were last actually seen }
         calledOff = false,
         lastResult = nil,
         holdReason = nil,
@@ -108,6 +141,10 @@ local BuffState = {
 local function DebugLog(str)
     Debug.Log(BuffState.key, str)
 end
+
+---Defined with the rest of the window bookkeeping below; the scan observes the deaths that
+---void windows, so it needs the name early.
+local buffsWereStripped
 
 ---------------- Who we are keeping buffed --------------------
 
@@ -145,7 +182,10 @@ local function scanCandidates()
         -- and this is a check that *drops* people, so a wrong reading here empties the group out
         -- of the list and leaves this character buffing nobody but itself
         local pct = Status.HealthPct(mq.TLO.Spawn("id " .. tostring(id)))
-        if pct ~= nil and pct <= 0 then return end
+        if pct ~= nil and pct <= 0 then
+            buffsWereStripped(name or tostring(id))
+            return
+        end
 
         candidates[#candidates+1] = {
             id = id,
@@ -157,14 +197,26 @@ local function scanCandidates()
         }
     end
 
-    add(mq.TLO.Me.ID(), mq.TLO.Me.CleanName(), mq.TLO.Me.Class.ShortName(), { isSelf = true, inGroup = true })
+    -- HOVER is dead-but-not-released; DEAD is the beat before it. Our own bar is empty for
+    -- either, and everything we remembered casting on ourselves went with it
+    local myState = mq.TLO.Me.State()
+    if myState == "DEAD" or myState == "HOVER" then
+        buffsWereStripped(mq.TLO.Me.CleanName())
+    else
+        add(mq.TLO.Me.ID(), mq.TLO.Me.CleanName(), mq.TLO.Me.Class.ShortName(), { isSelf = true, inGroup = true })
+    end
 
     if BuffStateConfig.GetBuffGroup() then
         for index = 1, (tonumber(mq.TLO.Group.Members()) or 0) do
             local member = mq.TLO.Group.Member(index)
             if not member.OtherZone() and not member.Offline() then
                 local spawn = member.Spawn
-                if not spawn.Dead() then
+                -- the member, not just the spawn: a dead player often has no live spawn left to
+                -- resolve -- hovering leaves only a corpse under another name -- but the group
+                -- window still reports them at nothing
+                if spawn.Dead() or (tonumber(member.PctHPs()) or 100) <= 0 then
+                    buffsWereStripped(member.Name())
+                else
                     add(spawn.ID(), spawn.CleanName(), spawn.Class.ShortName(), { inGroup = true })
                 end
             end
@@ -173,8 +225,12 @@ local function scanCandidates()
 
     if BuffStateConfig.GetBuffPets() then
         local pet = mq.TLO.Me.Pet
-        if pet.ID() ~= nil and not pet.Dead() then
-            add(pet.ID(), pet.CleanName(), pet.Class.ShortName(), { isPet = true })
+        if pet.ID() ~= nil then
+            if pet.Dead() then
+                buffsWereStripped(pet.CleanName())
+            else
+                add(pet.ID(), pet.CleanName(), pet.Class.ShortName(), { isPet = true })
+            end
         end
     end
 
@@ -183,8 +239,12 @@ local function scanCandidates()
     local order = BuffState._.order
     if order ~= nil then
         local spawn = mq.TLO.Spawn("id " .. tostring(order.id))
-        if spawn.ID() ~= nil and not spawn.Dead() then
-            add(spawn.ID(), spawn.CleanName() or order.name, spawn.Class.ShortName(), {})
+        if spawn.ID() ~= nil then
+            if spawn.Dead() then
+                buffsWereStripped(order.name)
+            else
+                add(spawn.ID(), spawn.CleanName() or order.name, spawn.Class.ShortName(), {})
+            end
         end
     end
 
@@ -220,6 +280,23 @@ local function pairKey(slot, name)
     return slotKey(slot) .. "@" .. name
 end
 
+---A death voids the records. The hold-off windows say "the buff is on them for another while
+---yet", and dying strips every buff at once, so every window held for the dead person's name is
+---now a record of something false -- kept, it is exactly the stale remembered state that leaves
+---somebody rezzed and standing in the group unbuffed for as long as their windows had left to
+---run. Dropped the moment a death is observed instead; a name that never had records is a no-op.
+---(Forward-declared above: the candidate scan is what does most of the observing.)
+---@param name string|nil
+function buffsWereStripped(name)
+    if name == nil then return end
+    local suffix = "@" .. name
+    for key in pairs(BuffState._.tryAgainAt) do
+        if key:sub(-#suffix) == suffix then
+            BuffState._.tryAgainAt[key] = nil
+        end
+    end
+end
+
 ---Drop retry windows that have run out. They are the only thing this state accumulates, and a
 ---long session in a busy zone would otherwise collect one per person it ever buffed.
 local function prune()
@@ -251,9 +328,10 @@ end
 
 ---How long this buff lasts, in milliseconds.
 ---
----Zero means the spell has no duration at all, which is how a heal or a cure reads -- the action
----picker offers the whole beneficial half of the spellbook, so one of those ending up in a buff
----list is a mistake worth catching rather than one worth casting on a loop.
+---Zero means the spell has no duration at all, which is how a heal or a cure reads -- the picker
+---narrows to buff headings but the game's filing is not a promise and the narrowing can be
+---switched off, so one of those ending up in a buff list is a mistake worth catching rather than
+---one worth casting on a loop.
 ---@param spell any mq spell TLO
 ---@return number ms
 local function durationMs(spell)
@@ -266,6 +344,19 @@ local function durationMs(spell)
     end
     if seconds == nil or seconds <= 0 then return 0 end
     return seconds * 1000
+end
+
+---How little has to be left on this slot's buff before it is recast: the slot's own dial, but
+---never more than half of what the buff actually lasts. Without the clamp, "rebuff early" on a
+---buff shorter than the headroom would mean recasting it the moment it lands -- the dial says
+---how close to fading is too close, and a buff cannot spend its whole life nearly gone.
+---@param slot Action
+---@param lastsMs number what the buff lasts, from `durationMs`
+---@return number ms
+local function rebuffAtMs(slot, lastsMs)
+    local configured = BuffStateConfig.GetRebuffMs(slot)
+    if lastsMs <= 0 then return configured end
+    return math.min(configured, math.floor(lastsMs / 2))
 end
 
 ---How long is left on this buff, where the client can tell us.
@@ -284,8 +375,15 @@ local function remainingMs(spell, candidate)
 
     if candidate.isSelf then
         local buff = mq.TLO.Me.Buff(name)
-        if buff.ID() == nil then return nil end
-        return tonumber(buff.Duration()) or 0
+        if buff.ID() ~= nil then
+            return tonumber(buff.Duration()) or 0
+        end
+        -- a short buff sits in the song window instead, and is no less on us for it
+        local song = mq.TLO.Me.Song(name)
+        if song.ID() ~= nil then
+            return tonumber(song.Duration()) or 0
+        end
+        return nil
     end
 
     if candidate.isPet then
@@ -300,17 +398,20 @@ end
 ---Should this buff be cast on this person right now?
 ---
 ---Two questions, in the order that answers them cheapest. If it is on them, the only thing left
----to ask is whether it is nearly gone. If it is not, the question is whether it would land at all
------ which is what the client's own stacking check answers, and it answers more than "do they
----already have it": a better buff in the same line, or a buff too powerful for them to take, both
----come back as "no" without a cast being spent to find out.
+---to ask is whether it is nearly gone -- "nearly" being the slot's own dial. If it is not, the
+---question is whether it would land at all -- which is what the client's own stacking check
+---answers, and it answers more than "do they already have it": a better buff in the same line,
+---or a buff too powerful for them to take, both come back as "no" without a cast being spent to
+---find out.
+---@param slot Action
 ---@param spell any mq spell TLO
+---@param lastsMs number what the buff lasts
 ---@param candidate BuffCandidate
 ---@return boolean needsIt
-local function needsBuff(spell, candidate)
+local function needsBuff(slot, spell, lastsMs, candidate)
     local remaining = remainingMs(spell, candidate)
     if remaining ~= nil then
-        return remaining <= BuffStateConfig.GetRebuffMs()
+        return remaining <= rebuffAtMs(slot, lastsMs)
     end
 
     if candidate.isSelf then
@@ -421,7 +522,7 @@ local function choosePickFor(slot, candidates)
     local needsTarget = subject:NeedsTarget()
 
     for _, candidate in ipairs(candidates) do
-        if appliesTo(slot, aim, candidate) and dueNow(slot, candidate.name) and needsBuff(spell, candidate) then
+        if appliesTo(slot, aim, candidate) and dueNow(slot, candidate.name) and needsBuff(slot, spell, lastsMs, candidate) then
             -- a spell that aims itself is cast at nobody. EQ puts a self buff on us and a pet buff
             -- on our pet with nothing targeted, and a group buff on the group; targeting for one
             -- of those would drop whatever we were looking at to no purpose
@@ -470,6 +571,171 @@ local function choosePick(candidates)
     return nil
 end
 
+---------------- Re-reading the watch list --------------------
+
+---Whoever the target lands on next, the client fills that spawn's buff cache from the server's
+---answer -- which is the one way another player's bar can actually be read. The procedure is a
+---swap and a wait, and the wait is a status looked at again every pass, never a held frame: the
+---packet arrives on the server's clock, and nothing below this state conflicts with standing
+---here while it does. Only spent on somebody a buff could actually be cast at from here: the
+---swap is an intrusion on the player's target, and the answer is worth nothing if the recast it
+---might call for would be refused for range or line of sight anyway.
+
+---Is anything held for them worth the swap -- and could we do anything about the answer?
+---
+---Two halves of one question. There is nothing to square if no live window is held for them, and
+---nothing to be done about a voided one if they are out of reach or behind a wall: everything
+---this state would do about it is a cast at them, and that cast is refused for exactly those two
+---reasons. So the reach is read off the spells whose windows are live, the same way the cast
+---itself reads it, rather than being a number of our own. Somebody skipped this way keeps their
+---unread mark rather than being marked looked-at, so they are read the moment they walk back
+---into reach instead of a minute afterwards.
+---@param candidate BuffCandidate
+---@return boolean worthReading
+local function hasReachableWindows(candidate)
+    local spawn = mq.TLO.Spawn("id " .. tostring(candidate.id))
+    if spawn.ID() == nil then return false end
+    if spawn.LineOfSight() == false then return false end
+
+    local distance = tonumber(spawn.Distance())
+    local now = Time.current_time()
+
+    for _, slot in ipairs(BuffStateConfig.GetActions()) do
+        local at = BuffState._.tryAgainAt[pairKey(slot, candidate.name)]
+        if at ~= nil and at > now then
+            local action = Action.GetActionType(slot)
+            local subject = (action ~= nil and action.Subject ~= nil) and action:Subject() or nil
+            if subject ~= nil then
+                -- no range at all means the spell carries no limit worth checking, not that it
+                -- cannot reach; an unreadable distance is the same non-answer
+                local range = subject:Range()
+                if range <= 0 or distance == nil or distance <= range then return true end
+            end
+        end
+    end
+
+    return false
+end
+
+---The first person whose records are worth re-reading against the world: somebody whose buffs
+---cannot be read from here, holding at least one live window they are still in reach of, not
+---looked at for a while. A landed cast counts as looked at -- verification is for what changes
+---*between* casts.
+---@param candidates table
+---@return BuffCandidate? candidate
+local function chooseVerify(candidates)
+    local now = Time.current_time()
+    for _, candidate in ipairs(candidates) do
+        if not candidate.isSelf and not candidate.isPet then
+            local at = BuffState._.verifiedAt[candidate.name]
+            if (at == nil or now - at >= verifyIntervalMs) and hasReachableWindows(candidate) then
+                return candidate
+            end
+        end
+    end
+    return nil
+end
+
+---@param candidate BuffCandidate
+local function startVerify(candidate)
+    local restoreId = tonumber(mq.TLO.Target.ID())
+    BuffState._.verify = {
+        id = candidate.id,
+        name = candidate.name,
+        startedMs = Time.current_time(),
+        restoreId = restoreId ~= candidate.id and restoreId or nil
+    }
+    if restoreId ~= candidate.id then
+        DebugLog("Borrowing the target to re-read [" .. candidate.name .. "]'s buffs")
+        mq.cmdf("/mqtarget id %d", candidate.id)
+    end
+end
+
+---A cast leaves its target where it lands, but a read has no business leaving a mark: whatever
+---was targeted before the swap goes back -- unless somebody else has taken the target since,
+---in which case it is theirs now.
+---@param verify table
+local function restoreTarget(verify)
+    if verify.restoreId == nil then return end
+    if tonumber(mq.TLO.Target.ID()) ~= verify.id then return end
+    if mq.TLO.Spawn("id " .. tostring(verify.restoreId)).ID() == nil then return end
+    mq.cmdf("/mqtarget id %d", verify.restoreId)
+end
+
+---The packet is in and the client just replaced their whole cache with it, so for one moment
+---another player's bar reads like our own. Every live window held for them is squared against
+---it: a buff that is gone voids its record, one still up resyncs the record to what is actually
+---left -- longer or shorter, observation replaces inference. The recast decision itself is not
+---made here: voided records make the next look ask its normal questions, against this same
+---fresh cache.
+---@param verify table
+local function concludeVerify(verify)
+    local now = Time.current_time()
+    local candidate = { id = verify.id, name = verify.name }
+
+    for _, slot in ipairs(BuffStateConfig.GetActions()) do
+        local key = pairKey(slot, verify.name)
+        local at = BuffState._.tryAgainAt[key]
+        if at ~= nil and at > now then
+            local action = Action.GetActionType(slot)
+            local spell = (action ~= nil and action.Subject ~= nil) and action:Subject():Spelldata() or nil
+            if spell ~= nil then
+                local rebuffMs = rebuffAtMs(slot, durationMs(spell))
+                local remaining = remainingMs(spell, candidate)
+                if remaining == nil or remaining <= rebuffMs then
+                    BuffState._.tryAgainAt[key] = nil
+                else
+                    BuffState._.tryAgainAt[key] = now + remaining - rebuffMs
+                end
+            end
+        end
+    end
+
+    BuffState._.verifiedAt[verify.name] = now
+    -- something may have been voided; the very next pass is worth a real look
+    BuffState._.nextLookMs = 0
+    DebugLog("Re-read [" .. verify.name .. "]'s buffs from the target window")
+end
+
+---One pass of the re-read: quick checks from the world, then out of the way.
+---@param code string|nil the hold code this pass, if any
+local function progressVerify(code)
+    local verify = BuffState._.verify
+
+    -- a fight owns the target now. The swap is abandoned where it stands: whoever the fight
+    -- picks is not ours to put back
+    if code == "fighting" then
+        BuffState._.verify = nil
+        return
+    end
+
+    local spawn = mq.TLO.Spawn("id " .. tostring(verify.id))
+    if spawn.ID() == nil or spawn.Dead() then
+        -- gone or dead mid-read; the death observations already handle their records
+        restoreTarget(verify)
+        BuffState._.verify = nil
+        return
+    end
+
+    local targetId = tonumber(mq.TLO.Target.ID())
+    if targetId == verify.id and mq.TLO.Target.BuffsPopulated() == true then
+        concludeVerify(verify)
+        restoreTarget(verify)
+        BuffState._.verify = nil
+        return
+    end
+
+    if Time.current_time() - verify.startedMs > verifyEvidenceMs then
+        -- ran out without an answer -- or without ever holding the target, which includes the
+        -- player taking it mid-read, so only a swap we still hold is put back
+        BuffState._.verifiedAt[verify.name] = Time.current_time()
+        if targetId == verify.id then
+            restoreTarget(verify)
+        end
+        BuffState._.verify = nil
+    end
+end
+
 ---------------- The state itself --------------------
 
 function BuffState.Reset()
@@ -478,6 +744,7 @@ function BuffState.Reset()
     BuffState._.buffSlot = nil
     BuffState._.buffCoverNames = nil
     BuffState._.buffLastsMs = 0
+    BuffState._.verify = nil
 end
 
 ---Reasons to hold everything, in the order they are worth reporting.
@@ -506,6 +773,9 @@ end
 function BuffState.Describe()
     if BuffState._.castId ~= nil and BuffState._.buffTarget ~= nil then
         return "casting " .. tostring(BuffState._.buffTarget.spell) .. " on " .. BuffState._.buffTarget.name
+    end
+    if BuffState._.verify ~= nil then
+        return "re-reading " .. BuffState._.verify.name .. "'s buffs"
     end
     if BuffState._.holdReason ~= nil then
         return "holding: " .. BuffState._.holdReason
@@ -537,9 +807,10 @@ function BuffState.CountMissing(candidate)
         if action ~= nil and action.Subject ~= nil then
             local subject = action:Subject()
             local spell = subject:Spelldata()
-            if spell ~= nil and durationMs(spell) > 0 and appliesTo(slot, aimOf(subject), candidate) then
+            local lastsMs = spell ~= nil and durationMs(spell) or 0
+            if lastsMs > 0 and appliesTo(slot, aimOf(subject), candidate) then
                 configured = configured + 1
-                if needsBuff(spell, candidate) then
+                if needsBuff(slot, spell, lastsMs, candidate) then
                     missing = missing + 1
                 end
             end
@@ -563,6 +834,10 @@ end
 ---@return BuffSlotFacts facts
 function BuffState.DescribeSlot(slot)
     local facts = { aim = aims.single, aimText = "one at a time", scoped = true, lastsMs = 0, problem = nil }
+
+    -- a row being filled in has nothing to report yet, and "this character does not have it" is a
+    -- strange thing to say about a spell nobody has picked
+    if slot.name == nil or slot.name == "" then return facts end
 
     local action = Action.GetActionType(slot)
     if action == nil then
@@ -661,9 +936,21 @@ local function recordFinished(status, outcome, reason)
         if slot ~= nil then
             -- do not ask about this pairing again until the buff is nearly gone. This is what
             -- covers the people whose buffs we cannot read: the client will not tell us it landed
-            -- on them, so the fact that we cast it is the only record there is
-            local delay = math.max(BuffState._.buffLastsMs - BuffStateConfig.GetRebuffMs(), minimumRecheckMs)
-            holdOff(slot, names, delay)
+            -- on them, so the fact that we cast it is the only record there is. Ourselves and our
+            -- pet we *can* read back, so their record only has to outlast a hand-removal grace --
+            -- past that the buff itself is consulted, which is what notices one stripped early
+            local landedMs = math.max(BuffState._.buffLastsMs - rebuffAtMs(slot, BuffState._.buffLastsMs), minimumRecheckMs)
+            local myName = mq.TLO.Me.CleanName()
+            local petName = mq.TLO.Me.Pet.CleanName()
+            for _, name in ipairs(names) do
+                local isReadable = name == myName or (petName ~= nil and name == petName)
+                holdOff(slot, { name }, isReadable and minimumRecheckMs or landedMs)
+                if not isReadable then
+                    -- a landed cast is as good as a look at their bar: verification is for what
+                    -- changes between casts, and this starts that clock over
+                    BuffState._.verifiedAt[name] = Time.current_time()
+                end
+            end
         end
     else
         if not BuffState._.calledOff then
@@ -726,11 +1013,22 @@ end
 ---after changing a slot or after somebody's buffs were stripped.
 function BuffState.Recheck()
     BuffState._.tryAgainAt = {}
+    BuffState._.verifiedAt = {}
     BuffState._.lastScanMs = 0
     BuffState._.nextLookMs = 0
 end
 
 ---------------- Init --------------------
+
+---The world announcing a death. The candidate scan observes most deaths itself, but it only
+---runs when this state gets frames -- and a fight owns them exactly when people die, so somebody
+---battle-rezzed and back on their feet before the fight ends, or gone to a bind point in another
+---zone, is a death the scan never sees. This line arrives regardless. Both patterns hear every
+---death in range; a name holding no records is a no-op, so there is nothing to filter.
+---@param name string|nil who died, cleaned to its last word by the listener
+local function event_SomeoneDied(_, name)
+    buffsWereStripped(name)
+end
 
 ---@diagnostic disable-next-line: duplicate-set-field
 function BuffState.Init()
@@ -817,6 +1115,17 @@ function BuffState.Init()
     end
     Commands.RegisterCommEvent(Command.new(BuffState.eventIds.buffMe, event_BuffMe, buffMeDocs)
         :ActsOnSpeaker())
+
+    local slainDocs = ChelpDocs.new(function() return {
+        "(buffslain) Notices somebody being slain and forgets every buff record held for them",
+        " -- Dying strips buffs, so whoever died is looked at afresh once they are back up."
+    } end)
+    Commands.RegisterEvent(Event.new(BuffState.eventIds.slain, "#1# has been slain by #2#!", event_SomeoneDied, slainDocs))
+
+    local diedDocs = ChelpDocs.new(function() return {
+        "(buffdied) Notices somebody dying without a slayer named, same as buffslain"
+    } end)
+    Commands.RegisterEvent(Event.new(BuffState.eventIds.died, "#1# died.", event_SomeoneDied, diedDocs))
 
     ToggleCommand.Register({
         key = BuffState.key,
@@ -942,6 +1251,13 @@ function BuffState.Go()
         return true
     end
 
+    -- a re-read in flight is a status, not a job: it advances by being looked at, holds no
+    -- frame, and no cast is chosen under it -- a cast would take the very target it is borrowing
+    if BuffState._.verify ~= nil then
+        progressVerify(code)
+        return false
+    end
+
     if hold ~= nil then return false end
 
     if Time.current_time() < BuffState._.nextLookMs then return false end
@@ -949,9 +1265,15 @@ function BuffState.Go()
     prune()
     expireOrder()
 
-    local pick = choosePick(getCandidates())
+    local candidates = getCandidates()
+    local pick = choosePick(candidates)
     if pick == nil then
-        BuffState._.nextLookMs = Time.current_time() + idleLookIntervalMs
+        local watch = chooseVerify(candidates)
+        if watch ~= nil then
+            startVerify(watch)
+        else
+            BuffState._.nextLookMs = Time.current_time() + idleLookIntervalMs
+        end
         return false
     end
 

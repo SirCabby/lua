@@ -15,8 +15,9 @@ local Classes = require("cabby.classes.classes")
 ---
 ---Everything else about a slot is read off the spell rather than configured, because the spell
 ---already knows: whether it is a group buff, whether it is a pet buff, how long it lasts, and
----whether it would land at all. The only timing dial is `rebuff_secs` -- how little has to be
----left on a buff before recasting it is worth a gem timer.
+---whether it would land at all. The only timing dial is the slot's own `buff_rebuff_secs` --
+---how little has to be left on that buff before recasting it is worth a gem timer -- per slot,
+---because a two-hour buff and a ten-minute one have nothing in common about "nearly gone".
 ---@class BuffStateConfig : BaseConfig
 local BuffStateConfig = {
     key = "BuffState",
@@ -30,9 +31,12 @@ local BuffStateConfig = {
     }
 }
 
----A minute is about right for a buff that has hours on it and far too long for a song; the
----escape hatch for either is the slot's own Lua expression.
-local defaultRebuffSecs = 60
+---Three minutes of headroom keeps a buff from ever actually fading between looks: long enough
+---to ride out a fight owning the frames right as the timer runs down, short enough that no
+---meaningful duration is thrown away. Far too long for a short buff -- the state clamps the
+---effective value against half of what the buff actually lasts, so a song is not recast the
+---moment it lands.
+local defaultRebuffSecs = 180
 
 ---@param str string
 local function DebugLog(str)
@@ -77,8 +81,9 @@ local function initAndValidate()
         taint = true
     end
 
-    if configRoot.rebuff_secs == nil then
-        configRoot.rebuff_secs = defaultRebuffSecs
+    if configRoot.rebuff_secs ~= nil then
+        -- the dial moved onto each slot (buff_rebuff_secs); the page-wide value is retired
+        configRoot.rebuff_secs = nil
         taint = true
     end
 
@@ -163,24 +168,6 @@ function BuffStateConfig.SetInCombat(enable)
     print("BuffState buffs during combat: [" .. tostring(enable) .. "]")
 end
 
----How little has to be left on a buff before it is worth recasting. The one timing dial: a buff
----is not recast because it is old, it is recast because it is nearly gone.
----@return number secs
-function BuffStateConfig.GetRebuffSecs()
-    return getConfigSection().rebuff_secs
-end
-
----@param secs number
-function BuffStateConfig.SetRebuffSecs(secs)
-    getConfigSection().rebuff_secs = math.max(math.min(math.floor(secs), 3600), 0)
-    Global.configStore:SaveConfig()
-end
-
----@return number ms the same, in milliseconds, which is what every duration reads as
-function BuffStateConfig.GetRebuffMs()
-    return BuffStateConfig.GetRebuffSecs() * 1000
-end
-
 ---@return table actions the buff slots, in the order they are tried
 function BuffStateConfig.GetActions()
     return getConfigSection().actions
@@ -214,6 +201,30 @@ end
 function BuffStateConfig.SetScope(action, scope)
     action.buff_scope = scope
     Global.configStore:SaveConfig()
+end
+
+---How little has to be left on this slot's buff before it is worth recasting. A buff is not
+---recast because it is old, it is recast because it is nearly gone -- and "nearly" belongs to
+---the slot, so the headroom on a two-hour buff does not chew through a ten-minute one.
+---@param action Action
+---@return number secs
+function BuffStateConfig.GetRebuffSecs(action)
+    local secs = tonumber(action.buff_rebuff_secs)
+    if secs == nil then return defaultRebuffSecs end
+    return secs
+end
+
+---@param action Action
+---@param secs number
+function BuffStateConfig.SetRebuffSecs(action, secs)
+    action.buff_rebuff_secs = math.max(math.min(math.floor(secs), 3600), 0)
+    Global.configStore:SaveConfig()
+end
+
+---@param action Action
+---@return number ms the same, in milliseconds, which is what every duration reads as
+function BuffStateConfig.GetRebuffMs(action)
+    return BuffStateConfig.GetRebuffSecs(action) * 1000
 end
 
 ---@param scope string

@@ -12,6 +12,14 @@ local ActionType = require("cabby.actions.actionType")
 ---AFCleric has chosen a heal, and it is what lets one mechanism cover what those macros spelled
 ---out one setting at a time: a slot at 85% scoped to the tank is TankHealPoint, a slot at 50%
 ---scoped to yourself is SelfHealPoint, and a group heal at 60% is DivArbPoint.
+---
+---Scope only ever narrows a heal that *could* go to more than one person. Where a spell can be
+---aimed is the spell's own business and outranks it: a pet heal lands on the pet and a self heal
+---lands on us whatever the slot says, which is why the page offers those slots the one scope they
+---can have and does not let it be changed.
+---"Anyone else" is the rest of the group and not the pet -- the pet has a scope of its own, and
+---a heal meant for the people in the group should not be spent on a pet because nobody thought
+---to say so.
 ---@class HealStateConfig : BaseConfig
 local HealStateConfig = {
     key = "HealState",
@@ -19,7 +27,8 @@ local HealStateConfig = {
         Any = { value = "any", display = "Anyone" },
         Self = { value = "self", display = "Myself" },
         Tank = { value = "tank", display = "The tank" },
-        Others = { value = "others", display = "Anyone else" }
+        Others = { value = "others", display = "Anyone else" },
+        Pet = { value = "pet", display = "My pet" }
     },
     _ = {
         isInit = false
@@ -60,7 +69,10 @@ local function initAndValidate()
 
     if configRoot.heal_pets == nil then
         -- off by default: a pet is cheaper to re-summon than a heal is to cast, and a healer
-        -- spending mana on one while the tank drops is the classic complaint about heal bots
+        -- spending mana on one while the tank drops is the classic complaint about heal bots.
+        -- A pet class that means to keep its pet up turns it on, and the Heal State page says so
+        -- against any slot holding a pet heal, which would otherwise never fire for no visible
+        -- reason
         configRoot.heal_pets = false
         taint = true
     end
@@ -115,6 +127,13 @@ function HealStateConfig.SetEnabled(enable)
     print("HealState is Enabled: [" .. tostring(enable) .. "]")
 end
 
+---Whether the rest of the group is somebody this character heals at all -- which is to say
+---whether they are *watched*, since a heal is only ever chosen for somebody being watched. Off
+---leaves this character and its pet, and a group-mate at 10% to whoever else is healing.
+---
+---It says nothing about group heal *spells*. One of those is cast because enough of the people
+---being watched are hurt, so switching this off shrinks the count it is judged against rather
+---than taking the spell out of the list.
 ---@return boolean healGroup
 function HealStateConfig.GetHealGroup()
     return getConfigSection().heal_group
@@ -124,7 +143,7 @@ end
 function HealStateConfig.SetHealGroup(enable)
     getConfigSection().heal_group = enable == true
     Global.configStore:SaveConfig()
-    print("HealState heals the group: [" .. tostring(enable) .. "]")
+    print("HealState heals group members: [" .. tostring(enable) .. "]")
 end
 
 ---@return boolean healPets

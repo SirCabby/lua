@@ -4,14 +4,16 @@ Companion to [ARCHITECTURE.md](ARCHITECTURE.md). Origin: design review 2026-07-1
 Vision: one script that bots any class/race — states for every band in the priority table
 (commands, passive, cure, heal, pull, mez, tank, dps, loot, anchor, follow, buff).
 
-Current coverage: Follow/Anchor/ClickZone, Melee, Spell DPS, Heal, Buff, AdvLoot, Rest and Flee
-states, over
+Current coverage: Follow/Anchor/ClickZone, Melee, Spell DPS, Pet DPS, Heal, Buff, Pet Setup,
+AdvLoot, Rest and Flee states, over
 a shared engagement (`combat.lua`) that the group's main tank and main assist steer (`roles.lua`);
 all sixteen classes load as profiles over those (the nine melee
-classes melee, eleven cast damage, the three priests and three hybrids heal, the twelve with a
-spellbook buff, and everyone follows, rests, flees and minds the loot window). The casting service and all five action
-types exist (Phase 3), so an action list can hold a spell, clicky or AA and `/ccast` can fire
-anything by hand. Everything else below.
+classes melee, eleven cast damage, the three priests and three hybrids heal — as do MAG, NEC and
+SHD, whose heal lists are how a pet is kept up and how the empathy line is spent — the twelve with
+a spellbook buff, the six with a companion pet summon it, gear it and send it in, and everyone
+follows, rests, flees and minds the loot window). The casting and giving services and all five action
+types exist (Phase 3), so an action list can hold a spell, clicky or AA, `/ccast` can fire
+anything by hand and `/cgive` can hand anything over. Everything else below.
 
 ---
 
@@ -228,9 +230,15 @@ Still open in this phase:
 landed:
 
 - ~~**The state**~~ — one ordered list of heal slots, each an action plus the health it is for and
-  who it is for (anyone / the tank / myself / anyone else). An order first, then a group heal when
-  enough of the group is hurt, then whoever is worst off; group heals stand down while anyone is
-  below the emergency point.
+  who it is for (anyone / the tank / myself / anyone else / my pet). An order first, then a group
+  heal when enough of the group is hurt, then whoever is worst off; group heals stand down while
+  anyone is below the emergency point.
+- ~~**Where a heal can be aimed**~~ — self, pet, group or single, read off the spell rather than
+  configured (the buff state's `aims` model, arrived at second here). It outranks scope, so a pet
+  heal is for the pet whatever the slot says, and self and pet heals are cast at nobody while the
+  state still records who they were for. This is what let the pet classes in: before it,
+  `NeedsTarget` was false for a pet heal exactly as for a group heal, so a magician's only heal
+  would have been cast because three *people* were hurt.
 - ~~**Reconsidering a heal in the air**~~ — called off when the target dies or leaves, climbs back
   above the threshold that triggered it, or somebody else drops into an emergency.
 - ~~**Commands**~~ — `healnow <id | off>` and `healme` (which acts on whoever said it, the "patch me"
@@ -241,19 +249,29 @@ landed:
   as that switch.
 - ~~**The page**~~ — status, who is being watched and their health, the switches, the emergency
   point, and the slot list with its per-slot threshold and scope. `ActionUI.ActionControl` grew an
-  `extras` hook for the per-slot controls that belong to the state rather than to the action.
+  `extras` hook for the per-slot controls that belong to the state rather than to the action. Each
+  row reports what its spell can be aimed at, offers only the scopes that spell can actually be
+  given (a pet heal's dial reads "My pet" and is not editable; a group heal has none), and says why
+  a slot will never fire when it will not — a pet heal with `healpets` off being the one that would
+  otherwise be silent.
 - ~~**The command factory**~~ — the `action` command moved out of MeleeState into
   `commands/actionCommand.lua`, so both states register the same thing instead of one copying the
   other.
 - ~~**Class profiles**~~ — CLR/DRU/SHM at the heal band (druid and shaman one step lower until
   runtime priority adjustment exists), PAL/RNG/BST at `Priorities.heal + 5`, with the matching
-  `unimplemented` lines removed.
+  `unimplemented` lines removed. The pet classes joined them at `heal + 5` (2026-07-30): MAG and
+  NEC for their pet heals, NEC and SHD for the empathy line they spend their own health on. ENC
+  stayed out — it has a pet and no heal for it or for anybody, so its page would be empty.
 - Verified off-client (54 checks: a healthy group left alone, worst-off-first selection, scope
   filtering in both directions, group heals with and without enough hurt, emergency standing down
   a group heal, called-off heals for all three reasons, the settle window and its emergency
   exemption, orders ahead of the state's own judgment, `healme` resolving the speaker, an order
   for a healthy target refused, the switches and the shared action command reaching the config)
-  under LuaJIT and Lua 5.1. **In-game smoke test still pending** — see Verify.
+  under LuaJIT and Lua 5.1, and 32 more for the aims model (a pet heal cast for a hurt pet and
+  aimed at nobody, the same slot idle with `healpets` off, a pet heal *not* fired because three
+  people are hurt, group and single heals unchanged, self heals only for us, "anyone else"
+  skipping the pet, the pet scope picking it out, the settle window held against the pet, and what
+  the page is told about each kind of slot). **In-game smoke test still pending** — see Verify.
 
 **Spell DPS: done** (`states/spellDpsState.lua`, its config and page), and with it the split the
 dps band always implied. What landed:
@@ -276,6 +294,31 @@ dps band always implied. What landed:
   `IsReady` as well as to `DoAction`.
 - ~~**auto_engage moved**~~ to the combat config, taken across automatically from the melee
   section for characters that already had it set.
+- ~~**Damage shields joined the rotation**~~ — the one kind of damage that is cast on a friend, and
+  the band it belongs in is this one: below the melee state nothing gets a frame while a fight is
+  on, so a shield left to the buff state goes up after the fight rather than for it. A slot holding
+  one carries `dps_scope` and reads like a heal slot (anyone / the tank / myself / anyone else / my
+  pet), with where the spell can be aimed read off the spell and outranking it. `start below %`
+  does not hold one back — that number is aggro management for damage aimed at the mob — and a
+  landed shield is remembered by name for as long as it lasts, because the people wearing it are
+  not who we have targeted and their buff cache reads empty. Covered headless (a plain rotation
+  unchanged, a shield going to the tank instead of the mob, no recast while it is up, a death
+  voiding the record, the start point holding the nuke but not the shield, each scope, a self-only
+  spell keeping the one scope it can have, a group shield remembering everyone it covered, and
+  what the page is told about each kind of slot). **In-game smoke test still pending** — see
+  Verify.
+- ~~**Easing off what we pull off the tank**~~ (2026-07-30) — the restraint both dps states share,
+  because a rogue and a wizard ripping the tank's mob is one mistake. `Combat.ShouldEaseOff` reads
+  the two facts the service already keeps — the mob we are hurting is at the top of *our* hate list,
+  and holding it is the main tank's job — and each state acts on it its own way: melee drops the
+  swing and its ability, taunt and hate lists (the stick stays), the rotation holds everything aimed
+  at the mob and lets a damage shield through. Nothing is remembered and nothing is timed; the pass
+  the tank is back on top is the pass the damage resumes. Not knowing what the tank is on reads as
+  *the tank has this one*, matching the pet state's taunt. The `easeoff` switch is on by default and
+  never fires for the main tank itself, or for a group with no tank named, or for an add the tank is
+  not on — that one is ours to kill, and `defend` is what is said about it. Covered headless (the
+  whole decision table, melee's silence including the taunt lists, the shield exemption, and the
+  resume on both sides). **In-game smoke test still pending** — see Verify.
 
 **Buff: done** (`states/buffState.lua`, `configs/buffStateConfig.lua`,
 `ui/states/buffStateMenu.lua`; the model is described in ARCHITECTURE.md, "Buff state"). What
@@ -287,13 +330,19 @@ landed:
   spell rather than configured, so a pet buff is for pets whatever the slot says and a heal that
   ends up in the list is caught rather than cast on a loop.
 - ~~**Knowing what is missing**~~ — duration first (`Me.Buff`, `Me.Pet.BuffDuration`,
-  `Spawn.CachedBuff`, all in milliseconds) against one `rebuff_secs` dial, then stacking
+  `Spawn.CachedBuff`, all in milliseconds) against the slot's own rebuff dial (default three
+  minutes, clamped to half the buff's duration so short buffs are not churned), then stacking
   (`Stacks` / `StacksPet` / `StacksSpawn`, plus `BlockedBuff` for ourselves), which also answers
   "a better buff is already there" and "too powerful for them" without spending a cast.
 - ~~**How long an answer is good for**~~ — the part healing did not need. Another player's buffs
   are only visible once the client has cached them (targeting does it) and an empty cache reads as
   a clean one, so each (slot, spawn) pairing carries a retry window: the buff's duration less the
-  rebuff window after one lands, seconds after one fails. Dropped wholesale by `/cbuff refresh`.
+  rebuff window after one lands, seconds after one fails. Dropped wholesale by `/cbuff refresh` —
+  and voided early by the world (2026-07-29): an observed death (scan or slain line) drops every
+  window held for that name, readable people (us, the pet) only ever get a short window before the
+  buff itself is consulted again, and everybody else is verified about once an idle minute by
+  borrowing the target until `Target.BuffsPopulated` (a status per pass, never a held frame) and
+  squaring their windows against the fresh cache.
 - ~~**Restraint**~~ — not during a fight (and a fight starting calls off the buff in the air), not
   while running, bards excepted. Buffing gets its frames because follow yields the moment it has
   caught up, which is what makes `Priorities.buff` work without the `- 1` juggling the dps split
@@ -302,9 +351,9 @@ landed:
   missing", so it stays open until the casts go quiet); `buffing`, `buffgroup`, `buffpets` and
   `buffcombat` as switches; `buffaction` over the slots; `/cbuff` for status, `/cbuff refresh` to
   forget what was worked out.
-- ~~**The page**~~ — status, the switches, the rebuff window and a Check Everybody Now button, the
-  slot list with its scope and class picker, and what each slot amounts to (where it aims, how long
-  it lasts, or why it will never fire).
+- ~~**The page**~~ — status, the switches and a Check Everybody Now button, the slot list with its
+  scope, class picker and per-slot rebuff dial, and what each slot amounts to (where it aims, how
+  long it lasts, or why it will never fire).
 - ~~**Class profiles**~~ — the twelve classes with a spellbook at `Priorities.buff`, with the
   matching `unimplemented` lines removed.
 - Verified off-client (85 checks: a buffed group left alone, list order deciding, scope and class
@@ -318,6 +367,177 @@ landed:
 Buff's own leftovers: other people's pets, buffs cast *because* of a moment rather than to keep
 them up (paragon, a group heal-over-time), twisting for bards, and any awareness of what the other
 buffers in the group have already cast.
+
+**Pet setup: done** (`states/petSetupState.lua`, `configs/petSetupStateConfig.lua`,
+`ui/states/petSetupStateMenu.lua`, plus the giving service below; the model is described in
+ARCHITECTURE.md, "Pet setup state"). Named `PetState` when it landed and renamed the same day, when
+the fighting half of a pet became its own state: an old `PetState` config section is moved across on
+first load, so nobody's pet list or gear counts are lost to the rename. What landed (2026-07-30):
+
+- ~~**The state**~~ — two ordered lists at `Priorities.buff - 1`: what summons a pet (first ready
+  one wins, so its order is the preference and its Enabled switches pick today's elemental) and
+  what gets conjured and handed to it. Each pass asks *is there a pet* and then *has this pet been
+  given what the list says*, and starts at most one thing.
+- ~~**What a slot is, read off the spell**~~ — a pet slot summons a pet because the spell carries
+  the effect that does (SPA 33/71/106/108/151, never the swarm effect 152), and a gear slot
+  conjures an item because it carries SPA 32/109, whose base value is the item's own id. So nothing
+  is told which item a spell makes, the pickers narrow by the same reading (`Spells.petSummons`,
+  `Spells.itemSummons`), and a slot holding the wrong kind of spell says so on its row instead of
+  being cast on a loop. The one dial is `pet_gear_count`, which no spell can answer.
+- ~~**What the pet was given**~~ — a pet's inventory is not readable (the client says only what it
+  is *wielding*), so the record of what we handed it is the only answer there is. It belongs to one
+  pet by spawn id and dies with it, so a replacement is kitted out from nothing with nothing to
+  clear. A pet we did not summon is left as we found it unless it is empty-handed, and `gearpet`
+  overrules that guess.
+- ~~**Handing it over**~~ — `utils/Giving`, a service for the same reason casting is one: four
+  commands and three waits on the client, so a state walking them itself would leave a give window
+  open with an item in it the first time a fight took the frame. Evidence windows answer each step,
+  both give shapes are handled (the window, or a client that takes it off the cursor), the player's
+  own cursor is never taken, and an abandoned hand-off cancels the window and stows what it moved.
+  `/cgive` drives it by hand.
+- ~~**Restraint**~~ — dead, in a fight (`petsetupcombat`, off by default) or moving holds everything,
+  and a fight starting calls off what is in the air. A vanished pet gets a five second grace before
+  it is replaced, because the world does not say whether it died or was let go and `/pet get lost`
+  must not be undone on the next frame. Casts for a gear slot are bounded by what the pet is owed,
+  so a summon that lands and conjures nothing is not repeated forever.
+- ~~**Commands**~~ — `summonpet` and `gearpet` as orders (both outrank the switches and the grace),
+  `petkeeping`, `petsummoning`, `petgearing` and `petsetupcombat` as switches, `petaction` over both
+  lists, `/cpet` for status and for `off`/`gear`/`summon`. Only `petsetupcombat` changed name with
+  the split, because "pet" and "combat" in one word now reads like the pet dps master switch. An
+  order's clock stops while the state is held (2026-07-30): a fight is not the same thing as an ask
+  that has stopped meaning anything, and a `gearpet` said as a pull lands used to be dropped in
+  silence fifteen seconds later.
+- ~~**Somebody else's pet** (`petgear`, 2026-07-30)~~ — the group says it, and whoever has a gear
+  list walks that list once for the asker's pet: same slots, same counts, same conjure-then-hand
+  sequence, and a record of the same shape keyed to their pet's spawn id. A request rather than a
+  switch — it ends when there is nothing left to hand over and forgets the pet — and a character
+  with nothing on its gear list answers with silence, so one spoken line is one magician moving
+  rather than six characters explaining themselves. It is also the one deliberate breach of the
+  no-phrase-is-a-prefix rule (`petgear` inside `petgearing`), handled in the handler: a line whose
+  next character is not a space is somebody else's command.
+- ~~**Class profiles**~~ — MAG, NEC, BST, ENC, SHD and SHM at `buff - 1`.
+  CLR, WIZ and DRU have pet spells and are deliberately out: a hammer, a sword and the behest are
+  cast into a fight for the fight, and this state works between them.
+- Verified off-client (54 checks: the grace before a re-summon and an order skipping it, a summon
+  cast and the pet adopted from it, conjure-then-hand-over end to end with the four client commands
+  in order, an adopted pet with something in hand left alone and `gearpet` overruling it, an
+  empty-handed one geared, a fight holding everything and calling off the cast, two of an item over
+  two rounds, the cast bound on a summon that conjures nothing, a dead pet taking its record with
+  it, a slot holding a nuke reporting why, the moving hold, a pet too far away failing with a
+  reason and leaving nothing on the cursor, a client with no give window, calling a hand-off off
+  mid-window putting the item back, and a loaded cursor refusing the hand-off outright), plus 25
+  more for the startup rule and `petgear` (2026-07-30, Lua 5.4 and LuaJIT: a pet that was here at
+  startup left alone with daggers in the bags and `gearpet` overruling it, an unsummoned pet that
+  turned up mid-session still geared when empty-handed and left alone when not, the ask handed to
+  the asker's pet id rather than ours and bounded by the slot's count, the conjure credited to the
+  ask rather than to our own pet, the `petgearing` prefix line dropped, an asker with no pet and one
+  we cannot see both told, silence from a character with no gear list, an ask ending when the pet is
+  gone, and a fight not timing an ask out).
+  **In-game smoke test still pending** — see Verify.
+
+Pet setup's own leftovers: summoning for anybody but the pet (mod rods, food and drink on request).
+A charmed pet is no longer one of them — since 2026-07-30 it is recognised and deliberately left
+alone here (nothing conjured, nothing handed over, `gearpet` saying why), because what a charmed mob
+is given leaves with it when the charm breaks.
+
+**Pet dps: done** (`states/petDpsState.lua`, `configs/petDpsStateConfig.lua`,
+`ui/states/petDpsStateMenu.lua`, plus `pet.lua`; the model is described in ARCHITECTURE.md, "Pet dps
+state"). The other half of a pet, split off from the setup state the day it landed because the two
+halves belong in two bands. What landed (2026-07-30):
+
+- ~~**The state**~~ — at `Priorities.dps - 2`, above both rotations for the reason SpellDpsState is
+  above MeleeState: the melee state is busy for the whole fight, and a pet order that waits for the
+  rotation is a pet arriving after the mob has picked somebody. Each pass reads who the pet is,
+  what `combat.lua` is on and what the pet is on, says at most one thing, and yields.
+- ~~**Sending it in**~~ — `/pet attack <spawnid>`, MacroQuest's own extension of the client
+  command, so nothing here touches the client's target (the bare command sends the pet at whatever
+  *we* are looking at, which a heal cast mid-fight would turn into a pet sent at a group member).
+  Repeated on a pacing window for as long as the pet is not on what the fight is on, which is also
+  what moves it to the successor mob without anything having to notice a successor.
+- ~~**Calling it off**~~ — only ever off the mob this fight put the pet on, which is the one number
+  held between passes and is dropped the moment the pet is not on it. A pet that has moved to
+  something else picked that up itself and is left alone; a pet that went in on its own on what we
+  are fighting is adopted and called off with the rest of the fight.
+- ~~**The aggro gate**~~ — `send in below %`, the rotation's `start below %` for a pet, shipped at
+  100 (in as soon as there is a fight) with the page's button and `/cpetdps in` as the order that
+  outranks it.
+- ~~**The four switches**~~ — taunt, hold, greater hold and focus as three-way dials (leave alone /
+  on / off), enforced by reading where each stands and flipping what disagrees, because this
+  client's pet commands are toggles with no on/off form. They are kept per pet by the client, so a
+  new pet arrives with all four off and something has to keep putting them back. A switch flipped
+  by hand gets fifteen seconds before the dial wins again.
+- ~~**Taunt answered from the group**~~ (2026-07-30) — a fourth dial position, `Automatic`, offered
+  for taunt alone because taunt is the one of the four whose right answer is not a setting: off
+  while the group's main tank is on what the pet is on, on when there is no main tank at all or the
+  tank is demonstrably on something else, and off when a named tank's target cannot be seen from
+  here (ripping a mob off a warrior being the expensive way to be wrong). What the tank is on comes
+  from `Combat.GetTankTargetId` — us, the tank's own heard `assist` call, or the client's assist
+  record when the tank holds that role too — which is also new, and is the first thing in cabby to
+  read a heard call as a *record* rather than only as an order. Between two mobs of one fight the
+  last answer stands rather than flapping, and the state's own answer moving drops the marks that
+  would otherwise read it as a hand flip and grace it for fifteen seconds.
+- ~~**The protect job**~~ (2026-07-30) — a dial for what the pet is *for*: `fight` (what it has
+  always done, and the default) or `protect`, which puts a mob actually coming for this character
+  above the fight. The pet is sent at it with taunt on, moves to the next thing on us when that one
+  has turned round, and goes back to the fight when nothing is. The whole cycle is
+  `Combat.GetUnderAttackIds` (also new) read fresh every pass — a peeled mob leaves that list on its
+  own, because we are no longer the one it is coming for, so nothing is timed and no peel is
+  remembered. It does not wait on there being a fight (a beating with `autoengage` off is still a
+  beating) and it skips the send-in gate (a mob already on us has no aggro left to manage). While
+  peeling, the job outranks the dials on taunt (on) and focus (off) and leaves hold and greater hold
+  alone — those gate what a pet picks up unbidden, and everything here is bidden. A switch set to
+  "leave alone" is borrowed rather than taken: where it stood is written down and put back when the
+  peel ends, so the job cannot quietly change somebody's pet for good.
+- ~~**Commands**~~ — `petattack` as the switch (off calls the pet off and stops sending it, which
+  is also how to get a pet back mid-fight without calling the fight off), `/cpetdps` for status and
+  for `in`/`on`/`off`/`job fight|protect`. Deliberately no chat verb per client command: what the
+  pet fights follows the engagement, so `attack <id>` and `attack off` already move it.
+- ~~**Class profiles**~~ — the same six as pet setup, at `dps - 2`, with the "sending the pet in
+  and calling it off" lines gone from their `unimplemented`.
+- Verified off-client (44 checks under Lua 5.4 and LuaJIT: no pet and dead saying nothing, the send
+  by id, the pacing window and the re-send, the successor mob, the seek beat leaving the pet where
+  it is, the call-off and its repeat until the world agrees, a pet that moved to an add left alone,
+  a pet adopted from its own charge and called off at the end, a replaced pet taking the record
+  with it, the gate holding and releasing and an order overruling it, an order lapsing, a dead
+  target not sent at, a switch flipped and not flipped twice inside its window, a hand flip graced
+  and then put back, "leave alone" never touched, a new pet's switches set at once, the settle
+  after a pet appears, the fight outranking the switches, switching the state off calling the pet
+  off through the command queue and not otherwise, and the flee hand-off with its pacing and its
+  "a pet following its owner is not fighting" guard), and 26 more for the automatic taunt dial
+  under Lua 5.5 and LuaJIT (the tank's target from each of its three sources and from none of them,
+  a call by somebody who is not the tank ignored, our own engagement when we hold the role and
+  nothing mid-seek; then no tank taunting on, a tank picking the mob up taunting off, the tank
+  leaving it taunting straight back on with no hand grace in the way, an unreadable tank target
+  taunting off, the beat between two mobs saying nothing at all, a hand flip still graced and then
+  put back, `auto` on a switch nothing answers reading as leave alone, and a replacement pet
+  re-derived from nothing), and 26 more again for the protect job (the fighting job ignoring a mob
+  on us, the peel outranking the fight, taunt taken from a left-alone dial and put back when the
+  peel ends, a second mob taken once the first has turned round, the pet keeping the one it has
+  while that one is still on us, the fight's own target being what is on us, a peel with no fight at
+  all, the send-in gate skipped, and focus taken against a dial that says on and restored by that
+  dial rather than by a loan). **In-game smoke test still pending** — see Verify.
+
+**What kind of pet it is: done** (`pet.lua`, read by both pet states and the flee state; the model is
+described in ARCHITECTURE.md, "Pet dps state"). An enchanter's animation takes no pet commands at
+all, which made every dial on the pet dps page a lie for the one class that most needed the page to
+be honest. What landed (2026-07-30): the kind of pet read from the world rather than assumed -- a
+charm effect on the pet's own buffs says charmed, an enchanter's own pet is an animation, everything
+else is summoned -- and `Animation Empathy` read for which words an animation is listening for
+(attack at rank 2, back off and the four switches at rank 3). The dps state says nothing it cannot
+be heard saying: no order, no back off, no switch flipped, no peel worked out for a pet that cannot
+be sent, `/cpetdps in` answering instead of holding an order nobody will carry out, and the page
+naming the pet's kind and what is missing rather than showing dials that do nothing. Flee's `/pet
+back off` is gated by the same read, and the setup state uses the charmed half of it. 59 headless
+checks (Lua 5.4 and LuaJIT: no pet, an elemental answered at once, the animation at rank 0, 1, 2, 3
+and 17, a charmed pet taking everything with no AA at all, a charm the client fills in a beat late,
+the answer settling and then standing, a new pet re-derived from nothing, an unreadable class
+answering nothing, and one buff scan across ten passes).
+**In-game smoke test still pending** — see Verify.
+
+Pet dps's own leftovers: nothing reacts to the pet's *health* (keeping it alive is the heal state's
+`healpets`, and a pet backed off because it is dying would be this state's call to make); pet
+disciplines and AAs are ordinary damage in the spell dps rotation rather than something aimed at
+the pet's own timers; and swarm pets are still a rotation slot and not a pet.
 
 **Rest: done** (`states/restState.lua`, `configs/restStateConfig.lua`,
 `ui/states/restStateMenu.lua`; the model is described in ARCHITECTURE.md, "Rest state"). The first
@@ -386,17 +606,29 @@ What landed:
   the follow task kept where a stick is dropped, and flee first in an assembled class chain) under
   LuaJIT. **In-game smoke test still pending** — see Verify.
 
-Flee's own leftovers: the **pet**, which goes on fighting whatever it was told to and trails the run
-— `/pet back off` belongs here, but cabby issues no pet commands anywhere yet and half a pet
-behavior (what it was fighting, whether to put it back afterwards) is worse than none, so it waits
-for a pet domain to live in; nothing decides on its *own* to flee (low health, a named spawning, a
+Flee's own leftovers: ~~the **pet**, which goes on fighting whatever it was told to and trails the
+run~~ — **done** (2026-07-30): `Go()` reads `Pet.IsFighting()` and says `/pet back off` every pass
+it finds it true, paced at a second and a half, exactly as it drops auto attack and for the same
+reason — PetDpsState would have done it and is starved at the dps band. Nothing decides on its *own* to flee (low health, a named spawning, a
 wipe), which is a trigger to hang off it once there is anything watching for those; and there is no
 group "everybody run" beyond saying `flee on` to a channel, which is Phase 5's coordination.
+
+**Mez landed 2026-07-30** — add control at `Priorities.mez`, the first state above the dps bands
+that is not about damage, and the enchanter is the first class to register one. It came with a
+service under it: `cabby/mobs.lua`, the shared roster of what is *in* the fight, merged from four
+angles (the engagement, the extended target window, the group's `defend` reports, and a sweep for
+NPCs in combat stance nearby) with each entry recording which angles saw it. That split was
+deliberate — "which mobs are here" is a fact a puller's leash and a tank's add sweep will want the
+same answer to, and crowd control acting on a list it assembled privately is crowd control nobody
+can audit. See ARCHITECTURE.md, "Mob roster" and "Mez state". 35 headless checks pass over the
+state's decisions (kill target never mezzed, refresh before the wear-off, the break signals beating
+the cache, immune and resist remembered, the softener deferral, AE count and centring, the AE safety
+switch, zone reset). **In-game verification still pending** — see Verify.
 
 Still to come, per priority band: **Passive** (global pause; the same shape as flee with an empty
 exemption set, plus a /cpause slash + comm command),
 **Cure** (detrimental scan → cure actions), **Pull** (target selection, pathing, leash,
-camp radius), **Mez** (add control, in-combat priority above dps), **Tank** (taunt/hate
+camp radius), **Tank** (taunt/hate
 action lists already modeled in MeleeStateConfig; needs aggro-loss detection for "as
 needed" usage),
 **Loot** (the roll-etiquette half exists: `AdvLootState` answers the akk-stack loot window's
@@ -533,6 +765,17 @@ backstab positioning; nothing asks for it).
    from a hotbar button, and `healme` spoken by a tank in another window — and while you are
    there, confirm the prefix rule the naming assumes (a phrase also matching longer lines that
    start with it) actually holds, since Verify item 1 has never been answered.
+
+   Then the pet half, on a magician or a necromancer (2026-07-30): with `healpets` on and a pet
+   heal configured, does it fire on a hurt pet and *not* while only people are hurt — and does it
+   go out with nothing targeted, leaving whatever you were looking at alone? The reads it rests on
+   that a simulated client cannot answer: that `Me.Pet.PctHPs` tracks a pet taking damage as
+   closely as a group member's does (the settle window is the same length for both), that a
+   pet-target spell really is refused at range rather than cast into nothing (the range check is
+   skipped for a heal that aims itself), and that the client files this server's pet heals
+   somewhere the Heals picker now offers — Health as well as Heals, which is where Renew Elements
+   and the Mending line sit in the RoF2 data. Also worth a look: the row's own report ("on my pet")
+   and the warning it shows while `healpets` is off.
 13. **The dps split, in game.** On a hybrid (a paladin is the clearest): does `attack <id>` start
    both the swinging and the casting, does `melee off` leave the spells running, and does `nuke
    off` leave the swinging? Then the ordering that the split depends on — the rotation should get
@@ -543,6 +786,19 @@ backstab positioning; nothing asks for it).
    passes on, and never in place of a nuke that was ready. Also confirm the auto_engage
    migration: a character with an existing config should keep whatever it had set, and its
    `MeleeState` section should come back without the key.
+
+   Then the damage shield half (2026-07-30): put one in the rotation on a magician, scope it to
+   the tank, and pull. It should go up *first*, before the mob has dropped to the start point,
+   land on the tank rather than on the mob, and then never be cast again while it is up — the last
+   of those is the one to watch, because the tank's buff cache is empty from here (we have the mob
+   targeted, not them) and a wrong answer looks like a cast every time the gem comes back. Then
+   let it fade mid-fight and confirm it goes up again, and kill the tank and rez them and confirm
+   they are shielded rather than left bare. Also worth confirming the reads the choosing rests on:
+   that this server files its shields under a heading the Damage Shield set actually matches (the
+   picker's row says what each spell is filed under with **Show every spell** on), that
+   `Spell.Beneficial` is what separates the two halves on this build, and that the cast leaving
+   the target on the tank is recovered by the melee state's own re-target rather than stalling the
+   swing.
 14. **Buffing, in game — and cached buffs above all.** The whole "what is missing" model rests on
    reads a simulated client cannot answer, and the load-bearing one is
    `Spawn[id].CachedBuff[name]`: does it return anything at all on this emu client, and does a
@@ -550,8 +806,11 @@ backstab positioning; nothing asks for it).
    it)? If it never populates, `StacksSpawn` says yes to everybody — MQ's own implementation
    returns "it stacks" for a spawn it has no buffs for — and the only thing stopping a rebuff loop
    is the retry window, which means every group buff gets recast once per duration whether it
-   needed it or not. Worth watching for over a couple of hours before deciding whether the state
-   should target people to refresh their cache. Then, in rough order: `Me.Buff[x].Duration` and
+   needed it or not. The state now targets people to refresh their cache itself (2026-07-29
+   verification: borrow the target, wait on `Target.BuffsPopulated` a pass at a time, restore),
+   which is also what to watch in game: the swap landing, the packet arriving inside its second
+   (`/echo ${Target.BuffsPopulated}` while targeting a member), the target going back, and death →
+   rez → prompt rebuff without `/cbuff refresh`. Then, in rough order: `Me.Buff[x].Duration` and
    `Me.Pet.BuffDuration[x]` really are milliseconds (both are timestamps in the source, but
    `CachedBuff.Duration` is documented as ticks and is not); `Spell.MyDuration.TotalSeconds` reads
    through `tonumber`; `Stacks` is false for a buff we already hold at full duration and true for
@@ -613,3 +872,242 @@ backstab positioning; nothing asks for it).
    member's own wounded pet if the main assist parks their target on it (the taken-damage gate is
    all that is left there — decide in game whether that needs a master-is-a-player exclusion), and
    the Attack button now greys out with a corpse targeted, same as `attack` refusing a dead id.
+20. **The pet, in game — and the hand-off above all** (2026-07-30). First contact the same day
+   got as far as the cast: on a magician with an `Elemental: Earth` slot the state picked it up,
+   asked for the cast, and the casting service refused it for a **missing component** — the
+   elementals eat a malachite each (item 10015, count 1) and there were none in the bags. So the
+   chain, the SPA reading and the cast request all work in game. Two things came out of it. The
+   refusal was right: this server's `Character:PetsUseReagents` is on, and the server checks worn
+   and personal inventory only, exactly as the pre-check does — so a bank full of malachite is
+   still a refused cast, in both places. And the refusal was *illegible*, showing an item id,
+   because nothing in the client names an item it has never held; components are now named from a
+   generated table (`utils/Casting/ReagentNames.lua`), and every slot keeps why its last attempt
+   failed on its own row and in `/cpet`. Still to confirm: that with malachite in the bags the
+   summon actually goes off — and worth a look at whether the per-element **no-expend** focus item
+   (`NoexpendReagent`, the Ponz line for the elementals) is enforced here too, since nothing checks
+   that one and the client would be the first to say so.
+   Then the hand-off, which nothing has touched yet and which rests on one guess: does
+   `/click left target`, with an item on the cursor and the pet targeted, open **GiveWnd** on this
+   client? `/cgive <item> targetid|${Me.Pet.ID}`
+   is the one-line answer and the thing to try first. Both shapes are handled — the window with its
+   Give button (`GVW_Give_Button`, read out of the client's own `EQUI_GiveWnd.xml`), or a client
+   that takes the item straight off the cursor — so what matters is that *one* of them happens
+   within the evidence window rather than the click doing nothing at all. Around it: does
+   `/nomodkey /itemnotify "<name>" leftmouseup` lift a summoned item out of a **closed** bag; is 20
+   units the right reach (the failure to watch for is a hand-off that reports "too far" while the
+   pet is stood next to us, or one that waits out the window for a click the client refused); and
+   does `/cgive off` mid-window really put the item back rather than leaving it on the cursor.
+   Then the state: on a magician, does `Elemental: Fire` plus a `Summon Dagger` slot at count two
+   end with a pet holding two daggers, and does `/cpet` name the item rather than "item 7305" —
+   which is also the check that `Spell.Base[n]` for SPA 32 is the item id in this server's data,
+   the whole reason no item has to be configured. On a necromancer with no bone chips, the summon
+   should fail saying which reagent is missing. The reading that decides how an *adopted* pet is
+   treated needs a look too: does `Me.Pet.Equipment[primary]` read zero for a freshly summoned
+   elemental and non-zero once it has been handed a weapon — and do any pets on this server show a
+   weapon model natively, which would make one read as "already equipped" and be left alone (the
+   `gearpet` order is the escape hatch either way, and whether five seconds is the right grace
+   before a vanished pet is replaced is the other thing only playing can answer). Since 2026-07-30
+   that read is not asked at all of the pet standing here when the script starts — that one is
+   always left alone — so the thing to confirm on a reload is the quiet: a magician restarted beside
+   its armed pet should conjure nothing, and `gearpet` should still arm it on request.
+   Then `petgear`, which rests on one read of its own: does `${Spawn[pc radius 300 <name>].Pet.ID}`
+   resolve a group-mate's pet on this server (a warder and an animation, not just an elemental), and
+   is a pet standing at its owner's back inside the hand-off's twenty units when the owner is next
+   to the magician? Worth saying it while somebody also says `petgearing off` in the same minute:
+   the switch and the request share a prefix, and only the handler keeps them apart.
+
+21. **Using the pet, in game** (2026-07-30, `PetDpsState`). Four reads and one command carry the
+   whole state, and three of them are guesses until a client answers. First the command: does
+   `/pet attack <spawnid>` — MacroQuest's extension, not the client's — actually send the pet at
+   that spawn on this build, with something *else* targeted? That is the read the whole design
+   rests on, and the failure to watch for is a pet that goes at whatever is targeted instead.
+   Then `Me.Pet.Target`: it is the client's "who the pet is following", and this state treats it
+   as "what the pet is fighting" — so confirm it reads the mob while the pet is on one, reads
+   nothing while the pet is idle at our side, and above all that it does **not** read *us* while
+   the pet is merely following (there is a guard for that case, but it should never have to fire).
+   Then the four switches: does `/pet taunt` with no argument toggle rather than needing `on`/`off`
+   (this client's command list says toggle-only), does `Me.Pet.Taunt` read back the flip within the
+   three second window, and are the switches really reset for a freshly summoned pet — which is the
+   reason the dials exist rather than a one-time setup. Then the shape of it in a real fight, on a
+   magician: pet in on the pull with the dial at 100, `/cpetdps` naming what it is on, the pet
+   following the fight onto the next mob without a second order, and the pet coming back when the
+   mob dies. And `flee on` mid-fight: the pet should let go and follow, which is the flee state's
+   own hand-off and the one that matters most for a group actually running.
+
+   Then the automatic taunt dial (2026-07-30), which rests on one question this setup can answer in
+   a line: with the taunt dial on **Automatic**, does `/cattack` name what the main tank is on? If
+   it says "nothing this client can see" while the tank is plainly fighting something, the group
+   has no cabby tank calling assists *and* the tank does not hold the assist role — the two paths
+   `Combat.GetTankTargetId` has — and the dial will sit at "off" forever, which is safe but is not
+   the feature working. With it reading right: pull with the tank, and taunt should go off (the
+   `/pet taunt` line is in the debug log with the reason on it); send the pet at an add the tank is
+   not on, and taunt should come on within a pass; let the tank pick that add up and it should go
+   back off. Then the two edges worth watching for flapping in real chat latency rather than in a
+   harness — a mob dying mid-fight while the pet is between targets (nothing should be said at all)
+   and a tank switching targets fast on a multi-mob pull (one flip per real change, not per call) —
+   and the courtesy: flip taunt by hand and it should stand for fifteen seconds before the dial
+   takes it back. Solo the same magician with no group at all and it should read "no main tank in
+   the group" and leave taunt on.
+
+   Then the protect job (2026-07-30), whose every question is about one read: does an
+   `Auto Hater` at 100% aggro appear on the extended target window fast enough, and *leave* it once
+   the pet has the mob? The leaving is the half nothing else in cabby has depended on — everything
+   here rests on a peeled mob dropping off that list on its own, and if this server keeps us listed
+   at 100 while the pet tanks it, the pet will sit on the peel and never go back to the fight.
+   `/cpetdps` names what it is taking off you, so watch it through one add: pet on the group's mob,
+   something jumps you, the pet leaves for it with taunt going on, the add turns round, and the pet
+   goes back — and taunt goes back to where you left it, which is the borrow working. Then two adds
+   at once (it should take them in turn, not flap between them), an add while the group is *not*
+   engaged (auto-engage off — the pet should still come), and the switch that decides how much this
+   costs: with focus on by hand, does `/pet attack <id>` retarget the pet at all, or is the job's
+   focus-off what makes any of this work? Also worth knowing whether `/pet taunt` on a pet that has
+   just arrived at a mob peels it in a reasonable number of seconds, since that is the whole
+   mechanism and nothing here can make it faster.
+
+   Then what kind of pet it is (2026-07-30), which is one read on an enchanter and the only thing
+   standing between that class and a page full of dials that do nothing. **Does a charmed pet's
+   charm show up in the pet's own buff list?** `${Me.Pet.Buff[1]}` through `[30]` after charming
+   something — one of them should be the charm, and `/cpetdps` should say the pet is *charmed*
+   within a second of it landing. If the list comes back empty on this server the discriminator is
+   wrong and needs replacing (`${Me.Pet.IsSummoned}` is the next candidate, and it is worth reading
+   on both an animation and a charmed pet while looking), and the symptom to watch for is an
+   enchanter refusing to fight with a charmed pet because it has been filed as an animation. The
+   other half is the animation itself: with no `Animation Empathy`, `/cpetdps` should say it takes no
+   orders and the pet should be left entirely alone — no `/pet attack` in the debug log, no switch
+   flipped, and `/cpetdps in` answering rather than going quiet for fifteen seconds. Confirm the
+   premise while there: `/pet attack` said by hand at an animation should do nothing at all. Then, if
+   the character has the ability, `${Me.AltAbility[Animation Empathy].Rank}` should read the trained
+   rank (0 or nothing if untrained), and the rank boundaries are worth one look each — rank 2 sends
+   the pet in but leaves the switches alone, rank 3 makes an animation behave like any other pet.
+   And on a magician or beastlord, the quiet check that nothing changed: the pet should still be sent
+   in on the first pass of a fight, with no extra second's delay while the kind is worked out.
+
+22. **A debuff in the rotation, in game** (2026-07-30, `dps_timing`). Two reads decide whether the
+   whole dial is worth having, and a harness cannot answer either. First, **is a root readable back
+   off the mob?** The "cast it once, and again when it fades" half rests entirely on
+   `Spawn.CachedBuff` reporting the mob's own debuffs while it is our target — our record of having
+   cast it is trusted for two seconds and no longer, on the grounds that the world answers after
+   that. If this client caches nothing for NPCs, `Stacks` says "it would take" every pass and the
+   root goes out every two seconds: the failure is loud and looks like root spam in the log, so
+   watch one full root duration on a rooted mob before believing the feature. (If it *is* empty,
+   the fix is at the record, not the state — the mob is then no more readable than a group-mate,
+   which is the case `witnessFor` already keeps a full-duration record for.)
+   Second, **does "once it runs" read false during a normal fight?** It is `Moving` and `Fleeing`
+   together because `Fleeing` alone is only "facing away from me", which is where a caster stands.
+   Park a caster behind a tanked mob with a root slot on that timing and nothing should be cast for
+   the whole fight; then let the mob run and it should go out on the first pass. The false positive
+   to watch for is a mob crossing the camp at somebody behind us. Also worth one look: a root slot
+   on *once it is hurt* at 20 while `stop below %` sits at its default 5 — the window is 20 down to
+   5, and a mob that runs at 4% is one this state deliberately says nothing about.
+
+23. **A debuff spread across the fight, in game** (2026-07-30, `dps_spread`). The rotation half of
+   this is settled in a harness -- the slot walks mob, mob, mob and only then lets the nuke under
+   it through, passes over what it cannot cast at, and asks each mob its own timing question. What
+   a harness cannot answer is the roster it walks. **Does the extended target window list an add
+   before we have touched it?** `Auto Hater` fills with what has *us* on its hate list, so a caster
+   who has cast nothing at the second mob may not see it at all -- in which case the spread reaches
+   it only once it takes a swing at us or somebody calls a `defend` on it, and the honest fix would
+   be at the roster in Combat rather than at the state. Pull three, watch a slow slot, and count
+   how many get slowed and how long the third takes. Second, **does borrowing the target hurt?**
+   Each spread cast targets its mob and leaves the client there; a hybrid meleeing at the same time
+   should be re-acquiring the kill target on its next pass, and the thing to watch for is auto
+   attack chewing on an add for a beat, or the group's assist reading being confused by what we are
+   looking at. Third, **the record**: a spread mob is remembered for the spell's full duration
+   rather than the usual two seconds, because we stop looking at it -- so a slow that gets dispelled
+   or a snare that breaks early is not noticed until the record runs out, and the cost of getting
+   that wrong the other way (trusting `CachedBuff` for a mob we are not targeted on) is the debuff
+   going out again every pass. One full duration on a mob left alive is enough to tell which way it
+   fails. Also worth one look: a `defend`-reported mob across the camp -- the range and sight check
+   should quietly skip it rather than the slot stalling on it.
+
+24. **Mez, in game** (2026-07-30, `states/mezState.lua` + `mobs.lua`). Thirty-five headless checks
+   settle the decisions; four readings of the *world* are what they rest on, and every one of them
+   is a client question a harness cannot answer.
+
+   First, and it is the one the whole state stands on: **does `Spawn[id].CachedBuff[^mezzed]` fill
+   in for an NPC on this client, and does it report a duration?** The MQ source says it is the same
+   `SPA_ENTHRALL` search behind `Target.Mezzed`, answered off the buff cache the client fills when
+   something is targeted — and we target a mob to mez it, so it should be populated the moment the
+   cast lands. If it comes back empty for NPCs, every mez reads as loose the instant the two-second
+   just-landed window passes and the symptom is a chanter casting the same mez at the same mob
+   forever. Mez one add, then watch `/cmez` for a full mez duration: the row should count down. (If
+   it *is* empty, the fix is at the record — the mob is then no more readable than a group-mate, and
+   the answer is a full-duration witness the way the spread debuffs keep one, at the cost of not
+   noticing a break at all. This is the same question `dps_spread` asks in item 23 and one look
+   answers both.)
+
+   Second, **the break signals**, which are the reason this is a state and not a loop. Three of
+   them, and the one to test hardest is the **movement read**: `mobs.lua` samples each mob's
+   position and heading every 250 ms and the state asks whether it moved *after* the mez we landed.
+   The thing to confirm is the premise — **is a mezzed mob perfectly still on this server, heading
+   included?** If a mezzed mob drifts, or its heading jitters by more than half a degree between
+   samples, every mez reads as broken immediately and the symptom is continuous re-mezzing. Mez one
+   add and watch its row in `/cmez` for a full minute: it should stay *mezzed*, never flicking to
+   *it has moved since we mezzed it*. (`macros/bots/enchanterBot.mac` compares the same pair with no
+   epsilon at all, so this should hold; ours allows 0.01 units and 0.5 degrees.)
+
+   Then the **awakened line**, `#1# has been awakened by #2#.` — eqstr 9037 on this client, so the
+   wording should be right, but it has never been registered before. Break a mez deliberately (melee
+   an add) and `/cmez` should flip that row to *loose — it woke up*. **The case worth setting up
+   deliberately is two mobs of the same name mezzed at once**, since that is what the line cannot
+   disambiguate: break one and the rows should briefly read *something called this woke — working
+   out which*, then resolve to the right mob once it moves, with the other going back to *mezzed*.
+   The failure to watch for is both staying loose (nothing resolving, so the movement sample is not
+   registering) or the wrong one resolving.
+
+   Third, the **passive animation list**, carried over from `macros/bots/mez.mac`. Note the two
+   public macros disagree here — `enchanterBot.mac` has its equivalent commented out — so this is
+   the signal most likely to be wrong, and it fails in the *noisy* direction (a mezzed mob whose
+   animation is not on the list reads loose and is re-mezzed forever). If re-mezzing turns out to be
+   constant while the movement read says the mob is still, this list is the thing to widen or drop.
+
+   Third, **does the resist line arrive in time to be heard?** The tash half of this rests entirely
+   on it: the casting service reports a mez a success when the bar closes and refines it to
+   `resisted` when the line turns up, and this state waits exactly one pass for that refinement.
+   One pass is what the service's own contract prescribes and the line should be in the same packet
+   burst as the cast ending — but if it lands later, the resist is never recorded, the softener
+   never fires, and the symptom is a mob being mezzed over and over with a tash sitting unused in
+   the list. Find something that resists (or set a softener to *before every mez* to prove that half
+   works independently) and watch `/cmez` for *it resisted a mez* on the row.
+
+   Fourth, **the roster's sweep**. `playerstate 4|8` should return NPCs in combat stance and nothing
+   else — no merchants, no guards at a post, no wildlife. `/cmobs` is the whole test: pull two mobs
+   with a group and every row should read as seen by more than one angle. The two ways it goes wrong
+   are both visible there — a group member's pet or our own charmed pet appearing at all (the
+   `Master.Type()` filter failing), and a mob across the camp fighting somebody else showing up as
+   *in combat nearby* with nothing else beside it. The second is expected and is exactly what the AE
+   safety switch is for; the first is a bug. Also confirm the sweep is not expensive: it is one
+   `SpawnCount` and a `NearestSpawn` per hit every 250 ms, and `/cmobs` in a busy camp is where that
+   would show.
+
+   Finally the ordinary things: an AE mez should centre on the cluster rather than on the nearest
+   mob, `stop below %` should leave a mob the group is killing alone (it reads backwards — *below*
+   the line is left alone), and a mez should never be aimed at what `/cattack` says we are fighting.
+   Worth one look as well: the enchanter is now four states deep above the buff band, so `/state`
+   should show Mez, PetDps, SpellDps, Melee in that order.
+
+25. **Easing off, in game** (2026-07-30, `Combat.ShouldEaseOff` + both dps states). Twenty-two
+   headless checks settle the decision table and the resume; what a harness cannot answer is
+   whether the client says *we are the one it is coming for* fast enough, and stops saying it fast
+   enough, for this to feel like anything but a stutter. It rides `GetUnderAttackIds` — the
+   extended target window's `Auto Hater` entries at 100% aggro, swept every 250 ms — which is the
+   same read the `defend` report and the pet's peel already lean on, so a wrong answer here is a
+   wrong answer in three places at once.
+
+   The test is one fight with a real main tank named in the group window and a dps character (the
+   melee half and the caster half are worth doing separately). Rip the mob deliberately and watch
+   the Melee State page: *Current Action* should read **Easing off — I have it off the main tank**
+   within a quarter second, the swing should stop, and `/cattack` should say the same thing beside
+   the `easeoff` line. Then let the tank taunt it back: the swing should resume on the pass the
+   aggro meter drops off 100, not a beat later and not only after the next mob. The failure to
+   watch for is **flapping** — the meter sitting exactly at the boundary and the character
+   alternating on and off every quarter second — which would show as auto attack toggling in the
+   log. Nothing in the design smooths that (there is deliberately no hysteresis and no timer), so if
+   it happens the fix is at the fact, not at either state.
+
+   On the caster: the rotation should say *holding: easing off — …* on its page while the nukes
+   stop, and a damage shield slot should still go up during the hold — that exemption is the one
+   deliberate hole and it is worth seeing once. Also confirm the two silences: with the character
+   holding the group's Main Tank role, nothing eases off ever; and with an add that the tank is *not*
+   on beating on a caster, the rotation should keep killing it (the tank's target is visible only
+   through its `assist` call, so this is also a test of that call arriving).

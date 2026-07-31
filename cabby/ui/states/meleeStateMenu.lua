@@ -72,7 +72,7 @@ function MeleeStateMenu.BuildMenu(meleeState)
         ImGui.Text("Current Action")
 
         ImGui.TableNextColumn()
-        ImGui.Text(meleeState.IsAttacking() and "Attacking" or "Standby")
+        ImGui.Text(meleeState.Describe())
 
         ImGui.TableNextRow()
         ImGui.TableNextColumn()
@@ -130,6 +130,26 @@ function MeleeStateMenu.BuildMenu(meleeState)
         ImGui.SameLine()
         CommonUI.HelpMarker("While this character holds the group's Main Tank role, every change to what it is fighting is called out to the group as an (assist) line, and dropping the target calls the fight off. Nothing is said when somebody else is the tank. The channels it speaks on are the ones /speak sets.")
 
+        ImGui.SameLine()
+        ---@type boolean
+        local clicked, result
+        result, clicked = ImGui.Checkbox("Call Defend", CombatConfig.GetCallDefend())
+        if clicked then
+            CombatConfig.SetCallDefend(result)
+        end
+        ImGui.SameLine()
+        CommonUI.HelpMarker("Anything actually coming for this character -- the top of a mob's hate list -- that nobody has yet called out is announced once as a (defend <id>) line, and the group's Main Tank engages it as soon as it is not already fighting something. Every character remembers the ids already called, its own and everyone else's, so one line covers a mob for as long as it lives in this zone -- bouncing between the tank and its victims is never re-announced. Its death, a zone, or a flee clears its entry. The fight the group was already put on is not reported, and the main tank itself never reports. Speaks over bc unless /speak defend says otherwise.")
+
+        ImGui.SameLine()
+        ---@type boolean
+        local clicked, result
+        result, clicked = ImGui.Checkbox("Ease Off", CombatConfig.GetEaseOff())
+        if clicked then
+            CombatConfig.SetEaseOff(result)
+        end
+        ImGui.SameLine()
+        CommonUI.HelpMarker("Stops hurting the mob once we have pulled it off the group's Main Tank -- it is coming for us and the tank should have it. The swing drops and the melee, taunt and hate lists hold (the stick stays, so nothing has to be walked back); the spell rotation holds everything aimed at the mob, and a damage shield on somebody still goes up. Damage resumes the pass the tank is back on top of its hate list. Nothing is eased off by the Main Tank itself, for a group that has named no tank, or for a mob the tank is on something else instead of -- that one is ours, and Call Defend is what is said about it.")
+
         ImGui.Dummy(0, 0)
         ImGui.SameLine()
 
@@ -162,7 +182,7 @@ function MeleeStateMenu.BuildMenu(meleeState)
             CombatConfig.SetDisengageOnAttackOff(result)
         end
         ImGui.SameLine()
-        CommonUI.HelpMarker("Switching your auto attack off -- the key, the client's button, /attack off -- calls the cabby fight off the way the Back Off button does. Only the switch-off itself orders anything: one taken from you by a mez, a charm or a stun orders nothing, and flee dropping auto attack during a run is ignored.")
+        CommonUI.HelpMarker("Switching your auto attack off -- the key, the client's button, /attack off -- calls the cabby fight off the way the Back Off button does. Only the switch-off itself orders anything: one taken from you by a mez, a charm or a stun orders nothing, cabby's own bookkeeping (melee holding the swing off out of melee range) orders nothing, and flee dropping auto attack during a run is ignored.")
 
         ImGui.SameLine()
         ---@type boolean

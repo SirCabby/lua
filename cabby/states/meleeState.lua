@@ -236,6 +236,28 @@ local function melee()
 
     local range = MeleeState.GetSpawnMeleeRange(targetId)
 
+    -- We have pulled it off the tank: stop hitting it until the tank has it back. Combat answers
+    -- whether that is what has happened -- both halves of it are its own facts -- and this is what
+    -- this state does about it: the swing goes off, and the whole offense below is skipped, taunts
+    -- and hate included. Those two above all -- a character holding the mob the main tank should be
+    -- holding, taunting it, is the state pulling one way and the group the other.
+    --
+    -- Off through Combat rather than a bare `/attack off` for the same reason the range gate is:
+    -- it is bookkeeping, and reading it as `attack off` said with the keyboard would close the
+    -- fight over a mob we are still very much in one with (`disengageonattackoff`).
+    --
+    -- Ahead of the stick, and only ahead of it: a mob that is coming for us needs no ground crossed
+    -- to reach us, so this is not the moment to start closing any. A stick already running is left
+    -- alone -- hate is not shed by walking away, it is shed by the tank building more while we add
+    -- none, and standing off would only mean crossing that ground again on the pass this comes back
+    -- on. The frame is held because we are still in a fight: eased off is not idle, and nothing
+    -- below the dps band should be sitting down in it.
+    local easeOff, easeWhy = Combat.ShouldEaseOff()
+    if easeOff then
+        Combat.SetAutoAttack(false, "easing off: " .. tostring(easeWhy))
+        return true
+    end
+
     if MeleeStateConfig.GetStick() and not Movement.IsSticking(targetId) and distance < MeleeStateConfig.GetEngageDistance() and mq.TLO.Target.LineOfSight() then
         MeleeState.StickToCurrentTarget(range)
     end
@@ -243,7 +265,7 @@ local function melee()
     -- StickToCurrentTarget can yield too, so keep using the snapshot rather than re-reading
     if distance < range then
         if not mq.TLO.Me.Combat() and Status:IsFacingTarget() then
-            mq.cmd("/attack on")
+            Combat.SetAutoAttack(true, "in melee range")
         end
 
         DoPrimaryCombatAction()
@@ -261,6 +283,15 @@ local function melee()
                 end
             end
         end
+
+    -- The swing is range-gated the other way too: out of reach, auto attack is held off until we
+    -- are back inside it. Off past the spawn's true reach (MaxRangeTo) rather than at our own
+    -- engage ring, which sits a few units inside it -- a mob dancing on one line must not flap
+    -- the toggle. Through Combat rather than a bare `/attack off`, because the player's own
+    -- switch-off can be an order (disengageonattackoff) and this is bookkeeping: stepping out of
+    -- reach must not close the fight, or call anyone else off it.
+    elseif mq.TLO.Me.Combat() and distance > (mq.TLO.Target.MaxRangeTo() or range) then
+        Combat.SetAutoAttack(false, "out of melee range")
     end
 
     return true
@@ -269,6 +300,17 @@ end
 ---@return boolean isAttacking whether this state is fighting something right now
 function MeleeState.IsAttacking()
     return Combat.IsEngaged()
+end
+
+---@return string description of what this state is doing, for the page
+---
+---Asked of Combat every time rather than written down as the pass goes by: the answer is cheap
+---(cached facts either side of it) and a remembered one would be a page still reporting an ease-off
+---from a pass that ended in a retarget, a stun, or a mob that died.
+function MeleeState.Describe()
+    local easeOff, easeWhy = Combat.ShouldEaseOff()
+    if easeOff then return "Easing off -- " .. tostring(easeWhy) end
+    return MeleeState.IsAttacking() and "Attacking" or "Standby"
 end
 
 ---Stop meleeing, without deciding anything about the fight itself: whether we are still engaged

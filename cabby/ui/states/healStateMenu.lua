@@ -1,6 +1,5 @@
 ---@diagnostic disable: undefined-field
 local AAs = require("cabby.actions.aas")
-local Action = require("cabby.actions.action")
 local ActionUI = require("cabby.ui.actions.actionUI")
 local AvailableActions = require("cabby.actions.availableActions")
 local CommonUI = require("cabby.ui.commonUI")
@@ -15,23 +14,23 @@ local scopeOrder = {
     HealStateConfig.scopes.Any,
     HealStateConfig.scopes.Tank,
     HealStateConfig.scopes.Self,
-    HealStateConfig.scopes.Others
+    HealStateConfig.scopes.Others,
+    HealStateConfig.scopes.Pet
 }
 
 ---How much room the per-slot heal controls need under the action row.
 local extrasHeight = 26
 
----@param liveAction Action
----@return boolean isGroupHeal whether this slot's spell heals the group rather than a target
-local function IsGroupHeal(liveAction)
-    local action = Action.GetActionType(liveAction)
-    return action ~= nil and action.Subject ~= nil and not action:Subject():NeedsTarget()
-end
+---What makes a heal slot a *heal* slot, drawn under the action itself: how hurt they have to be,
+---and who it is for. What the heal can be aimed at is the spell's own business and is only
+---reported -- along with the reason a slot will never fire, when there is one.
+---@param liveAction Action what the controls here write to
+---@param shownAction Action what the row is currently holding -- the staged pick while it is being
+---edited -- which is what the spell is read from
+---@param healState HealState
+local function DrawHealFields(liveAction, shownAction, healState)
+    local facts = healState.DescribeSlot(shownAction or liveAction)
 
----The two things that make a heal slot a *heal* slot, drawn under the action itself: who it is
----for, and how hurt they have to be.
----@param liveAction Action
-local function DrawHealFields(liveAction)
     ImGui.SetNextItemWidth(90)
     local threshold, thresholdChanged = ImGui.DragInt("##threshold", HealStateConfig.GetThreshold(liveAction), 1, 1, 100)
     if thresholdChanged then
@@ -40,20 +39,34 @@ local function DrawHealFields(liveAction)
     ImGui.SameLine()
     ImGui.Text("% and below")
 
-    ImGui.SameLine()
-    ImGui.SetNextItemWidth(110)
-    local scope = HealStateConfig.GetScope(liveAction)
-    if ImGui.BeginCombo("##scope", HealStateConfig.GetScopeDisplay(scope)) then
-        for _, known in ipairs(scopeOrder) do
-            local _, pressed = ImGui.Selectable(known.display, scope == known.value)
-            if pressed then
-                HealStateConfig.SetScope(liveAction, known.value)
-            end
-        end
-        ImGui.EndCombo()
+    -- only the scopes this slot's spell can actually be given. A spell that lands on one kind of
+    -- person has answered the question already, so the dial shows that answer and is not offered
+    -- for editing -- rather than being hidden, which reads as "this heal is for nobody"
+    local choices = {}
+    for _, known in ipairs(scopeOrder) do
+        if facts.scopes[known.value] then choices[#choices+1] = known end
     end
 
-    if IsGroupHeal(liveAction) then
+    if #choices > 0 then
+        local decided = #choices == 1
+        local scope = decided and choices[1].value or HealStateConfig.GetScope(liveAction)
+
+        ImGui.SameLine()
+        ImGui.SetNextItemWidth(110)
+        if decided then ImGui.BeginDisabled() end
+        if ImGui.BeginCombo("##scope", HealStateConfig.GetScopeDisplay(scope)) then
+            for _, known in ipairs(choices) do
+                local _, pressed = ImGui.Selectable(known.display, scope == known.value)
+                if pressed then
+                    HealStateConfig.SetScope(liveAction, known.value)
+                end
+            end
+            ImGui.EndCombo()
+        end
+        if decided then ImGui.EndDisabled() end
+    end
+
+    if facts.isGroup then
         ImGui.SameLine()
         ImGui.SetNextItemWidth(60)
         local groupMin, groupMinChanged = ImGui.DragInt("##groupmin", HealStateConfig.GetGroupMin(liveAction), 1, 1, 6)
@@ -65,6 +78,13 @@ local function DrawHealFields(liveAction)
         ImGui.SameLine()
         CommonUI.HelpMarker("This heal covers the whole group, so it is cast when at least this many of the people being watched are at or below the health above. Group heals are considered before single heals, unless someone is already below the emergency point.")
     end
+
+    ImGui.SameLine()
+    if facts.problem ~= nil then
+        ImGui.TextColored(1, 0.8, 0.2, 1, facts.problem)
+        return
+    end
+    ImGui.TextDisabled(facts.aimText)
 end
 
 ---@param healState HealState
@@ -107,16 +127,20 @@ function HealStateMenu.BuildMenu(healState)
         ImGui.Dummy(0, 0)
         ImGui.SameLine()
 
-        local healGroup, healGroupClicked = ImGui.Checkbox("Heal the group", HealStateConfig.GetHealGroup())
+        local healGroup, healGroupClicked = ImGui.Checkbox("Watch group members", HealStateConfig.GetHealGroup())
         if healGroupClicked then
             HealStateConfig.SetHealGroup(healGroup)
         end
+        ImGui.SameLine()
+        CommonUI.HelpMarker("Whether the rest of the group is somebody this character heals at all. On, everyone in the group window is watched and can be chosen for a heal; off, the only people watched are me and my pet, and a group-mate at 10% is left to somebody else. It is not about group heal *spells* -- one of those is chosen because enough of the people being watched are hurt, so switching this off shrinks what it is counting rather than stopping it. The Watching tab is the answer to what this is currently doing.")
 
         ImGui.SameLine()
-        local healPets, healPetsClicked = ImGui.Checkbox("Heal my pet", HealStateConfig.GetHealPets())
+        local healPets, healPetsClicked = ImGui.Checkbox("Watch my pet", HealStateConfig.GetHealPets())
         if healPetsClicked then
             HealStateConfig.SetHealPets(healPets)
         end
+        ImGui.SameLine()
+        CommonUI.HelpMarker("Off by default: a pet is cheaper to summon than the mana spent keeping it up. A pet class that means to keep its own pet up turns this on -- while it is off the pet is not watched at all, so even a heal that can only land on a pet has nothing to fire for.")
 
         ImGui.TableNextRow()
         ImGui.TableNextColumn()
@@ -144,9 +168,12 @@ function HealStateMenu.BuildMenu(healState)
 
             local actions = HealStateConfig.GetActions()
             local availableActions = AvailableActions.new()
-            -- what this character can heal with, discovered from the client: beneficial spells,
-            -- plus AAs and clickies, which are as often the emergency button as any spell is
-            availableActions.spells = Spells.beneficial
+            -- what this character can heal with, discovered from the client: the spells the book
+            -- files as heals or as invulnerabilities, plus AAs and clickies, which are as often
+            -- the emergency button as any spell is. The rest of the beneficial half is a switch
+            -- away in the picker, for a heal the game filed somewhere unexpected.
+            availableActions.spells = Spells.heals
+            availableActions.allSpells = Spells.beneficial
             availableActions.aas = AAs.all
             availableActions.items = Items.all
 
@@ -163,7 +190,7 @@ function HealStateMenu.BuildMenu(healState)
                 ImGui.PushID(action)
                 ActionUI.ActionControl(action, actions, availableActions, {
                     height = extrasHeight,
-                    draw = DrawHealFields
+                    draw = function(liveAction, shownAction) DrawHealFields(liveAction, shownAction, healState) end
                 })
                 ImGui.PopID()
                 ImGui.PopStyleColor()

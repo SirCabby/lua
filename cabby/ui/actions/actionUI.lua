@@ -7,12 +7,14 @@ local Actions = require("cabby.actions.actions")
 local ActionType = require("cabby.actions.actionType")
 local CommonUI = require("cabby.ui.commonUI")
 local EditAction = require("cabby.ui.actions.editAction")
+local Spells = require("cabby.actions.spells")
 
 ---@class ActionUI
 local ActionUI = {
     _ = {
         actions = {}, -- { liveaction = editAction }
-        filters = {}  -- { liveaction = <what was typed into that picker's filter box> }
+        filters = {}, -- { liveaction = <what was typed into that picker's filter box> }
+        showAll = {}  -- { liveaction = <that picker is showing the unnarrowed spell list> }
     }
 }
 
@@ -49,14 +51,27 @@ local orderedValueTypes = {
 ---opened rather than what it had at login.
 ---@param actionType string
 ---@param availableActions AvailableActions
+---@param showAll? boolean offer the wider spell list rather than the state's narrowed one
 ---@return table choices array of ActionType
-local function ChoicesFor(actionType, availableActions)
+local function ChoicesFor(actionType, availableActions, showAll)
     if actionType == ActionType.Ability then return availableActions.abilities or {} end
     if actionType == ActionType.Discipline then return availableActions.discs or {} end
-    if actionType == ActionType.Spell then return availableActions.spells or {} end
+    if actionType == ActionType.Spell then
+        if showAll then return availableActions.allSpells or availableActions.spells or {} end
+        return availableActions.spells or {}
+    end
     if actionType == ActionType.AA then return availableActions.aas or {} end
     if actionType == ActionType.Item then return availableActions.items or {} end
     return {}
+end
+
+---Does this picker have a wider list to offer than the one it is showing?
+---@param actionType string
+---@param availableActions AvailableActions
+---@return boolean
+local function HasWiderList(actionType, availableActions)
+    if actionType ~= ActionType.Spell then return false end
+    return #(availableActions.allSpells or {}) > #(availableActions.spells or {})
 end
 
 ---What a picked action is called in the list.
@@ -64,13 +79,22 @@ end
 ---A spell that is not on the spell bar is worth saying out loud: an action slot only fires what
 ---is memorized, so a slot holding an unmemorized spell is configured correctly and will still
 ---never go off, which is otherwise a silent puzzle.
+---
+---What the book files a spell under is worth saying out loud too, but only once the narrowing is
+---off: that is the moment somebody is looking for a spell the categories did not offer them, and
+---the heading it turned out to have is the answer to why.
 ---@param action ActionType
+---@param category? string
 ---@return string label
-local function ChoiceLabel(action)
+local function ChoiceLabel(action, category)
+    local label = action:Name()
     if action.IsMemorized ~= nil and not action:IsMemorized() then
-        return action:Name() .. "  (not memorized)"
+        label = label .. "  (not memorized)"
     end
-    return action:Name()
+    if category ~= nil and category ~= "" then
+        label = label .. "  -- " .. category
+    end
+    return label
 end
 
 ---@param liveAction Action
@@ -99,11 +123,16 @@ end
 ---@param liveAction Action
 ---@param actions table
 ---@param availableActions AvailableActions
----@param extras? table `{ height = number, draw = fun(liveAction) }` -- controls belonging to the
----state that owns this list rather than to the action itself. A heal slot's threshold is one:
----which heal this is, is an action; who it is for and how hurt they have to be, is healing.
----Like the Enabled switch, and unlike everything staged behind Save, these write straight to the
----live action -- they are dials you reach for while watching a fight go badly.
+---@param extras? table `{ height = number, draw = fun(liveAction, shownAction) }` -- controls
+---belonging to the state that owns this list rather than to the action itself. A heal slot's
+---threshold is one: which heal this is, is an action; who it is for and how hurt they have to be,
+---is healing. Like the Enabled switch, and unlike everything staged behind Save, these write
+---straight to the live action -- they are dials you reach for while watching a fight go badly.
+---
+---`shownAction` is what the row *currently holds*: the staged edit while the row is being edited,
+---the live action otherwise. Anything a control reads off the chosen spell -- who a heal can be
+---aimed at, whether it lasts -- reads it from there, so picking a spell answers on the spot
+---instead of after Save. Anything a control *writes* still writes to `liveAction`.
 ActionUI.ActionControl = function(liveAction, actions, availableActions, extras)
     local width = ImGui.GetContentRegionAvail()
     local editAction = GetEditAction(liveAction)
@@ -159,7 +188,11 @@ ActionUI.ActionControl = function(liveAction, actions, availableActions, extras)
                 elseif actionType == ActionType.Item then
                     typeActions = availableActions.items or typeActions
                 elseif actionType == ActionType.Spell then
-                    typeActions = availableActions.spells or typeActions
+                    -- what the narrowing left is not the question here: this decides whether the
+                    -- character has spells to offer at all, and hiding the type over an empty
+                    -- category list would put the switch that widens it out of reach
+                    typeActions = availableActions.allSpells or typeActions
+                    if #typeActions < 1 then typeActions = availableActions.spells or typeActions end
                 end
 
                 if #typeActions > 0 or actionType == ActionType.Edit then
@@ -188,7 +221,22 @@ ActionUI.ActionControl = function(liveAction, actions, availableActions, extras)
         ImGui.SameLine()
         ImGui.SetNextItemWidth(200)
         if ImGui.BeginCombo("##name" .. actionIndex, editAction.name or "") then
-            local actionChoices = ChoicesFor(editAction.actionType, availableActions)
+            -- The narrowing is by the category the game filed a spell under, which is data rather
+            -- than a promise: a spell filed somewhere unexpected would otherwise be unreachable
+            -- from the menu with no way to tell that was what happened. The switch stays with the
+            -- row rather than resetting with the combo, because it is a mode somebody chose.
+            local showAll = ActionUI._.showAll[liveAction] or false
+            if HasWiderList(editAction.actionType, availableActions) then
+                local wanted, pressed = ImGui.Checkbox("Show every spell##showAll" .. actionIndex, showAll)
+                if pressed then
+                    showAll = wanted
+                    ActionUI._.showAll[liveAction] = wanted
+                end
+                ImGui.SameLine()
+                CommonUI.HelpMarker("Off, this offers the spells the game files under headings that suit this list. On, it offers everything of that kind in the book and says what each one is filed under -- which is how to find a spell the headings missed.")
+            end
+
+            local actionChoices = ChoicesFor(editAction.actionType, availableActions, showAll)
             local filter = ActionUI._.filters[liveAction] or ""
 
             if #actionChoices > filterThreshold then
@@ -217,9 +265,15 @@ ActionUI.ActionControl = function(liveAction, actions, availableActions, extras)
                 action = action
 
                 local name = action:Name()
-                if needle == "" or name:lower():find(needle, 1, true) ~= nil then
+                -- a heading is worth typing at as well as reading: "invuln" should find the
+                -- spells filed there without anyone knowing what they are called
+                local category = showAll and Spells.CategoryOf(name) or ""
+                local matches = needle == "" or name:lower():find(needle, 1, true) ~= nil
+                    or (category ~= "" and category:lower():find(needle, 1, true) ~= nil)
+
+                if matches then
                     shown = shown + 1
-                    local _, pressed = ImGui.Selectable(ChoiceLabel(action), editAction.name == name)
+                    local _, pressed = ImGui.Selectable(ChoiceLabel(action, category), editAction.name == name)
                     if pressed then
                         editAction.name = name
                     end
@@ -289,12 +343,16 @@ ActionUI.ActionControl = function(liveAction, actions, availableActions, extras)
         if ImGui.Button("X", 24, 22) then
             ActionUI._.actions[liveAction] = nil
             ActionUI._.filters[liveAction] = nil
+            ActionUI._.showAll[liveAction] = nil
             table.remove(actions, actionIndex)
             Global.configStore:SaveConfig()
         end
 
         if extras ~= nil and extras.draw ~= nil then
-            extras.draw(liveAction)
+            -- the staged edit while one is open: `editAction` is an action-shaped clone carrying
+            -- the type and name the row is showing, so a control reading the chosen spell sees the
+            -- pick immediately rather than the one Save last wrote
+            extras.draw(liveAction, editAction.editing and editAction or liveAction)
         end
 
         ---- EDITING ----

@@ -10,10 +10,12 @@ local Classes = require("cabby.classes.classes")
 local CommandConfig = require("cabby.configs.commandConfig")
 local CommandQueue = require("cabby.commandQueue")
 local DebugConfig = require("cabby.configs.debugConfig")
+local CabbyGiving = require("cabby.giving")
 local GeneralConfig = require("cabby.configs.generalConfig")
 local HotbarConfig = require("cabby.configs.hotbarConfig")
 local HotbarsUI = require("cabby.ui.hotbarsUI")
 local Menu = require("cabby.ui.menu")
+local Mobs = require("cabby.mobs")
 local CabbyMovement = require("cabby.movement")
 local Roles = require("cabby.roles")
 local Travel = require("cabby.travel")
@@ -139,9 +141,13 @@ function Setup:Init(configFilePath, stateMachine)
     -- thing that talks to the keys -- then releases them in that same frame rather than the next
     CabbyCasting.Init(stateMachine)
     CabbyMovement.Init(stateMachine) -- states expect the movement service to exist before they register
+    CabbyGiving.Init(stateMachine) -- handing an item to somebody, a sequence at a time
     Character.Init(stateMachine) -- watches for level-ups, AA purchases and bag changes
     Roles.Init() -- who holds which job in the group; Combat and HealState both read it
     Combat.Init(stateMachine) -- what we are fighting; every state that fights reads it
+    -- what is *here*, which is the wider question: registered after Combat because it merges
+    -- Combat's answers with a sweep of its own, and pulses after it for the same reason
+    Mobs.Init(stateMachine)
     Travel.Init() -- the standing movement orders; the world's death messages end a follow here
     ClassSetup(stateMachine)
 

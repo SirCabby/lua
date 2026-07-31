@@ -22,9 +22,9 @@ local Spells = require("cabby.actions.spells")
 ---
 ---Discovery is not free (the spellbook is 720 slots and the AA scan walks an id space), so it
 ---is not repeated per frame. Instead this runs as a service with a cheap signature — level, AA
----points spent, free inventory — checked a few times a minute, and re-reads only the registry
----that signature says has moved. `/crefresh` re-reads everything, for the cases the signature
----cannot see (an even item swap, a spell scribed over another).
+---points spent, free inventory, a fingerprint of the book — checked a few times a minute, and
+---re-reads only the registry that signature says has moved. `/crefresh` re-reads everything,
+---for the cases the signature cannot see (an even item swap).
 ---@class Character
 local Character = {
     key = "Character",
@@ -39,7 +39,8 @@ local Character = {
 }
 
 ---How often the signature is looked at. Nothing here changes in the middle of a fight except
----by the player's own hand, so this is deliberately lazy.
+---by the player's own hand, so this is deliberately lazy -- and the book fingerprint means the
+---check is no longer free either, so paying for it a few times a minute is the point.
 local checkIntervalMs = 5000
 
 ---@param str string
@@ -79,10 +80,14 @@ end
 ---@return table signature
 local function readSignature()
     return {
-        -- gaining a level opens up skills, discs and spells all at once
+        -- gaining a level opens up skills and discs
         level = tonumber(mq.TLO.Me.Level()) or 0,
         -- the only way an AA appears
         aaSpent = tonumber(mq.TLO.Me.AAPointsSpent()) or 0,
+        -- the book answers for itself rather than being inferred from a level or a consumed
+        -- scroll: a spell is scribed whenever the player feels like it, and the lists a caster
+        -- picks a heal or a nuke from are wrong from that moment until this notices
+        book = Spells.Fingerprint(),
         -- a stand-in for "the bags changed": it moves when anything is picked up or put down,
         -- and misses a swap that trades one item for another, which is what /crefresh is for
         freeInventory = tonumber(mq.TLO.Me.FreeInventory()) or 0
@@ -129,10 +134,10 @@ function Character.Pulse()
 
     local parts = {}
     if current.level ~= previous.level then
-        -- a level brings new discs and spells with it, and can bring a skill
+        -- a level brings new discs with it, and can bring a skill
         parts.abilities = true
-        parts.spells = true
     end
+    if current.book ~= previous.book then parts.spells = true end
     if current.aaSpent ~= previous.aaSpent then parts.aas = true end
     if current.freeInventory ~= previous.freeInventory then parts.items = true end
 
@@ -162,9 +167,10 @@ function Character.Init(stateMachine)
     local refreshDocs = ChelpDocs.new(function() return {
         "(/crefresh) Re-read what this character has: skills, discs, spells, AAs and clickies",
         " -- Usage: /crefresh",
-        " -- This happens on its own after a level, an AA purchase, or a change in bag space.",
-        "    Use this after anything else that changes what you can do -- scribing a spell over",
-        "    another, or swapping one clicky for another of the same size.",
+        " -- This happens on its own after a level, an AA purchase, a change in bag space, or",
+        "    anything written to or erased from the spellbook.",
+        "    Use this after anything else that changes what you can do -- swapping one clicky",
+        "    for another of the same size.",
         " -- Currently: " .. Character.Describe()
     } end )
     local function Bind_CRefresh(...)

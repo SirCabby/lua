@@ -4,6 +4,7 @@ local mq = require("mq")
 local Casting = require("utils.Casting.Casting")
 local Debug = require("utils.Debug.Debug")
 local Movement = require("utils.Movement.Movement")
+local Time = require("utils.Time.Time")
 
 local ChelpDocs = require("cabby.commands.chelpDocs")
 local Combat = require("cabby.combat")
@@ -11,10 +12,15 @@ local Commands = require("cabby.commands.commands")
 local FleeStateConfig = require("cabby.configs.fleeStateConfig")
 local FleeStateMenu = require("cabby.ui.states.fleeStateMenu")
 local Menu = require("cabby.ui.menu")
+local Pet = require("cabby.pet")
 local SlashCmd = require("cabby.commands.slashcmd")
 local ToggleCommand = require("cabby.commands.toggleCommand")
 local Travel = require("cabby.travel")
 local UserInput = require("cabby.utils.userinput")
+
+---How long an unanswered `/pet back off` is left before it is said again. Pacing, not giving up:
+---the answer is the pet turning round, which is a server round trip away.
+local petBackOffRetryMs = 1500
 
 ---Travel mode: follow, and nothing else.
 ---
@@ -54,7 +60,9 @@ local FleeState = {
         flee = "flee"
     },
     _ = {
-        isInit = false
+        isInit = false,
+        ---when the pet was last told to let go of what it was on, for the pacing above
+        petCalledAtMs = nil
     }
 }
 
@@ -92,7 +100,7 @@ function FleeState.Init()
             "a long run does not stop for every add on the way.",
             "It rides on top of a follow order rather than replacing one: give a (followme)",
             "first, or put both lines on the same hotbar button.",
-            "Turning it on lets go of the fight, the cast in the air and the swing. Turning it",
+            "Turning it on lets go of the fight, the cast in the air, the swing and the pet. Turning it",
             "off hands the character straight back to its normal chain; nothing was reconfigured."
         },
         get = FleeState.IsEnabled,
@@ -145,16 +153,38 @@ end
 ---One pass of travel mode: drive the traveling, hold the frame.
 ---
 ---Returning busy every pass is the suppression -- see the notes on this module. Before that, the
----swing: `/attack on` is the one commitment nothing else takes back -- the melee state issues it
----and never issues the other half, and it is not getting another turn in which to notice -- so
+---two things still swinging after everything below has been starved.
+---
+---The swing: `/attack on` is the one commitment nothing else takes back -- the melee state issues
+---it, and its range gate, the one thing that ever takes it back, is not getting another turn -- so
 ---auto attack is read from the client every pass and dropped whenever it is found on. Reading
 ---first is what keeps this from being a command sent forty times a second.
+---
+---The pet is the other one, and it is here for exactly the same reason: `PetDpsState` would call
+---it off the moment the fight closed, and it sits at the dps band, which is starved for as long as
+---this mode is on. A warder still chewing on what the group is running from brings it along. Read
+---first as above, and paced on top of that, because what the client says about a pet is a beat
+---behind what it was told.
 ---@return boolean isBusy
 ---@diagnostic disable-next-line: duplicate-set-field
 function FleeState.Go()
     if mq.TLO.Me.Combat() then
         DebugLog("Dropping auto attack while fleeing")
         mq.cmd("/attack off")
+    end
+
+    -- and only to a pet that is listening: an enchanter's animation takes no orders at all (see
+    -- `cabby.pet`), so saying this to one is a command every second and a half for the length of
+    -- the run at something that cannot hear it
+    if Pet.IsFighting() and Pet.TakesOrders().backOff then
+        local calledAt = FleeState._.petCalledAtMs
+        if calledAt == nil or Time.current_time() - calledAt >= petBackOffRetryMs then
+            DebugLog("Calling the pet off while fleeing")
+            FleeState._.petCalledAtMs = Time.current_time()
+            Pet.BackOff("fleeing")
+        end
+    else
+        FleeState._.petCalledAtMs = nil
     end
 
     Travel.Drive()
@@ -176,6 +206,9 @@ end
 ---would have tidied them up are the states that are about to stop getting turns. Auto attack is the
 ---exception: `Go()` drops that every pass, because it is the one that can be switched back on by
 ---hand while the mode is running.
+---
+---The pet is the other exception, and it is left to `Go()` for the same reason auto attack is: it
+---can be sent back in by hand while the mode is running, and one pass later it is dropped again.
 ---
 ---Each of these is a *request* rather than a game command, which is what makes this safe to call
 ---from the menu checkbox and from a hotbar button.

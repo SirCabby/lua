@@ -1,6 +1,8 @@
 ---@diagnostic disable: undefined-field
 local mq = require("mq")
 
+local ReagentNames = require("utils.Casting.ReagentNames")
+
 ---What is being cast, and the one place that knows how the three kinds differ.
 ---
 ---A memmed spell, a clicky and an AA are the same thing to a caller -- something that takes a
@@ -245,8 +247,47 @@ function CastSubject:Range()
     return range
 end
 
+---What to call a component we are short of.
+---
+---The client is asked first, and it answers in two useful ways: `FindItem` names an item whenever
+---we hold *some* of a stack, and `FindItemBank` names one sitting in the bank -- which is worth a
+---second question, because "there are twenty of them in the bank" is the commonest reason a caster
+---is out of the reagent their pet needs, and the bank is not somewhere a cast can reach.
+---
+---Failing both, the name comes from `ReagentNames`, because an item we have never held has no name
+---anywhere in the client -- and that is precisely the case here, since the whole reason we are
+---saying anything is that the component is not in the bags. An id is the last resort, for a
+---component that table does not know.
+---@param reagentId number
+---@param needed number
+---@param carried number
+---@return string description
+local function describeReagent(reagentId, needed, carried)
+    local name = mq.TLO.FindItem(reagentId).Name()
+    local where = ""
+
+    if name == nil then
+        local banked = mq.TLO.FindItemBank(reagentId)
+        if banked.ID() ~= nil then
+            name = banked.Name()
+            where = ", and the ones we have are in the bank"
+        end
+    end
+
+    name = name or ReagentNames.Get(reagentId) or ("item " .. tostring(reagentId))
+
+    if needed > 1 then
+        return tostring(needed) .. "x " .. name .. " (carrying " .. tostring(carried) .. ")" .. where
+    end
+    return name .. where
+end
+
 ---Reagents this cast will consume that we do not have.
----@return string|nil missing name of the first missing reagent, nil when we have them all
+---
+---Only the expendable ones (`ReagentID`); a spell's focus item (`NoExpendReagentID`) is not
+---consumed and is a different question.
+---@return string|nil missing the first missing reagent, named where the client can name it, nil
+---when we have them all
 function CastSubject:MissingReagent()
     local spell = self:Spelldata()
     if spell == nil then return nil end
@@ -256,10 +297,9 @@ function CastSubject:MissingReagent()
         -- MQ reports "no reagent in this slot" as -1 on some builds and 0 on others
         if reagentId ~= nil and reagentId > 0 then
             local needed = math.max(asNumber(spell.ReagentCount(index)(), 1), 1)
-            if asNumber(mq.TLO.FindItemCount(reagentId)(), 0) < needed then
-                local item = mq.TLO.FindItem(reagentId)
-                local itemName = item.Name()
-                return itemName or ("item " .. tostring(reagentId))
+            local carried = asNumber(mq.TLO.FindItemCount(reagentId)(), 0)
+            if carried < needed then
+                return describeReagent(reagentId, needed, carried)
             end
         end
     end

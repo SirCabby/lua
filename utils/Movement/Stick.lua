@@ -180,6 +180,19 @@ function Stick:Pulse()
         return MovementStatus.blocked
     end
 
+    -- Rooted is the world refusing the run, not a reason to give the stick up or to lean on the
+    -- keys against it: let every key go and let the pulse after the root fades be the one that
+    -- runs. Facing is still kept -- turning is the one thing a root leaves us, so a target
+    -- dragged into reach while it holds finds us already square to it, swinging. OnBlocked keeps
+    -- the stuck detector and the closing speed from reading the held stretch as a wedge or a
+    -- sprint.
+    if Locomotion.IsRooted() then
+        Locomotion.FaceLoc(y, x)
+        Locomotion.ReleaseAll()
+        self:OnBlocked()
+        return MovementStatus.blocked
+    end
+
     -- How fast the gap closed last pulse is the error bar on where a stop lands, so the
     -- thresholds below are tested against where we will be when the keys actually let go,
     -- not against where we are -- see Locomotion.leadPulses. The gap and not our own speed,
@@ -224,7 +237,7 @@ function Stick:Pulse()
             end
         end
 
-        self._.stuck:Update(Locomotion.IsMoving() and not Locomotion.IsRooted())
+        self._.stuck:Update(Locomotion.IsMoving())
         return MovementStatus.moving
     end
 
