@@ -2,6 +2,7 @@ local Debug = require("utils.Debug.Debug")
 local TableUtils = require("utils.TableUtils.TableUtils")
 
 local ActionType = require("cabby.actions.actionType")
+local Cons = require("cabby.cons")
 
 ---What this character throws at whatever it is fighting, and when it holds back.
 ---
@@ -22,6 +23,12 @@ local ActionType = require("cabby.actions.actionType")
 ---
 ---It may also carry `dps_spread`, which is *how many* rather than when: a debuff that belongs on
 ---everything in the fight rather than only on the one being killed.
+---
+---Every slot, whichever half it is in, may carry `dps_con`: how much of a fight the mob has to be
+---before this one is worth using at all. The three numbers above are about restraint *within* a
+---fight; this is about which fights are worth the effort in the first place, and it is the one
+---dial both halves get, because what a cast costs is worth weighing whether it lands on the mob or
+---on the tank.
 ---@class SpellDpsStateConfig : BaseConfig
 local SpellDpsStateConfig = {
     key = "SpellDpsState",
@@ -268,6 +275,26 @@ end
 ---@param pct number
 function SpellDpsStateConfig.SetTimingPct(action, pct)
     action.dps_timing_pct = math.max(math.min(math.floor(pct), 100), 1)
+    Global.configStore:SaveConfig()
+end
+
+---How much of a fight the mob has to be before this slot is worth using.
+---
+---The one field on this page both halves of the list read, because how much trouble we are in is a
+---fact about the mob and not about who the cast lands on: a damage shield is the most expensive
+---thing in a rotation and the least needed on something that dies in two swings. Grey -- the bottom
+---rung -- is every fight there is, which is what a slot that has never been given one does, so
+---nothing configured before this existed changes behaviour.
+---@param action Action
+---@return string con one of Cons.ladder values
+function SpellDpsStateConfig.GetMinCon(action)
+    return Cons.Sanitize(action.dps_con)
+end
+
+---@param action Action
+---@param con string
+function SpellDpsStateConfig.SetMinCon(action, con)
+    action.dps_con = Cons.Sanitize(con)
     Global.configStore:SaveConfig()
 end
 

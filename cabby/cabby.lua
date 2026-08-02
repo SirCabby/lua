@@ -19,6 +19,7 @@ end
 local mq = require("mq")
 local FileSystem = require("utils.FileSystem.FileSystem")
 
+local Commands = require("cabby.commands.commands")
 local ErrorAlert = require("cabby.errorAlert")
 local Setup = require("cabby.setup")
 local StateMachine = require("cabby.stateMachine")
@@ -73,6 +74,20 @@ Setup:Init(configFilePath, stateMachine)
 
 print("/chelp for help")
 print("Cabby script is running...")
+
+-- Say so out loud: setup is finished, so this character is listening on its channels and can be
+-- given orders. Restarting a fleet (`/bc restart`) is the case that wants it -- the console line
+-- above is only visible on the client it was printed on, and until a character has announced
+-- itself there is no way to tell "still loading" from "did not come back".
+--
+-- Announced on the configured speak channels, with no fallback: this is a report, and a character
+-- with no speak channels keeping its reports to itself is the answer that config is giving. The
+-- default list rather than an override, because the announcement belongs to no command or event.
+local speak = Commands.GetSpeak()
+if speak ~= nil and #speak:GetActiveSpeakChannels() > 0 then
+    speak:speak("Online")
+end
+
 Global.tracing.close(ftkey)
 
 stateMachine:Start()

@@ -93,7 +93,8 @@ end
 
 ---------------- Config Management --------------------
 
----@return number memGem 0 for "the last gem", resolved when a spell actually needs memorizing
+---@return number memGem 0 for "the last gem", resolved when a spell needs memorizing and the bar
+---is full -- an empty gem is preferred over this one and is looked for at that same moment
 function CastingConfig.GetMemGem()
     return getConfigSection().mem_gem
 end
@@ -139,7 +140,7 @@ function CastingConfig.BuildMenu()
     local memGem = CastingConfig.GetMemGem()
     ImGui.SetNextItemWidth(120)
     local gemLabel = memGem == CastingConfig.autoGem and ("Last gem (" .. tostring(gems) .. ")") or ("Gem " .. tostring(memGem))
-    if ImGui.BeginCombo("Memorize into", gemLabel) then
+    if ImGui.BeginCombo("Memorize over", gemLabel) then
         local _, autoPressed = ImGui.Selectable("Last gem (" .. tostring(gems) .. ")", memGem == CastingConfig.autoGem)
         if autoPressed then
             CastingConfig.SetMemGem(CastingConfig.autoGem)
@@ -153,7 +154,7 @@ function CastingConfig.BuildMenu()
         ImGui.EndCombo()
     end
     ImGui.SameLine()
-    CommonUI.HelpMarker("Where a spell that is not memorized gets put before it can be cast. The last gem by default, since it is the one least likely to hold something you are playing with by hand.")
+    CommonUI.HelpMarker("Which gem a spell that is not memorized gets cast over when your bar is full. An empty gem is always used first, so this only matters once there are none -- and the last gem is the default because it is the one least likely to hold something you are playing with by hand.")
 
     ImGui.SetNextItemWidth(120)
     local settle, settleChanged = ImGui.DragInt("Stand still for (ms)", CastingConfig.GetSettleMs(), 10, 0, 2000)

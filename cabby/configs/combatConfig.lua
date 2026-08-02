@@ -76,6 +76,16 @@ local function initAndValidate()
         taint = true
     end
 
+    -- The other half of call_defend, and on by default for the same reason: only the character
+    -- holding the group's main tank role ever acts on a report, and only once its hands are free.
+    -- Its own switch rather than a corner of auto_engage because answering the group's call for
+    -- help is a different choice from picking fights up unbidden -- a tank the player is driving
+    -- by hand still wants the add that went for the healer.
+    if configRoot.answer_defend == nil then
+        configRoot.answer_defend = true
+        taint = true
+    end
+
     -- On by default, and on the same reasoning: it costs nothing where it does not apply. Only a
     -- character that is *not* the group's main tank, in a group that has named one, holding the
     -- top of the hate list of the very mob the tank should be holding, ever eases off anything --
@@ -163,6 +173,18 @@ function CombatConfig.SetCallDefend(enable)
     getConfigSection().call_defend = enable == true
     Global.configStore:SaveConfig()
     print("Calling for defense is Enabled: [" .. tostring(enable) .. "]")
+end
+
+---@return boolean answerDefend whether the main tank picks up the mobs called out for it
+function CombatConfig.GetAnswerDefend()
+    return getConfigSection().answer_defend
+end
+
+---@param enable boolean
+function CombatConfig.SetAnswerDefend(enable)
+    getConfigSection().answer_defend = enable == true
+    Global.configStore:SaveConfig()
+    print("Answering the group's defense calls is Enabled: [" .. tostring(enable) .. "]")
 end
 
 ---@return boolean easeOff whether damage is held back while we hold the mob the tank should have

@@ -40,6 +40,16 @@ local retryAfterFailureMs = 5000
 ---who means to play without a pet has the switch.
 local resummonGraceMs = 5000
 
+---How long a pet we did not summon is left unjudged after it turns up.
+---
+---An evidence window, and the one thing standing between this state and re-arming a pet that is
+---already armed: the client puts a spawn into the world before it dresses it, so a pet asked what
+---it is holding on the frame it appears answers "nothing at all" whatever it is carrying -- and
+---"nothing at all" is the answer that says kit it out. A beat later the answer is the true one.
+---Nothing is withheld from a pet we summoned ourselves, which arrived with empty hands and needs
+---no reading to say so.
+local handsSettleMs = 2000
+
 ---How long an order to summon waits for a gem before it stops being an order. A pet asked for
 ---half a minute ago and summoned now is a surprise rather than an answer; the standing switch is
 ---what covers "whenever you can".
@@ -71,6 +81,13 @@ local gearOrderIdleMs = 15000
 ---procedure the world cannot describe, which is the one kind of held state this design allows,
 ---and it is kept honest the only way such a record can be: it belongs to one pet, by spawn id,
 ---and a pet that is replaced takes it with it. The new one is kitted out from nothing.
+---
+---**A zone line renumbers the pet, it does not replace it.** Spawn ids are a zone's own numbering
+---and crossing a line re-deals every one of them, so the pet that walks through with us comes out
+---the far side wearing a number it did not have -- which is the only thing about it that changed.
+---Read as a new pet it is a fully armed pet re-armed from nothing on every zone, so the record is
+---carried across the line and re-attached by the one thing a line does not touch, which is the
+---pet's own name. See `noticeZoneLine` and `refreshPet`.
 ---
 ---**A pet we did not summon is left as we found it.** Coming up beside a pet that is already
 ---standing there there is no record and no way to build one, so the question is which way to be
@@ -150,8 +167,14 @@ local PetSetupState = {
         ---somebody else's pet we were asked to kit out (`petgear`), in the same shape our own
         ---pet's record has plus who asked and when the ask stops standing
         request = nil,
-        ---the pet we are looking after: { id, name, gearing, given, summoned }
+        ---the pet we are looking after: { id, name, zoneId, gearing, judged, given, summoned }
         pet = nil,
+        ---that same record while the pet itself is out of sight, which across a zone line is for
+        ---the whole of a loading screen: what it says about the gear the pet is already carrying
+        ---is true again the moment the pet is back. See `refreshPet`
+        lastPet = nil,
+        ---the zone the last pass was in, for noticing a line being crossed
+        zoneId = nil,
         ---the pet that was already standing here when the script started, which is never geared
         ---on a guess: see `refreshPet`
         startupPetId = nil,
@@ -269,17 +292,77 @@ local function handsAreEmpty()
         and (tonumber(pet.Equipment("offhand")()) or 0) == 0
 end
 
+---Notice a zone line, and say what crossing one means for the pet.
+---
+---Two things follow from a line, and both of them are things this state would otherwise get wrong.
+---
+---The pet is **renumbered rather than replaced**, so its record is carried across and re-attached
+---on the far side rather than dropped with the id it was keyed by -- `refreshPet` does the
+---attaching, by name.
+---
+---And the pet is **behind us**: it is put back into the world a beat after we are, so the stretch
+---where the client says there is no pet begins on arrival rather than back at the door. Time spent
+---looking at a loading screen is not time spent without a pet, and counting it as such is what
+---leaves the grace before a missing pet is replaced already run out by the time the screen lifts
+----- so the first pass in the new zone summons a second pet over the one still walking through.
+---@return number|nil zoneId the zone we are in, nil while the client will not say
+local function noticeZoneLine()
+    local zoneId = tonumber(mq.TLO.Zone.ID())
+    if zoneId == nil or zoneId < 1 then return PetSetupState._.zoneId end
+    if zoneId == PetSetupState._.zoneId then return zoneId end
+
+    -- the first zone we ever see is not one we crossed into
+    if PetSetupState._.zoneId ~= nil then
+        DebugLog("A zone line was crossed into zone " .. tostring(zoneId))
+        PetSetupState._.goneSinceMs = Time.current_time()
+        -- whatever a summon of ours was going to produce, it produced it on the other side of the
+        -- line: the pet standing here now is one that walked through, not one we just cast. Left
+        -- set, it is what tells the pet below that it is brand new and owed everything
+        PetSetupState._.ourPetComing = false
+    end
+    PetSetupState._.zoneId = zoneId
+
+    return zoneId
+end
+
+---What a pet we did not summon is owed, asked once the client has had its beat to answer.
+---
+---Until then the pet is left alone, which is the answer that costs nothing when it is wrong: a
+---pet wrongly left is one `gearpet` fixes, and a pet wrongly kitted out is a bar of mana and a
+---string of trade windows spent on a pet that was already carrying everything.
+---@param pet table
+local function judgeAdopted(pet)
+    if pet.judged then return end
+    if Time.current_time() - pet.seenAtMs < handsSettleMs then return end
+
+    pet.judged = true
+    pet.gearing = not pet.wasHereAtStartup and handsAreEmpty()
+
+    DebugLog("[" .. pet.name .. "] " .. (pet.gearing and "is holding nothing -- kitting it out" or
+        (pet.wasHereAtStartup and "was already here when the script started, leaving it as it is"
+            or "is already holding something, leaving it as it is")))
+end
+
 ---Who the pet is, re-derived every pass.
 ---
 ---A pet is its spawn id, and a new id is a new pet however alike the two look -- so the record of
----what has been handed over lives and dies with that id, and nothing else needs clearing.
+---what has been handed over lives and dies with that id, and nothing else needs clearing. The one
+---exception is the one the world forces: a zone line re-deals every id in it, and the pet that
+---walks through with us is the same pet on the far side. So an id that changes **across a line**
+---is matched back to its record by name, and only across a line -- a pet replaced without one is a
+---new pet whatever it happens to be called.
 ---@return table|nil pet
 local function refreshPet()
+    local zoneId = noticeZoneLine()
     local id = tonumber(mq.TLO.Me.Pet.ID())
 
     if id == nil or id < 1 then
         if PetSetupState._.pet ~= nil then
-            DebugLog("The pet is gone")
+            DebugLog("The pet is out of sight")
+            -- set aside rather than thrown away: a pet crossing a zone line is out of sight for
+            -- the whole of a loading screen, and this record is the only thing that knows it is
+            -- already carrying its gear
+            PetSetupState._.lastPet = PetSetupState._.pet
             PetSetupState._.pet = nil
         end
         if PetSetupState._.goneSinceMs == nil then
@@ -291,10 +374,38 @@ local function refreshPet()
     PetSetupState._.goneSinceMs = nil
 
     local pet = PetSetupState._.pet
-    if pet ~= nil and pet.id == id then return pet end
+    if pet ~= nil and pet.id == id then
+        pet.zoneId = zoneId
+        judgeAdopted(pet)
+        return pet
+    end
 
     local ours = PetSetupState._.ourPetComing
     PetSetupState._.ourPetComing = false
+
+    local name = mq.TLO.Me.Pet.CleanName() or "my pet"
+
+    -- The pet that came through the line with us, wearing its new number. A name is what a zone
+    -- line leaves alone, and the zone the record was last seen in is what makes it a *line* being
+    -- crossed rather than a pet being replaced -- without that check, a pet resummoned in one zone
+    -- would inherit a dead pet's record on the strength of a shared name.
+    --
+    -- The record may still be in hand (the chain never gave us a pass while the pet was away) or
+    -- set aside above; either is the same record.
+    local previous = pet or PetSetupState._.lastPet
+    PetSetupState._.lastPet = nil
+
+    if not ours and previous ~= nil and previous.name == name and previous.zoneId ~= zoneId then
+        previous.id = id
+        previous.zoneId = zoneId
+        -- a pet still being looked over when the line came is looked over again on this side of it
+        if not previous.judged then previous.seenAtMs = Time.current_time() end
+        PetSetupState._.pet = previous
+
+        DebugLog("[" .. name .. "] came through the zone line (" .. tostring(id) ..
+            ") -- it keeps everything it has been given")
+        return previous
+    end
 
     -- the pet that was standing here when the script started is left exactly as we found it, and
     -- the empty-hands guess is not even asked. A reload is not a reason to re-arm a pet that has
@@ -304,13 +415,18 @@ local function refreshPet()
     -- "does it need gear" is "ask me". `gearpet` and the page's button are that ask.
     --
     -- Any *other* unsummoned pet is one that turned up while we were watching -- the player cast
-    -- it by hand -- and that one is plainly new, so the hands are worth reading.
+    -- it by hand -- and that one is plainly new, so the hands are worth reading, a beat from now.
     local wasHereAtStartup = id == PetSetupState._.startupPetId
 
     pet = {
         id = id,
-        name = mq.TLO.Me.Pet.CleanName() or "my pet",
-        gearing = ours or (not wasHereAtStartup and handsAreEmpty()),
+        name = name,
+        zoneId = zoneId,
+        -- a pet we summoned needs no reading at all: it arrived with nothing. Anything else is
+        -- judged on what it is holding, and not on the frame it turns up -- see `judgeAdopted`
+        gearing = ours,
+        judged = ours,
+        seenAtMs = Time.current_time(),
         adopted = not ours,
         wasHereAtStartup = wasHereAtStartup,
         given = {},
@@ -318,9 +434,7 @@ local function refreshPet()
     }
     PetSetupState._.pet = pet
 
-    DebugLog("Looking after [" .. pet.name .. "] (" .. tostring(pet.id) .. ")" ..
-        (pet.gearing and "" or (wasHereAtStartup and " -- already here when the script started, leaving it as it is"
-            or " -- already equipped, leaving it as it is")))
+    DebugLog("Looking after [" .. pet.name .. "] (" .. tostring(pet.id) .. ")")
     return pet
 end
 
@@ -548,6 +662,16 @@ end
 ---@return string|nil code
 ---@return string|nil reason in words
 local function holdReason()
+    -- The world is being taken down and put back up, and it answers nothing worth hearing while
+    -- that is happening -- least of all "there is no pet", which is what it says for the whole of a
+    -- loading screen about a pet walking through the line alongside us. Asked positively: a client
+    -- that will not say where it is is not one to hold everything on, and the zone line itself is
+    -- noticed separately either way (see `noticeZoneLine`).
+    local gameState = mq.TLO.EverQuest.GameState()
+    if gameState ~= nil and gameState ~= "INGAME" then
+        return "zoning", "waiting for the zone"
+    end
+
     local state = mq.TLO.Me.State()
     if state == "DEAD" or state == "HOVER" then
         return "dead", "dead"
@@ -572,6 +696,9 @@ end
 local function reasonToAbandon(code)
     if code == "fighting" then return "a fight started" end
     if code == "dead" then return "we died" end
+    -- nothing survives a zone line: a cast is interrupted by the door and a hand-off is a trade
+    -- window with the other half of it in a zone we have left
+    if code == "zoning" then return "we zoned" end
     return nil
 end
 
@@ -662,6 +789,9 @@ function PetSetupState.OrderGear()
     local pet = PetSetupState._.pet
     if pet ~= nil then
         pet.gearing = true
+        -- somebody asking outranks whatever the pet's hands were going to say, so the reading is
+        -- not taken afterwards to argue with them
+        pet.judged = true
         pet.given = {}
         pet.summoned = {}
     end
@@ -1040,6 +1170,8 @@ function PetSetupState.Init()
             print(" -- no pet")
         elseif Pet.IsCharmed() then
             print(" -- " .. pet.name .. " is charmed: nothing is conjured for it and nothing is handed to it")
+        elseif not pet.judged then
+            print(" -- " .. pet.name .. " has only just turned up; looking at what it is holding")
         elseif not pet.gearing then
             if pet.wasHereAtStartup then
                 print(" -- " .. pet.name .. " was already here when the script started, so it is left as it is; `gearpet` to kit it out anyway")

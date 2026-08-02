@@ -9,8 +9,10 @@ local Time = require("utils.Time.Time")
 local Action = require("cabby.actions.action")
 local ActionCommand = require("cabby.commands.actionCommand")
 local ChelpDocs = require("cabby.commands.chelpDocs")
+local Combat = require("cabby.combat")
 local Command = require("cabby.commands.command")
 local Commands = require("cabby.commands.commands")
+local Curing = require("cabby.curing")
 local HealStateConfig = require("cabby.configs.healStateConfig")
 local HealStateMenu = require("cabby.ui.states.healStateMenu")
 local Menu = require("cabby.ui.menu")
@@ -77,9 +79,18 @@ local petTargetTypes = { ["pet"] = true, ["pet2"] = true }
 ---and the pet heal are read off the spell (`aims` below), which is what lets one list serve a
 ---cleric keeping six people up and a magician keeping one pet up.
 ---
----What it deliberately leaves out: heal-over-time management, cures, rezzes, and any awareness of
----what other healers in the group are doing. Those need a band of their own, a debuff model, or
----the group coordination that does not exist yet.
+---**Curing rides here too**, and it is the one job in this state that is not chosen from the
+---slot list. A cure is not configured at all: somebody says what is on them, and the best cure of
+---that kind this character owns answers it -- which is the only shape that works, since the person
+---afflicted is the only one who can see it and has no idea what anybody hearing them can cast.
+---`cabby.curing` owns that whole conversation (the reading, the asking, the queue); this state is
+---the hands, because casting a cure is choosing not to cast a heal and that choice belongs where
+---the healing is arbitrated. Where it sits in the pass is the whole of the arbitration: after
+---anybody in real trouble and before everything else -- see `Go`.
+---
+---What it deliberately leaves out: heal-over-time management, rezzes, and any awareness of what
+---other healers in the group are doing. Those need a band of their own, a debuff model, or the
+---group coordination that does not exist yet.
 ---@class HealState : BaseState
 local HealState = {
     key = "HealState",
@@ -92,7 +103,8 @@ local HealState = {
         healing = "healing",
         healGroup = "healgroup",
         healPets = "healpets",
-        healAction = "healaction"
+        healAction = "healaction",
+        curing = "curing"
     },
     _ = {
         isInit = false,
@@ -102,6 +114,10 @@ local HealState = {
         healTarget = nil,   -- { id, name, pct } as it was when the heal started
         healSlot = nil,     -- the configured slot chosen for it
         healThreshold = nil,
+        -- the CureRequest the cast in flight is answering, nil while it is an ordinary heal. The
+        -- one thing that says which of the two jobs this state is in the middle of
+        cureRequest = nil,
+        lastCureResult = nil,
         order = nil,        -- { id, name, expiresMs } from a `heal <id>` or `healme`
         settleUntil = {},   -- { [spawn id] = time we may consider healing them again }
         -- { [spawn id] = when a heal that did not land is worth trying on them again }. Kept apart
@@ -517,6 +533,162 @@ local function choosePick(candidates)
     return nil
 end
 
+---------------- Curing --------------------
+
+---Why answering cure requests is not something this character should be doing right now, if it is
+---not.
+---
+---Read from the world every pass rather than latched, like everything else here: a fight starting
+---is what switches curing off for a character set to stay out of them, and it has to switch off on
+---the pass the fight starts rather than the next time somebody asks.
+---
+---A reason rather than a boolean because **this is the gate that looks like a broken healer**. The
+---shipped default is out of combat only, and a DoT worth curing almost always lands *in* a fight --
+---so the ordinary first experience of curing is a cleric that hears every request, queues every
+---one, and casts nothing, saying nothing about why. `/cheal` and the state's own status line both
+---quote this now.
+---@return string|nil reason nil when cures are being answered
+local function reasonNotCuring()
+    if not HealStateConfig.IsCuring() then return "switched off on the Heal State page" end
+    if Combat.IsEngaged() and not HealStateConfig.GetCureInCombat() then
+        return "in a fight, and this is set to cure out of combat only"
+    end
+    return nil
+end
+
+---@return boolean isCuring
+local function isCuring()
+    return reasonNotCuring() == nil
+end
+
+---Is somebody in real trouble that this state would actually heal?
+---
+---The guard that curing is held to, and it deliberately asks the second half of that question as
+---well. "Somebody is below the emergency mark" on its own is not a reason to leave an affliction
+---alone: they may be settling, held off after a refusal, or scoped to no configured slot at all --
+---and below the emergency mark is exactly where people *stay*, because that is where a rez leaves
+---them. Curing would then be blocked forever by somebody nothing was ever going to be cast at.
+---@param candidates table this pass's reading of who needs what, worst off first
+---@return boolean isPending
+local function emergencyPending(candidates)
+    local emergency = HealStateConfig.GetEmergencyPct()
+
+    for _, candidate in ipairs(candidates) do
+        -- sorted worst-first, so the first one above the mark ends the walk
+        if candidate.pct > emergency then return false end
+        if wouldChoose(candidate) then return true end
+    end
+
+    return false
+end
+
+---@class CurePick
+---@field request CureRequest
+---@field targetId number|nil what the cast should target; nil for a cure that aims itself
+---@field name string who is being cured, for status output
+
+---The first queued cure this character can actually cast right now.
+---
+---The whole queue is walked rather than only its head, which is where this differs from how the
+---buff state answers its requests. A cure is aimed at a person: the one at the front may be out of
+---range or behind a wall while the one behind them is standing right here, and holding everybody
+---up for a name that cannot be reached would be a healer doing nothing while somebody it *can*
+---reach asks again every twenty seconds. Order is still the rule -- it is the first that can be
+---cast, not the best -- so a reachable queue is answered oldest first.
+---@return CurePick? pick
+local function chooseCure()
+    if not isCuring() then return nil end
+
+    for _, request in ipairs(Curing.GetRequests()) do
+        if Curing.IsActionable(request) then
+            -- a cure that aims itself is cast at nobody: EQ puts a group cure on the group and a
+            -- self cure on us with nothing targeted, and targeting for one of those would drop
+            -- whatever we were looking at to no purpose
+            local targetId = request.needsTarget and request.id or nil
+            if request.action:IsReady(HealState.CastRequest(targetId)) then
+                return { request = request, targetId = targetId, name = request.name }
+            end
+        end
+    end
+
+    return nil
+end
+
+---Start the cure this pass decided on.
+---@param pick CurePick
+---@return boolean isBusy
+local function startCure(pick)
+    local request = pick.request
+    local castId, refused = Casting.Cast(request.action:Subject(), HealState.CastRequest(pick.targetId))
+
+    if castId == nil then
+        DebugLog("Cure of [" .. pick.name .. "] was refused: " .. tostring(refused))
+        return false
+    end
+
+    DebugLog("Curing " .. request.typeKey .. " on [" .. pick.name .. "] with [" ..
+        request.action:Name() .. "]")
+    HealState._.castId = castId
+    -- the one field that says which of this state's two jobs the cast in flight belongs to
+    HealState._.cureRequest = request
+    return true
+end
+
+---Is the cure in the air still worth finishing?
+---@param candidates table
+---@return string|nil reason to call it off, nil to let it finish
+local function reasonToAbandonCure(candidates)
+    local request = HealState._.cureRequest
+    if request == nil then return nil end
+
+    if not isCuring() then return "curing is off now" end
+
+    if not request.isSelf then
+        local spawn = mq.TLO.Spawn("id " .. tostring(request.id))
+        if spawn.ID() == nil then return "they are gone" end
+        if spawn.Dead() then return "they died" end
+    end
+
+    -- the guard again, now that the cast is committed: somebody who has dropped into real trouble
+    -- since it started is worth throwing a cure away for, exactly as they are worth throwing away
+    -- a heal aimed at the wrong person
+    if emergencyPending(candidates) then return "somebody needs healing" end
+
+    return nil
+end
+
+---@param status string
+---@param outcome string|nil
+---@param reason string|nil
+local function recordCureFinished(status, outcome, reason)
+    local request = HealState._.cureRequest or {}
+    local spell = request.action ~= nil and request.action:Name() or "a cure"
+
+    if status == Casting.status.succeeded then
+        HealState._.lastCureResult = spell .. " on " .. tostring(request.name) ..
+            (outcome ~= Casting.outcomes.succeeded and (" (" .. tostring(reason) .. ")") or "")
+        -- **the request stays queued.** A cure strips a fixed number of counters and an affliction
+        -- can carry more than one cast's worth, so a cure that went off is not a job that is done
+        -- -- what finishes it is the counters actually being gone, which `cabby.curing` reads back
+        -- off them once the client has caught up. Nothing here writes down that we cured somebody,
+        -- because the world says it better.
+        Curing.NoteCast(request)
+    else
+        if not HealState._.calledOff then
+            HealState._.lastCureResult = spell .. " on " .. tostring(request.name) ..
+                " failed: " .. tostring(reason)
+        end
+        -- a cure we called off ourselves costs nothing but its place in the queue for a moment: it
+        -- was dropped because somebody was dying, and coming back to it afterwards is right
+        Curing.NoteFailure(request, HealState._.calledOff and "called off" or reason)
+    end
+
+    HealState._.calledOff = false
+
+    DebugLog("Cure finished: " .. tostring(HealState._.lastCureResult))
+    HealState.Reset()
+end
+
 ---------------- The state itself --------------------
 
 function HealState.Reset()
@@ -524,19 +696,49 @@ function HealState.Reset()
     HealState._.healTarget = nil
     HealState._.healSlot = nil
     HealState._.healThreshold = nil
+    HealState._.cureRequest = nil
 end
 
 ---@return string description of what this state is doing, for /cheal and the menu
 function HealState.Describe()
-    if HealState._.castId ~= nil and HealState._.healTarget ~= nil then
-        return "healing " .. HealState._.healTarget.name .. " with " .. tostring(HealState._.healTarget.spell)
+    if HealState._.castId ~= nil then
+        local request = HealState._.cureRequest
+        if request ~= nil then
+            return "curing " .. request.typeKey .. " on " .. request.name ..
+                " with " .. request.action:Name()
+        end
+        if HealState._.healTarget ~= nil then
+            return "healing " .. HealState._.healTarget.name .. " with " .. tostring(HealState._.healTarget.spell)
+        end
     end
+
+    local waiting = #Curing.GetRequests()
+    if waiting > 0 then
+        -- said even when curing is off, which is the whole point: a queue that is filling up while
+        -- nothing is cast is exactly the state somebody is staring at wondering why their healer
+        -- has stopped answering them
+        local notCuring = reasonNotCuring()
+        return "watching, with " .. tostring(waiting) ..
+            (waiting == 1 and " cure" or " cures") .. " waiting" ..
+            (notCuring ~= nil and (" -- not curing: " .. notCuring) or "")
+    end
+
     return "watching"
 end
 
 ---@return string|nil result how the last heal went
 function HealState.GetLastResult()
     return HealState._.lastResult
+end
+
+---@return string|nil result how the last cure went
+function HealState.GetLastCureResult()
+    return HealState._.lastCureResult
+end
+
+---@return table requests the cure requests outstanding, oldest first
+function HealState.GetCureRequests()
+    return Curing.GetRequests()
 end
 
 ---@return table candidates last read health of everyone this state watches
@@ -844,6 +1046,77 @@ function HealState.Init()
         set = HealStateConfig.SetHealPets
     })
 
+    ---What a person might type for each setting. Three answers to one question, so a switch will
+    ---not do -- but the words people reach for are still on/off words, and `curing on` meaning
+    ---"cure, out of fights" is the reading that matches how every other switch in cabby behaves
+    ---about combat: off until told otherwise.
+    local cureWords = {
+        ["off"] = HealStateConfig.cureModes.Off.value,
+        ["no"] = HealStateConfig.cureModes.Off.value,
+        ["none"] = HealStateConfig.cureModes.Off.value,
+        ["disabled"] = HealStateConfig.cureModes.Off.value,
+        ["on"] = HealStateConfig.cureModes.OutOfCombat.value,
+        ["yes"] = HealStateConfig.cureModes.OutOfCombat.value,
+        ["out"] = HealStateConfig.cureModes.OutOfCombat.value,
+        ["outofcombat"] = HealStateConfig.cureModes.OutOfCombat.value,
+        ["combat"] = HealStateConfig.cureModes.Always.value,
+        ["incombat"] = HealStateConfig.cureModes.Always.value,
+        ["battle"] = HealStateConfig.cureModes.Always.value,
+        ["always"] = HealStateConfig.cureModes.Always.value
+    }
+
+    local curingDocs = ChelpDocs.new(function() return {
+        "(curing <off | on | combat>) Sets whether listener(s) answer cure requests, and when",
+        " -- Usage: curing off      -- ignore them",
+        " -- Usage: curing on       -- cure, but not while fighting",
+        " -- Usage: curing combat   -- cure, fights included",
+        " -- Usage: curing          -- report what it is set to now",
+        " -- Nothing about a cure is configured: whoever needs one names the kind (`cure poison`)",
+        "    and the best cure of that kind this character owns answers it. There is no slot list",
+        "    to fill in, because the person afflicted is the only one who can see it and has no",
+        "    idea what anybody hearing them can cast.",
+        " -- Cures are cast ahead of ordinary heals and behind anybody below the emergency point.",
+        " -- Asking for a cure is the other half of this and every class does it, whether or not",
+        "    it can cure anything: see /chelp callcure",
+        " -- Currently: " .. HealStateConfig.GetCureModeDisplay(HealStateConfig.GetCureMode())
+    } end )
+    local function event_Curing(_, speaker, args)
+        if not Commands.GetCommandOwners(HealState.eventIds.curing):HasPermission(speaker) then
+            DebugLog("Ignoring curing speaker [" .. speaker .. "]")
+            return
+        end
+
+        args = StringUtils.Split(StringUtils.TrimFront(args or ""))
+        if #args < 1 then
+            print("Curing: " .. HealStateConfig.GetCureModeDisplay(HealStateConfig.GetCureMode()))
+            return
+        end
+
+        local mode = cureWords[args[1]:lower()]
+        if mode == nil then
+            print("(curing) [" .. args[1] .. "] is not a curing setting. Usage: curing <off | on | combat>")
+            return
+        end
+
+        HealStateConfig.SetCureMode(mode)
+        if not HealStateConfig.IsCuring() and HealState._.cureRequest ~= nil then
+            -- switched off with one in the air: it is the casting service's now, and it would go
+            -- on holding the chain back for a job we were just told to stop
+            Casting.StopFor(HealState.key)
+        end
+    end
+    Commands.RegisterCommEvent(Command.new(HealState.eventIds.curing, event_Curing, curingDocs)
+        :WithArgs({
+            required = true,
+            hint = "off, on, or combat",
+            default = "on",
+            choices = function() return {
+                { label = "Do not cure", args = "off", name = "Curing off" },
+                { label = "Cure, but not while fighting", args = "on", name = "Curing on" },
+                { label = "Cure, fights included", args = "combat", name = "Curing in battle" }
+            } end
+        }))
+
     ActionCommand.Register({
         key = HealState.key,
         phrase = HealState.eventIds.healAction,
@@ -876,6 +1149,17 @@ function HealState.Init()
         if result ~= nil then
             print(" -- last: " .. result)
         end
+        local notCuring = reasonNotCuring()
+        print(" -- curing: " .. HealStateConfig.GetCureModeDisplay(HealStateConfig.GetCureMode()) ..
+            (notCuring ~= nil and (" -- not answering right now: " .. notCuring) or ""))
+        local cureResult = HealState.GetLastCureResult()
+        if cureResult ~= nil then
+            print(" -- last cure: " .. cureResult)
+        end
+        for _, request in ipairs(HealState.GetCureRequests()) do
+            print(" -- asked for: " .. request.typeKey .. " for " .. request.name ..
+                " with " .. request.action:Name())
+        end
         for _, candidate in ipairs(getCandidates()) do
             print(" -- " .. candidate.name .. ": " .. tostring(math.floor(candidate.pct)) .. "%" ..
                 (candidate.isTank and " (tank)" or "") .. (candidate.isPet and " (pet)" or ""))
@@ -902,23 +1186,51 @@ function HealState.Go()
     local castId = HealState._.castId
     if castId ~= nil then
         local status, outcome, reason = Casting.GetResult(castId)
+        local isCure = HealState._.cureRequest ~= nil
 
         if status == nil then
-            local abandon = reasonToAbandon(candidates)
+            local abandon = isCure and reasonToAbandonCure(candidates) or reasonToAbandon(candidates)
             if abandon ~= nil then
-                DebugLog("Calling off the heal: " .. abandon)
-                HealState._.lastResult = "called off: " .. abandon
+                DebugLog("Calling off the " .. (isCure and "cure" or "heal") .. ": " .. abandon)
+                if isCure then
+                    HealState._.lastCureResult = "called off: " .. abandon
+                else
+                    HealState._.lastResult = "called off: " .. abandon
+                end
                 HealState._.calledOff = true
                 Casting.StopFor(HealState.key)
             end
             return true
         end
 
-        recordFinished(status, outcome, reason)
+        if isCure then
+            recordCureFinished(status, outcome, reason)
+        else
+            recordFinished(status, outcome, reason)
+        end
         return true
     end
 
     prune()
+
+    -- **A cure comes after anybody in real trouble and before everything else.**
+    --
+    -- Above an ordinary heal because the two are not the same kind of cost. A heal gives back what
+    -- has already been taken; a cure stops the taking. An affliction with two minutes left will
+    -- spend more health than the heal being weighed against it and go on spending it every tick,
+    -- and it is *finite* -- once it is off, the healing that would have been owed to it never has
+    -- to happen at all. Above an ordered heal for the same reason, and because a cure request is
+    -- itself somebody's explicit order: both are people saying what they need, and the one that
+    -- ends a recurring cost in a single cast is the one to answer first.
+    --
+    -- Below somebody dying, because nothing outranks that. It is the same guard a group heal is
+    -- held to a few lines down, and asked the same careful way (see `emergencyPending`): whether
+    -- there is somebody in trouble this state would actually cast at, rather than merely somebody
+    -- with a low number, so a rezzed group-mate parked at 15% cannot block curing forever.
+    if not emergencyPending(candidates) then
+        local curePick = chooseCure()
+        if curePick ~= nil then return startCure(curePick) end
+    end
 
     local pick = choosePick(candidates)
     if pick == nil then return false end

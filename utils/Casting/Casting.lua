@@ -46,7 +46,8 @@ local Casting = {
     ---Timings, all overridable through `Configure`. The host keeps the user-facing ones in
     ---config; the rest are here because nobody sensibly tunes them.
     settings = {
-        ---gem to memorize into when a spell is not already memorized; 0 means the last gem
+        ---gem to memorize into when a spell is not already memorized *and no gem is free*; 0
+        ---means the last gem
         memGem = 0,
         ---how long "stopped moving" has to hold before a cast is safe to start
         settleMs = 250,
@@ -107,15 +108,26 @@ local function onOutcomeLine(outcome, isLate)
         return
     end
 
-    -- No cast in the air. A late line just after one completed is that cast's real result: the
-    -- spell went off, so the cast bar closed and we reported success, and only now does the
-    -- client mention that the target resisted it. Refine what we already reported rather than
-    -- throwing it away -- a caller that polls the result a frame later sees the truth.
-    if not isLate then return end
-
+    -- No cast in the air, so this line is about the one that has just finished. Two kinds reach
+    -- here, and both refine what was already reported rather than being thrown away -- a caller
+    -- that polls the result a frame later sees the truth.
+    --
+    -- A **late** line is the ordinary case: the spell went off, so the cast bar closed and we
+    -- reported success, and only now does the client mention that the target resisted it.
+    --
+    -- A **broken** line contradicts that success outright -- the bar closed because the cast was
+    -- lost, not because it completed. `CastTask` holds a finished cast open for a round trip so
+    -- these normally land on the task itself and are reported as the failure they are; one that
+    -- outruns that window is still worth taking, because a fizzle mistaken for a success is a
+    -- caller believing a buff is on somebody for the next half hour.
     local last = Casting._.last
     if last.id == nil or last.status ~= CastStatus.succeeded then return end
     if Time.current_time() - last.finishedMs > Casting.settings.lateWindowMs then return end
+
+    if not isLate then
+        if not CastOutcome.WasBroken(outcome) then return end
+        last.status = CastStatus.failed
+    end
 
     DebugLog("Late cast outcome for id " .. tostring(last.id) .. ": " .. outcome)
     last.outcome = outcome
@@ -151,19 +163,32 @@ function Casting.Configure(settings)
     end
 end
 
----Which gem a spell that is not memorized should be memorized into. The last gem by default:
----it is the one a hand-played caster is least likely to have something they care about in.
----@param requested number|nil
----@return number gem
-local function resolveGem(requested)
+---@param gem number
+---@return number gem inside the bar this character actually has
+local function clampGem(gem)
     local gems = tonumber(mq.TLO.Me.NumGems()) or 8
-    local configured = Casting.settings.memGem
-    if configured == nil or configured < 1 then configured = gems end
-    local gem = requested or configured
     gem = math.floor(gem)
-    if gem < 1 then gem = 1 end
-    if gem > gems then gem = gems end
+    if gem < 1 then return 1 end
+    if gem > gems then return gems end
     return gem
+end
+
+---Which gem to fall back on when a spell has to be memorized and no gem is free.
+---
+---Only ever the *fallback*: an empty gem is preferred over this one and is looked for at the
+---moment of memorizing (see `CastTask`), because casting something over a spell that is already
+---on the bar is the one part of memorizing that costs anything -- whatever was there is gone, and
+---it may well be something the player put there by hand.
+---
+---The last gem by default, for that same reason: it is the one a hand-played caster is least
+---likely to have something they care about in.
+---@return number gem
+local function resolveMemGem()
+    local configured = Casting.settings.memGem
+    if configured == nil or configured < 1 then
+        return clampGem(tonumber(mq.TLO.Me.NumGems()) or 8)
+    end
+    return clampGem(configured)
 end
 
 ---@param task CastTask
@@ -194,7 +219,8 @@ end
 --- owner: string, which behavior this cast belongs to -- used to stop it again later
 --- priority: number, that behavior's place in the host's priority chain; smaller is stronger
 --- targetId: number, target this spawn first
---- gem: number, override the memorize gem
+--- gem: number, memorize into exactly this gem, whatever is in it. Left out -- which is the
+---   ordinary case -- a free gem is used, and the configured one only if there is none
 --- onDone: fun(status, outcome, reason), called from the pulse once the cast is terminal. A
 ---   convenience over polling `GetResult`; note that it fires *before* any late resist line can
 ---   refine the result.
@@ -242,7 +268,10 @@ function Casting.Cast(subject, options)
         priority = options.priority,
         targetId = options.targetId,
         onDone = options.onDone,
-        gem = resolveGem(options.gem),
+        -- a caller that named a gem gets that gem, free or not: naming one is how "put it *here*"
+        -- is said, and looking for somewhere better would be ignoring the answer
+        gem = options.gem ~= nil and clampGem(options.gem) or nil,
+        memGem = resolveMemGem(),
         settleMs = Casting.settings.settleMs,
         readyWaitMs = Casting.settings.readyWaitMs,
         memorizeRetryMs = Casting.settings.memorizeRetryMs,
@@ -464,10 +493,12 @@ end
 ---How a cast ended. Returns nil while it is still running, so a caller can poll the id it was
 ---handed without tracking anything else.
 ---
----A result stays available until the next cast finishes, and a late "resisted" or "unaffected"
----line can refine a success into the outcome it really had for a moment afterwards -- so a
----caller that cares about resists should read the result on the frame after it first goes
----terminal rather than acting on the first non-nil answer.
+---A result stays available until the next cast finishes, and a line arriving just after it can
+---refine a success into the outcome it really had -- "resisted" or "unaffected" leaving it a
+---success that did nothing, a fizzle the client was slow to mention turning it into a failure --
+---so a caller that cares about either should read the result on the frame after it first goes
+---terminal rather than acting on the first non-nil answer. The common case needs no such care:
+---a completed cast is already held open long enough for the client to say it was lost.
 ---@param taskId number
 ---@return string|nil status terminal status, nil while the cast is still running
 ---@return string|nil outcome

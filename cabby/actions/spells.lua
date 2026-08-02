@@ -173,6 +173,66 @@ local function baseOfSPA(spell, effects, accept)
     return nil
 end
 
+---Does this spell carry one of these effects, on the terms the caller sets?
+---
+---The public form of the two readings everything below is built on. `accept` is what separates
+---them: left out, the effect being present is the whole answer, which is right for the effects
+---that mean one thing (a mez is a mez). Given, the effect's base value has to pass it too --
+---which is the only honest way to read the half of the list where one number does opposite jobs
+---depending on its sign: SPA 3 is a run speed buff or a snare, SPA 11 is a haste or a slow, SPA 0
+---is a heal or a nuke.
+---
+---Exported because "what does this spell do" is asked outside this file: `cabby.actions.buffTypes`
+---names a buff by the effect its spells carry rather than by the heading the client files them
+---under, for the same reason `Spells.Controls` does.
+---@param spell any mq spell TLO, or nil
+---@param effects table array of SPA numbers; carrying any one of them counts
+---@param accept fun(base: number): boolean|nil the sign test, omitted when presence is enough
+---@return boolean carries
+function Spells.HasEffect(spell, effects, accept)
+    if spell == nil then return false end
+    if accept == nil then return hasSPA(spell, effects) end
+    return baseOfSPA(spell, effects, accept) ~= nil
+end
+
+---What the spell puts in the effect slot, for the readings where the number itself is the answer
+---rather than a yes or a no.
+---
+---`HasEffect` asks whether an effect is carried on the caller's terms; this hands back what it was
+---carried *at*. Only one reading needs that so far and it is a good one: a cure says how many
+---counters it strips right there in the base value, so "the best cure I have" has an exact answer
+---in the data instead of being inferred from spell rank (see `cabby.actions.cureTypes`).
+---@param spell any mq spell TLO, or nil
+---@param effects table array of SPA numbers; the first one carried that passes is the answer
+---@param accept? fun(base: number): boolean the sign test, omitted when any base will do
+---@return number|nil base nil when no effect of these both appears and passes
+function Spells.EffectBase(spell, effects, accept)
+    if spell == nil then return nil end
+    return baseOfSPA(spell, effects, accept or function() return true end)
+end
+
+---How long what this spell lands lasts, in milliseconds.
+---
+---Zero means the spell has no duration at all, which is how a heal, a cure and a nuke read -- and
+---so is also the answer to "is this a buff": what separates a buff from every other beneficial
+---spell is that a buff lasts. Worth checking even against a list narrowed to buff headings, since
+---the game's filing is not a promise and the narrowing can be switched off.
+---@param spell any mq spell TLO, or nil
+---@return number ms
+function Spells.DurationMs(spell)
+    if spell == nil then return 0 end
+
+    -- MyDuration carries this character's duration focus effects; Duration is the unmodified
+    -- value and the fallback. Read through TotalSeconds rather than the tick count, which is what
+    -- the bare member gives
+    local seconds = tonumber(spell.MyDuration.TotalSeconds())
+    if seconds == nil or seconds <= 0 then
+        seconds = tonumber(spell.Duration.TotalSeconds())
+    end
+    if seconds == nil or seconds <= 0 then return 0 end
+    return seconds * 1000
+end
+
 ---Does this spell put a pet beside us?
 ---@param spell any mq spell TLO, or nil
 ---@return boolean summonsPet

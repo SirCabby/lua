@@ -24,7 +24,6 @@ local Paladin = BaseClass.new({
     },
     unimplemented = {
         "tanking as its own state: aggro-loss detection driving the taunt and hate lists",
-        "curing",
         "rez"
     }
 })

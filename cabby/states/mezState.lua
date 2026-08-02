@@ -27,6 +27,21 @@ local ToggleCommand = require("cabby.commands.toggleCommand")
 ---the window has passed, what the world shows is the answer.
 local justLandedMs = 2000
 
+---How long the mobs a break was called on are given to say which of them it was, before every one
+---of them is treated as loose.
+---
+---The awakened line carries a *name*, and a camp usually holds more than one mob wearing it, so
+---what the line narrows to is a group. The mobs settle it themselves by moving (`settleSuspicions`,
+---and the animation read beside it), and this is how long that is allowed to take: `cabby.mobs`
+---samples position and heading four times a second, and a mob handed back its own will faces
+---whoever it is about to hit inside one of those samples. Four samples is generous for that, and
+---still shorter than the cast a wrong guess would spend.
+---
+---**An evidence window, not a give-up timer.** What happens at the end of it is not that the work
+---is dropped -- it is that every suspect is treated as loose after all, because a break nobody owned
+---up to is still a break and a redundant mez is the safe way to be wrong.
+local suspicionSettleMs = 1000
+
 ---The animations a mob shows while it is standing there doing nothing -- which is what a mezzed
 ---mob does, and the only thing about a mez that the client will report for a spawn we are not
 ---looking at.
@@ -94,6 +109,15 @@ local deliveries = {
 ---    something already hurt past the point of being worth taking out of reach of the damage in the
 ---    air, and not something out of range or out of sight -- which the casting service answers for
 ---    us, since a slot's `IsReady` is judged against the mob the cast would be aimed at.
+---
+---**An add is only an add beside something being killed**, which is why both answers above stop at
+---the same place: a *new* mob is chosen only once something has been named first to kill
+---(`namedKill` -- the main tank's target, or our own engagement where the tank's cannot be seen --
+---and the mob it names is itself never mezzed). Before that there is the pull walking in, which is
+---one mob and nobody's add (`isUnfoughtPull`), and there is a pile of mobs with no telling which
+---one the tank is about to hit -- and mezzing the wrong one of those is the tank taunting a mob it
+---must not break. What this state has *already* mezzed is exempt from both, so a refresh never
+---waits on the beat between one target and the next.
 ---
 ---Nothing is remembered that the world can be asked about, and the two things that are -- this
 ---spawn cannot be mezzed, this spawn resisted -- are what the world *said* and are dropped the
@@ -271,9 +295,15 @@ end
 ---away the rest are cleared. Two mobs waking is two lines, and the second one suspects whatever is
 ---still held.
 ---
----A suspicion nothing resolves simply stands, and that is correct rather than a leak: an
----unresolved suspect is treated as loose, so the worst it can do is buy that mob a mez it may not
----have needed -- and it is dropped by the mob dying, by a mez of ours landing on it, or by a zone.
+---**Nothing is thrown away about a mob while this is unsettled**, which is the other half of it
+---being the *right* mob that gets the mez: the group is suspected, not accused, so the trust in a
+---mez of ours that landed a beat ago (`landed`) stands until the suspicion lands on that mob. It is
+---dropped here, at the moment there is one mob to drop it for.
+---
+---A suspicion nothing resolves simply stands, and that is correct rather than a leak: past
+---`suspicionSettleMs` an unresolved suspect is treated as loose, so the worst it can do is buy that
+---mob a mez it may not have needed -- and it is dropped by the mob dying, by a mez of ours landing
+---on it, or by a zone.
 local function settleSuspicions()
     local resolved = {}
 
@@ -287,6 +317,9 @@ local function settleSuspicions()
     for _, answer in ipairs(resolved) do
         DebugLog("It was " .. answer.name .. " (" .. tostring(answer.id) .. ") that woke: it moved")
         MezState._.awake[answer.id] = true
+        -- now that the line has one mob to belong to, what we thought we had just put on it is
+        -- what the world has contradicted
+        MezState._.landed[landedKey(roles.mez, answer.id)] = nil
 
         for id, suspicion in pairs(MezState._.suspect) do
             if suspicion.name == answer.name then MezState._.suspect[id] = nil end
@@ -372,12 +405,20 @@ local function mezRemainingMs(id, spawn)
     -- fight.
     if MezState._.awake[id] then return 0 end
 
-    -- one of several mobs of this name woke and the world has not yet said which. All of them are
-    -- treated as loose until it does, which is the safe answer -- and, because only one mez can be
-    -- in the air at a time, costs nothing in the ordinary case: `looseFor` puts the one that has
-    -- actually moved first, so the single cast this pass goes at the right mob and the others are
-    -- cleared before a second one would have been chosen
-    if MezState._.suspect[id] ~= nil then return 0 end
+    -- One of several mobs of this name woke and the world has not yet said which. For the moment it
+    -- takes the freed one to give itself away -- it turns to face what it is about to hit before it
+    -- takes a step, and the readings below are watching for exactly that -- the suspicion adds
+    -- nothing, and every mob of the name is judged on its own evidence like any other.
+    --
+    -- **This used to answer "all of them are loose", and that answer cost a cast.** With two of a
+    -- kind held side by side it is a coin toss, and losing it spends the mez, the gem timer and
+    -- three seconds of casting on a mob that was already mezzed -- three seconds during which the
+    -- one that actually woke is loose and nothing is being cast at it. Waiting a beat to be told
+    -- which is the cheaper bet by every measure.
+    local suspicion = MezState._.suspect[id]
+    if suspicion ~= nil and Time.current_time() - suspicion.sinceMs >= suspicionSettleMs then
+        return 0
+    end
 
     if movedSinceMez(id) then return 0 end
     if not isStandingStill(spawn) then return 0 end
@@ -433,11 +474,43 @@ end
 
 ---------------- Who is worth acting on --------------------
 
+---What the group is killing first, and how this client came to know it.
+---
+---**The mob everything else is an add beside.** Crowd control cannot name an add on its own -- an
+---add is a mob that is *not* the one being killed -- so this is the fact the whole of the choosing
+---below stands on, and nil is a real answer that stops it.
+---
+---Two sources, and the order between them is the point:
+---
+---**The main tank's target**, which is the group's own answer and the one that arrives first: the
+---tank has picked the mob up before this character has cast anything, and `Combat.GetTankTargetId`
+---already knows the three ways it is knowable (we are the tank; the tank's `assist` call; the
+---client's assist record). This is what the enchanter waits for.
+---
+---**Failing that, our own engagement.** Not a nicety -- it is what keeps the rule from being a
+---silent off switch. `GetTankTargetId` answers nil for a group that never dragged anybody onto the
+---Main Tank role, and for a tank that is neither running cabby nor holding the assist, and a mez
+---state that never fires because of a window nobody filled in is worse than one that occasionally
+---mezzes early. Our own engagement comes from the assist call or from what turned on us, so it is
+---the same fight named a different way.
+---@return number|nil id nil when nobody here can say what is being killed
+---@return string|nil source in words, for the page and `/cmez`
+local function namedKill()
+    local tankOn = Combat.GetTankTargetId()
+    if tankOn ~= nil then return tankOn, "what the main tank is on" end
+
+    local ours = Combat.GetTargetId()
+    if ours > 0 then return ours, "what we are fighting" end
+
+    return nil, nil
+end
+
 ---@class MezCandidate
 ---@field id number
 ---@field name string
 ---@field spawn any mq spawn TLO, read once and handed on
----@field isKillTarget boolean what the group is killing, which is never mezzed on purpose
+---@field isKillTarget boolean what is being killed and is never mezzed on purpose -- our own
+---engagement, and what the group's main tank has named, which are two answers to one question
 ---@field isOnMe boolean it is coming for this character -- what a stun is for
 ---@field canSee boolean whether there is line of sight to it from here, read once per pass and
 ---shared by every slot -- see `scanCandidates`
@@ -458,8 +531,9 @@ end
 ---
 ---Unreadable is read as visible: `LineOfSight` answering nothing is the client declining to say,
 ---and the casting service will refuse the cast for real if it turns out to be blocked.
+---@param killId number|nil what is first to kill (`namedKill`), read once for the pass
 ---@return MezCandidate[] candidates
-local function scanCandidates()
+local function scanCandidates(killId)
     local candidates = {}
     local killTargetId = Combat.GetTargetId()
 
@@ -475,7 +549,11 @@ local function scanCandidates()
                 id = id,
                 name = spawn.CleanName() or ("spawn " .. tostring(id)),
                 spawn = spawn,
-                isKillTarget = id == killTargetId,
+                -- our own engagement *and* the tank's, because they are one question -- "is
+                -- somebody killing this" -- and a character that has not engaged anything (a
+                -- chanter with auto-engage off is the ordinary case) would otherwise read the
+                -- mob the tank is holding as just another add and mez it off them
+                isKillTarget = id == killTargetId or id == killId,
                 isOnMe = onMe[id] == true,
                 canSee = spawn.LineOfSight() ~= false
             }
@@ -485,17 +563,63 @@ local function scanCandidates()
     return candidates
 end
 
+---Is the whole fight one mob that nobody has picked up yet?
+---
+---**A lone mob nothing is fighting is the pull, not an add.** It is walking in on somebody's leash
+---with the camp waiting for it, and a mez that lands on it stops it dead halfway there: the puller
+---stands still for a mob that is never arriving, the tank never gets to pick it up, and the first
+---person to hit it breaks the mez anyway. A mez is for the *second* mob and everything after it.
+---
+---A question about the fight rather than about the mob, because being the only one in it is not a
+---property of a mob -- and the moment anything else joins, both of them are worth holding: two on
+---the way in is the ordinary pull a group keeps crowd control for.
+---
+---**`IsEngaged` rather than "is it what we are killing"**, and the difference is the beat between
+---two mobs of one fight -- exactly when the roster is down to one and the mez on the survivor is
+---coming up for a refresh. Combat holds the fight open across that beat (`IsSeeking`), so what
+---this asks is "has a fight not started", never "is this the moment between targets".
+---@param candidates MezCandidate[] everything in the fight this pass
+---@return boolean isPull
+local function isUnfoughtPull(candidates)
+    return #candidates == 1 and not Combat.IsEngaged()
+end
+
 ---Is this mob one a mez should be spent on at all?
 ---
 ---`stop_pct` is the one that reads backwards until you have watched it go wrong: a mob *below* the
 ---health line is left alone. It is not too healthy to mez, it is too nearly dead -- somebody has
 ---been killing it, there is damage in the air aimed at it, and a mez that lands takes it out of
 ---reach of all of that so the group can start again on a full-health add instead.
+---
+---**Nothing new is mezzed until something has been named as first to kill** (`namedKill`, which is
+---the tank's target where it can be seen). An add is only an add relative to something being
+---killed, so with two mobs standing there and nobody on either, choosing one is a coin toss that
+---loses half the time -- mez the one the tank was walking towards and the fight opens with the tank
+---taunting a mob it must not hit while the group's damage sits on a mez about to break. The
+---question is never "which of these looks like the add" but "has anybody said which one is first",
+---and until somebody has, this state picks nothing.
+---
+---**A mob we have already mezzed is exempt, and that is what stops the rule blinking.** What is
+---first to kill is unknown for a beat every time one mob dies before the next is picked up --
+---exactly when the adds already held come up for a refresh -- and a mob we put a mez on was judged
+---an add at the moment we did it. The rule governs *choosing* a target; that one was chosen.
 ---@param candidate MezCandidate
+---@param candidates MezCandidate[] the fight it is in, for the lone-pull reading above
+---@param killId number|nil what is first to kill (`namedKill`); nil when nobody here can say
 ---@return boolean isWorth
-local function isWorthMezzing(candidate)
+local function isWorthMezzing(candidate, candidates, killId)
     if candidate.isKillTarget then return false end
     if MezState._.immune[candidate.id] then return false end
+
+    -- Both of these are about picking a *new* mob to hold, so neither is asked of one this state
+    -- is already holding: a mez of ours on it is the record of having decided, and the fight going
+    -- quiet for a beat does not hand it back.
+    if MezState._.mezzedAtMs[candidate.id] == nil then
+        -- the mob being brought in is nobody's add until there is something else here
+        if isUnfoughtPull(candidates) then return false end
+        -- and with several here, no telling the add from the one the group is about to kill
+        if killId == nil then return false end
+    end
     -- nothing in this list reaches through a wall, so a mob we cannot see is not a mob to plan
     -- around: it is neither mezzed, nor counted toward an AE being worth casting, nor waited for.
     -- It comes back the pass it comes into sight
@@ -607,13 +731,15 @@ end
 ---@param action ActionType
 ---@param spell any mq spell TLO
 ---@param candidates MezCandidate[]
+---@param killId number|nil
 ---@return MezPick? pick
-local function pickSoften(slot, action, spell, candidates)
+local function pickSoften(slot, action, spell, candidates, killId)
     local always = MezStateConfig.GetSoftenWhen(slot) == MezStateConfig.softenWhen.Always.value
     local subject = action:Subject()
 
     for _, candidate in ipairs(candidates) do
-        if isWorthMezzing(candidate) and (always or MezState._.resisted[candidate.id]) then
+        if isWorthMezzing(candidate, candidates, killId)
+            and (always or MezState._.resisted[candidate.id]) then
             if not alreadyOn(spell, candidate.id) then
                 if action:IsReady(MezState.CastRequest(candidate.id)) then
                     return {
@@ -644,11 +770,12 @@ end
 ---@param subject CastSubject
 ---@param candidates MezCandidate[]
 ---@param deferred table set of ids waiting on a softener
+---@param killId number|nil
 ---@return MezCandidate[] loose
-local function looseFor(spell, subject, candidates, deferred)
+local function looseFor(spell, subject, candidates, deferred, killId)
     local loose = {}
     for _, candidate in ipairs(candidates) do
-        if isWorthMezzing(candidate) and not deferred[candidate.id]
+        if isWorthMezzing(candidate, candidates, killId) and not deferred[candidate.id]
             and withinMezLevel(spell, candidate)
             and not isHeld(candidate.id, candidate.spawn, spell, subject) then
             loose[#loose + 1] = candidate
@@ -749,11 +876,12 @@ end
 ---@param spell any mq spell TLO
 ---@param candidates MezCandidate[]
 ---@param deferred table
+---@param killId number|nil
 ---@return MezPick? pick
-local function pickMez(slot, action, spell, candidates, deferred)
+local function pickMez(slot, action, spell, candidates, deferred, killId)
     local subject = action:Subject()
     local delivery, aeRange = deliveryOf(subject, spell)
-    local loose = looseFor(spell, subject, candidates, deferred)
+    local loose = looseFor(spell, subject, candidates, deferred, killId)
     if #loose == 0 then return nil end
 
     local function witnessesFor(caught)
@@ -836,8 +964,9 @@ end
 
 ---The first slot in the control list with something to do.
 ---@param candidates MezCandidate[]
+---@param killId number|nil
 ---@return MezPick? pick
-local function choosePick(candidates)
+local function choosePick(candidates, killId)
     local deferred = deferredForSoftening(candidates)
 
     for _, slot in ipairs(MezStateConfig.GetActions()) do
@@ -856,11 +985,11 @@ local function choosePick(candidates)
                     local role = roleOf(spell)
                     local pick
                     if role == roles.mez then
-                        pick = pickMez(slot, action, spell, candidates, deferred)
+                        pick = pickMez(slot, action, spell, candidates, deferred, killId)
                     elseif role == roles.stun then
                         pick = pickStun(slot, action, spell, candidates)
                     else
-                        pick = pickSoften(slot, action, spell, candidates)
+                        pick = pickSoften(slot, action, spell, candidates, killId)
                     end
                     if pick ~= nil then return pick end
                 end
@@ -910,6 +1039,21 @@ function MezState.GetLastResult()
     return MezState._.lastResult
 end
 
+---What is first to kill, in words: the fact that decides whether anything new is mezzed at all.
+---
+---A read of services and the world and nothing else, so the page can ask it every frame -- and it
+---has to be asked somewhere, because a state holding off for a perfectly good reason and saying
+---nothing about it is indistinguishable from a broken one.
+---@return string description
+function MezState.DescribeKill()
+    local killId, killSource = namedKill()
+    if killId == nil then return "nobody has picked one -- nothing new will be mezzed" end
+
+    local name = mq.TLO.Spawn("id " .. tostring(killId)).CleanName()
+        or ("spawn " .. tostring(killId))
+    return name .. " (id " .. tostring(killId) .. ") -- " .. tostring(killSource)
+end
+
 ---What this state believes about every mob in the fight, for the page and `/cmez`.
 ---
 ---Worked out on demand rather than kept, because it is the same reading `Go` makes and keeping a
@@ -918,15 +1062,28 @@ end
 function MezState.DescribeMobs()
     local rows = {}
     local killTargetId = Combat.GetTargetId()
+    local killId, killSource = namedKill()
+    local ids = Mobs.GetIds()
+    -- the same reading `isUnfoughtPull` makes, taken off the roster rather than off a pass's
+    -- candidates: a page that leaves the one mob in the fight sitting at *loose* while nothing is
+    -- cast at it is a page that looks broken
+    local isPull = #ids == 1 and not Combat.IsEngaged()
 
-    for _, id in ipairs(Mobs.GetIds()) do
+    for _, id in ipairs(ids) do
         local spawn = mq.TLO.Spawn("id " .. tostring(id))
         if spawn.ID() ~= nil then
             local status, note
             if MezState._.immune[id] then
                 status, note = "immune", "it cannot be mesmerized"
             elseif id == killTargetId then
-                status, note = "killing", "what the group is on"
+                status, note = "killing", "what we are fighting"
+            elseif id == killId then
+                status, note = "killing", killSource
+            elseif isPull and MezState._.mezzedAtMs[id] == nil then
+                status, note = "incoming", "the only mob in the fight and nobody is on it -- the pull"
+            elseif killId == nil and MezState._.mezzedAtMs[id] == nil then
+                -- the one that would otherwise read as a state doing nothing for no reason
+                status, note = "waiting", "nothing is first to kill yet -- no telling this from it"
             elseif spawn.LineOfSight() == false then
                 -- said out loud rather than left off: a mob missing from the page with no reason
                 -- given is the same puzzle as a slot that never fires
@@ -940,7 +1097,7 @@ function MezState.DescribeMobs()
                     elseif MezState._.awake[id] then
                         note = "it woke up"
                     elseif MezState._.suspect[id] ~= nil then
-                        note = "something called this woke -- working out which"
+                        note = "something called this woke and none of them owned up"
                     elseif movedSinceMez(id) then
                         note = "it has moved since we mezzed it"
                     end
@@ -949,6 +1106,13 @@ function MezState.DescribeMobs()
                 else
                     status = "mezzed"
                     note = string.format("%.0fs left", remaining / 1000)
+                end
+
+                -- said on a mob that still reads held, because that is the whole of the pause:
+                -- something of this name woke and this one has not given itself away, so it is
+                -- being left alone rather than mezzed on a guess
+                if MezState._.suspect[id] ~= nil and remaining > 0 then
+                    note = (note or "") .. " -- watching: one of these woke"
                 end
             end
 
@@ -1088,9 +1252,14 @@ function MezState.Init()
         "(mezawakened) Notices a mez being broken and works out which mob it was",
         " -- The client's cached reading of a mez counts down happily through a break nobody told",
         "    it about, so this line is the only thing that can contradict it.",
-        " -- It names the mob and not its id. With one mob of that name held, that settles it;",
-        "    with several, all of them are treated as loose until one gives itself away by moving",
-        "    or turning, and then the rest are cleared -- one line is one mob."
+        " -- It names the mob and not its id. With one mob of that name held, that settles it.",
+        " -- With several, none of them is re-mezzed on a guess: they are watched for a moment,",
+        "    and the one that moves or turns is the one that woke -- the rest are then cleared,",
+        "    since one line is one mob. Mezzing the coin toss instead spends the cast and the gem",
+        "    timer on a mob that was already held, and leaves the one that woke loose meanwhile.",
+        " -- If nobody owns up in that moment, every mob of the name is treated as loose after",
+        "    all: a break nobody claimed is still a break, and a redundant mez is the safe way to",
+        "    be wrong."
     } end )
     local function event_Awakened(_, name)
         if name == nil then return end
@@ -1120,8 +1289,11 @@ function MezState.Init()
             " woke up; watching to see which")
         local now = Time.current_time()
         for _, id in ipairs(candidates) do
+            -- suspected, not accused: what this state believes about each of them is left exactly
+            -- as it was -- above all the trust in a mez of ours that landed a beat ago, since
+            -- throwing that away for every mob of the name is the same thing as calling them all
+            -- loose, and the whole point of watching is that only one of them is
             MezState._.suspect[id] = { name = name, sinceMs = now }
-            MezState._.landed[landedKey(roles.mez, id)] = nil
         end
     end
     Commands.RegisterEvent(Event.new(MezState.eventIds.awakened,
@@ -1132,7 +1304,14 @@ function MezState.Init()
         " -- Usage: /cmez",
         " -- Usage (call off the cast in progress): /cmez off",
         " -- What is in the fight comes from the mob roster (/cmobs); this says what is held,",
-        "    what is loose, and what will never take a mez."
+        "    what is loose, and what will never take a mez.",
+        " -- Nothing new is mezzed until something is named first to kill: an add is only an add",
+        "    beside something being killed, so until then there is no telling which is which. What",
+        "    is already mezzed goes on being refreshed regardless. Rows say *waiting* while that is",
+        "    the case, and what is first to kill is named above them.",
+        " -- That is the main tank's target where this client can see it (the tank being us, its",
+        "    (assist) call, or the client's assist record -- /croles says which), and our own",
+        "    engagement where it cannot, so a group that never named a Main Tank still mezzes."
     } end )
     local function Bind_CMez(...)
         local args = { ... }
@@ -1147,6 +1326,10 @@ function MezState.Init()
         print(" -- crowd control (" .. MezState.eventIds.mezzing .. "): " ..
             (MezStateConfig.IsEnabled() and "on" or "off"))
         print(" -- last cast: " .. (MezState.GetLastResult() or "<none yet>"))
+
+        -- the answer that decides whether anything new is mezzed at all, said before the rows so a
+        -- page of *waiting* has its reason at the top of it
+        print(" -- first to kill: " .. MezState.DescribeKill())
 
         local rows = MezState.DescribeMobs()
         if #rows == 0 then
@@ -1297,7 +1480,11 @@ function MezState.Go()
 
     prune()
 
-    local pick = choosePick(scanCandidates())
+    -- read once for the pass: what is first to kill answers both which mob is never mezzed and
+    -- whether an add can be told apart from it at all
+    local killId = namedKill()
+
+    local pick = choosePick(scanCandidates(killId), killId)
     if pick == nil then return false end
 
     local newCastId, refused = Casting.Cast(pick.action:Subject(), MezState.CastRequest(pick.targetId))

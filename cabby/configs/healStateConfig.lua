@@ -30,6 +30,17 @@ local HealStateConfig = {
         Others = { value = "others", display = "Anyone else" },
         Pet = { value = "pet", display = "My pet" }
     },
+    ---Whether this character answers cure requests, and when.
+    ---
+    ---One setting rather than two switches, because the second one only means anything when the
+    ---first is on: "cure, but not in a fight" and "cure, fights included" are two answers to one
+    ---question, and a pair of checkboxes would offer a fourth state ("not curing, but in battle")
+    ---that stands for nothing.
+    cureModes = {
+        Off = { value = "off", display = "Disabled" },
+        OutOfCombat = { value = "outofcombat", display = "Curing, out of combat" },
+        Always = { value = "always", display = "Curing, in battle too" }
+    },
     _ = {
         isInit = false
     }
@@ -79,6 +90,16 @@ local function initAndValidate()
 
     if configRoot.emergency_pct == nil then
         configRoot.emergency_pct = 35
+        taint = true
+    end
+
+    -- Out of combat by default: the middle answer is the one that cannot cost anything anybody
+    -- would miss. A cure is a gem and a global cooldown spent on somebody who is not dying, and a
+    -- healer that starts doing that mid-fight the first time a character is upgraded is a change
+    -- nobody asked for. Curing in battle is where most of the value is -- that is when the DoTs
+    -- land -- so it is one pick away on the Heal State page rather than off the table.
+    if configRoot.cure_mode == nil then
+        configRoot.cure_mode = HealStateConfig.cureModes.OutOfCombat.value
         taint = true
     end
 
@@ -170,6 +191,48 @@ end
 function HealStateConfig.SetEmergencyPct(pct)
     getConfigSection().emergency_pct = math.max(math.min(math.floor(pct), 99), 1)
     Global.configStore:SaveConfig()
+end
+
+---Whether this character answers cure requests, and when.
+---@return string mode one of HealStateConfig.cureModes values
+function HealStateConfig.GetCureMode()
+    local mode = getConfigSection().cure_mode
+    for _, known in pairs(HealStateConfig.cureModes) do
+        if known.value == mode then return mode end
+    end
+    return HealStateConfig.cureModes.Off.value
+end
+
+---@param mode string one of HealStateConfig.cureModes values
+function HealStateConfig.SetCureMode(mode)
+    for _, known in pairs(HealStateConfig.cureModes) do
+        if known.value == mode then
+            getConfigSection().cure_mode = mode
+            Global.configStore:SaveConfig()
+            print("HealState curing: [" .. known.display .. "]")
+            return
+        end
+    end
+    print("[" .. tostring(mode) .. "] is not a curing setting")
+end
+
+---@param mode string
+---@return string display
+function HealStateConfig.GetCureModeDisplay(mode)
+    for _, known in pairs(HealStateConfig.cureModes) do
+        if known.value == mode then return known.display end
+    end
+    return HealStateConfig.cureModes.Off.display
+end
+
+---@return boolean isCuring whether cures are answered at all
+function HealStateConfig.IsCuring()
+    return HealStateConfig.GetCureMode() ~= HealStateConfig.cureModes.Off.value
+end
+
+---@return boolean curesInCombat whether cures are answered during a fight
+function HealStateConfig.GetCureInCombat()
+    return HealStateConfig.GetCureMode() == HealStateConfig.cureModes.Always.value
 end
 
 ---@return table actions the heal slots, in the order they are tried

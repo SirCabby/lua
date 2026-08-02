@@ -127,10 +127,16 @@ end
 ---answer is "not now" rather than a request that raises the priority floor, starves the states
 ---below it, and then fails.
 ---
----A spell that is not memorized is not ready. The casting service *can* memorize one, and
----anything that asks for a specific cast (a heal, an order) should let it; but a rotation that
----stops to memorize mid-fight is a rotation that stops for eight seconds, so slots on an action
----list use what is on the spell bar. The picker shows which spells those are.
+---A spell that is not memorized is *not* one of those reasons. It is a memorize away, and the
+---casting service does that itself -- into an empty gem where there is one, so the usual case
+---costs nothing but the seconds it takes. A slot configured with a spell that happens not to be
+---on the bar is a slot the user meant, and idling it instead was a silent puzzle: correctly
+---configured, marked ready by the page, and never firing.
+---
+---What it does cost is those seconds, spent standing still with this state's priority floor up.
+---That is the trade, and it is the right way round: everything stronger than the rotation --
+---heals, mez, orders -- preempts it anyway, and the memorize happens once per spell rather than
+---once per cast.
 ---@param request? table who this would be for. `targetId` matters: a heal is chosen for a group
 ---member who is not targeted yet, so range and line of sight have to be judged against *them*
 ---rather than against whatever the character happens to be looking at.
@@ -148,8 +154,19 @@ function CastAction:IsReady(request)
     if Casting.IsActive() and not Casting.CanPreempt((request or {}).priority) then return false end
 
     if not subject:IsAvailable() then return false end
-    if not subject:IsMemorized() then return false end
-    if not subject:IsReady() then return false end
+
+    -- Feared, a spell has nowhere to go: the character is running where the server points them
+    -- and the cast bar cannot survive it. The cast itself refuses this too -- that is where the
+    -- fact lives, and a fear that lands mid-preparation has to be caught there -- but saying it
+    -- here as well is what keeps a rotation from asking every frame through the whole fear and
+    -- raising its priority floor over a cast that ends the moment it is looked at. Items and AAs
+    -- are not gated, exactly as they are not for a silence.
+    if subject:IsSpell() and mq.TLO.Me.Feared() ~= nil then return false end
+
+    -- the gem timer, asked only of a spell that has a gem. `IsReady` reads false for an
+    -- unmemorized spell as well, and reading that as "not now" is what would put a slot holding
+    -- one back where it started -- never ready, so never memorized, so never ready
+    if subject:IsMemorized() and not subject:IsReady() then return false end
 
     local manaCost = subject:ManaCost()
     if manaCost > 0 and (tonumber(mq.TLO.Me.CurrentMana()) or 0) < manaCost then return false end

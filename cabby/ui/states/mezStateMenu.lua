@@ -164,6 +164,14 @@ function MezStateMenu.BuildMenu(mezState)
         ImGui.TableNextColumn()
         ImGui.Text(Mobs.Describe())
 
+        -- nothing new is mezzed until this has an answer, so it belongs beside the fight rather
+        -- than only in the rows below it
+        ImGui.TableNextRow()
+        ImGui.TableNextColumn()
+        ImGui.Text("First to kill")
+        ImGui.TableNextColumn()
+        ImGui.Text(mezState.DescribeKill())
+
         ImGui.TableNextRow()
         ImGui.TableNextColumn()
         ImGui.Text("Last Cast")

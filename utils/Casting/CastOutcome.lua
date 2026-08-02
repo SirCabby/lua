@@ -13,7 +13,10 @@ local mq = require("mq")
 ---- **refused** -- the cast never left the ground. Nothing was spent, and it is a real answer
 ---  rather than a "not yet": the waits (standing still, getting on target, memorizing) have no
 ---  outcome because they never give up.
----- **broken** -- the cast started and was lost. Mana is gone and the gem is on its recast.
+---- **broken** -- the cast started and was lost. Mana is gone and the gem is on its recast. A
+---  fizzle is decided at the *server's* end of the cast, so these can arrive a round trip after
+---  our own cast bar has closed -- which is why a completed cast is held open waiting for one
+---  rather than called a success on the spot.
 ---- **late** -- the cast completed and the spell landed without doing anything (resisted,
 ---  immune, blocked by a better buff). These lines arrive *after* the cast bar closes, which
 ---  is why they refine a result that has already been reported rather than producing one.
@@ -33,6 +36,7 @@ local CastOutcome = {
     cannotSee = "cannotSee",
     notStanding = "notStanding",
     silenced = "silenced",
+    feared = "feared",
     stunned = "stunned",
     distracted = "distracted",
     wrongPlace = "wrongPlace",
@@ -65,6 +69,7 @@ local descriptions = {
     cannotSee = "cannot see the target",
     notStanding = "not standing",
     silenced = "silenced",
+    feared = "feared",
     stunned = "stunned",
     distracted = "too distracted to cast",
     wrongPlace = "the spell does not work here",
@@ -83,7 +88,9 @@ local descriptions = {
 ---The lines EQ prints when a cast goes wrong, in Blech pattern form (`#*#` is a wildcard).
 ---
 ---`late = true` marks a line that arrives *after* the cast bar closes: the spell went off and
----did nothing. Everything else ends the cast where it stands.
+---did nothing. Everything else ends the cast where it stands -- which for the broken lines is a
+---beat after the bar has already gone down, since our cast bar and the server's do not end
+---together.
 ---
 ---This list is deliberately not exhaustive over every spell-specific refusal EQ has. An
 ---outcome we have no line for still terminates -- the cast either never starts (`didNotStart`)
@@ -147,14 +154,26 @@ function CastOutcome.IsLate(outcome)
         outcome == CastOutcome.didNotTakeHold
 end
 
+---Whether the cast started and was lost: the mana is gone, the gem is on its recast, and nothing
+---landed on anybody.
+---
+---This is the group a *success* cannot be told apart from by looking, because the cast bar closes
+---the same way for both -- which is why a completed cast waits to be contradicted before it is
+---called a success (see `CastTask`).
+---@param outcome string
+---@return boolean wasBroken
+function CastOutcome.WasBroken(outcome)
+    return outcome == CastOutcome.fizzled or outcome == CastOutcome.interrupted or
+        outcome == CastOutcome.collapsed or outcome == CastOutcome.timedOut
+end
+
 ---Whether the cast was refused before anything was spent, so retrying costs nothing but the
 ---frame it takes to ask again.
 ---@param outcome string
 ---@return boolean wasRefused
 function CastOutcome.WasRefused(outcome)
     return outcome ~= CastOutcome.succeeded and not CastOutcome.IsLate(outcome) and
-        outcome ~= CastOutcome.fizzled and outcome ~= CastOutcome.interrupted and
-        outcome ~= CastOutcome.collapsed and outcome ~= CastOutcome.timedOut
+        not CastOutcome.WasBroken(outcome)
 end
 
 ---Register an mq.event per line above.

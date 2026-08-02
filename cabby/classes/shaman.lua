@@ -33,7 +33,6 @@ local Shaman = BaseClass.new({
     },
     unimplemented = {
         "slow, ahead of the damage rotations",
-        "curing poison and disease",
         "canni: trading health for mana when there is a moment for it"
     }
 })

@@ -138,9 +138,21 @@ function MeleeStateMenu.BuildMenu(meleeState)
             CombatConfig.SetCallDefend(result)
         end
         ImGui.SameLine()
-        CommonUI.HelpMarker("Anything actually coming for this character -- the top of a mob's hate list -- that nobody has yet called out is announced once as a (defend <id>) line, and the group's Main Tank engages it as soon as it is not already fighting something. Every character remembers the ids already called, its own and everyone else's, so one line covers a mob for as long as it lives in this zone -- bouncing between the tank and its victims is never re-announced. Its death, a zone, or a flee clears its entry. The fight the group was already put on is not reported, and the main tank itself never reports. Speaks over bc unless /speak defend says otherwise.")
+        CommonUI.HelpMarker("Anything actually coming for this character -- the top of a mob's hate list -- that nobody has yet called out is announced once as a (defend <id>) line, for the group's Main Tank to pick up -- see Answer Defend, which is what acts on one. Every character remembers the ids already called, its own and everyone else's, so one line covers a mob for as long as it lives in this zone -- bouncing between the tank and its victims is never re-announced. Its death, a zone, or a flee clears its entry. The fight the group was already put on is not reported, and the main tank itself never reports. Speaks over bc unless /speak defend says otherwise.")
 
         ImGui.SameLine()
+        ---@type boolean
+        local clicked, result
+        result, clicked = ImGui.Checkbox("Answer Defend", CombatConfig.GetAnswerDefend())
+        if clicked then
+            CombatConfig.SetAnswerDefend(result)
+        end
+        ImGui.SameLine()
+        CommonUI.HelpMarker("The listening half of Call Defend, and the only thing that acts on one. While this character holds the group's Main Tank role, the longest-standing (defend) report is engaged the moment the tank is not already fighting something -- after the current mob is dead, never in place of it, so a call never drags the tank off a fight at 5% or through a mezzed pile to get somewhere. A mob further off than 100, or one out of sight, is left standing rather than charged at across the camp, and picked up as soon as the group is close enough. Separate from Auto-Engage on purpose: answering the group's call for help is not the same choice as picking fights up unbidden, so a tank you are driving by hand still takes the add that went for the healer.")
+
+        ImGui.Dummy(0, 0)
+        ImGui.SameLine()
+
         ---@type boolean
         local clicked, result
         result, clicked = ImGui.Checkbox("Ease Off", CombatConfig.GetEaseOff())
@@ -150,9 +162,7 @@ function MeleeStateMenu.BuildMenu(meleeState)
         ImGui.SameLine()
         CommonUI.HelpMarker("Stops hurting the mob once we have pulled it off the group's Main Tank -- it is coming for us and the tank should have it. The swing drops and the melee, taunt and hate lists hold (the stick stays, so nothing has to be walked back); the spell rotation holds everything aimed at the mob, and a damage shield on somebody still goes up. Damage resumes the pass the tank is back on top of its hate list. Nothing is eased off by the Main Tank itself, for a group that has named no tank, or for a mob the tank is on something else instead of -- that one is ours, and Call Defend is what is said about it.")
 
-        ImGui.Dummy(0, 0)
         ImGui.SameLine()
-
         ---@type boolean
         local clicked, result
         result, clicked = ImGui.Checkbox("Engage on Attack", CombatConfig.GetEngageOnAttack())
@@ -239,7 +249,7 @@ function MeleeStateMenu.BuildMenu(meleeState)
             ImGui.BeginDisabled(true)
         end
         if ImGui.Button("Back Off", 70, 23) then
-            Combat.Disengage("the Back Off button")
+            Combat.CallOff("the Back Off button")
         end
         if backOffDisabled then
             ImGui.EndDisabled()

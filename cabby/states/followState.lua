@@ -7,9 +7,11 @@ local StringUtils = require("utils.StringUtils.StringUtils")
 local ChelpDocs = require("cabby.commands.chelpDocs")
 local Command = require("cabby.commands.command")
 local Commands = require("cabby.commands.commands")
+local CommonUI = require("cabby.ui.commonUI")
 local Menu = require("cabby.ui.menu")
 local Speak = require("cabby.commands.speak")
 local Travel = require("cabby.travel")
+local TravelConfig = require("cabby.configs.travelConfig")
 local UserInput = require("cabby.utils.userinput")
 
 ---The order surface for going places, and the chain position the going runs at.
@@ -82,10 +84,16 @@ function FollowState.StartFollowingTarget()
     return nil
 end
 
----Stop following and hand back the movement we were using, leaving a move somebody else has
----since started alone. Safe to call from a render callback, same as StartFollowingTarget.
+---Stop travelling -- end the follow and release the anchor -- handing back the movement we were
+---using and leaving a move somebody else has since started alone.
+---
+---Both orders go because only one of them is ever standing (they cancel each other), so being
+---told to stop is not a question of which one was meant: a character parked on an anchor that
+---only ended its follow would walk straight back to the spot it was just told to leave.
+---
+---Safe to call from a render callback, same as StartFollowingTarget.
 function FollowState.StopFollowing()
-    Travel.ClearFollowOrder()
+    Travel.ClearOrders()
 end
 
 ---Whoever this character was told to follow, whether or not they are in the zone right now.
@@ -130,7 +138,8 @@ function FollowState.Init()
         Commands.RegisterCommEvent(Command.new(FollowState.eventIds.followTarget, event_FollowTarget, followTargetDocs))
 
         local stopFollowDocs = ChelpDocs.new(function() return {
-            "(stopfollow) Tells listener(s) to stop autofollow on speaker"
+            "(stopfollow) Tells listener(s) to stop autofollow",
+            " -- Also releases any anchor they are holding"
         } end )
         local function event_StopFollow(_, speaker)
             if Commands.GetCommandOwners(FollowState.eventIds.stopFollow):HasPermission(speaker) then
@@ -291,6 +300,15 @@ function FollowState.BuildMenu()
 
         ImGui.TableNextRow()
         ImGui.TableNextColumn()
+        ImGui.Text("Hold Distance")
+
+        ImGui.TableNextColumn()
+        -- the number in force this instant, not the pair below: it is how the relax is seen
+        -- doing anything at all
+        ImGui.Text(tostring(Travel.GetHoldDistance()))
+
+        ImGui.TableNextRow()
+        ImGui.TableNextColumn()
         ImGui.Text("Movement")
 
         ImGui.TableNextColumn()
@@ -316,15 +334,69 @@ function FollowState.BuildMenu()
     if not hasTarget then ImGui.EndDisabled() end
 
     ImGui.SameLine()
-    local isFollowing = followTarget ~= ""
-    if not isFollowing then ImGui.BeginDisabled(true) end
+    -- the button carries the same order (stopfollow) does, so it is live for either standing
+    -- order: an anchor with no follow behind it is still something to be told to stop
+    local isTravelling = followTarget ~= "" or anchor.set
+    if not isTravelling then ImGui.BeginDisabled(true) end
     if ImGui.Button("Stop Follow", 100, 23) then
         FollowState.StopFollowing()
     end
-    if not isFollowing then ImGui.EndDisabled() end
+    if not isTravelling then ImGui.EndDisabled() end
 
     ImGui.SameLine()
     ImGui.Text(hasTarget and targetName or "<No Target>")
+
+    -- How much room the following keeps. Nothing here runs a game command -- the settings are
+    -- written to config and the travel core reads them on its next pass, running follow or not --
+    -- which is what makes them safe to change from a render callback.
+    local maxDistance = TravelConfig.GetMaxDistance()
+
+    ImGui.PushStyleVar(ImGuiStyleVar.CellPadding, ImVec2(7.0, 7.0))
+    if ImGui.BeginTable("followSettings", 1, bit32.bor(ImGuiTableFlags.RowBg)) then
+        ImGui.TableNextRow()
+        ImGui.TableNextColumn()
+
+        ImGui.Dummy(0, 0)
+        ImGui.SameLine()
+
+        ImGui.SetNextItemWidth(60)
+        local distance, distanceChanged = ImGui.DragInt("Follow distance",
+            TravelConfig.GetFollowDistance(), 1, TravelConfig.GetMinDistance(), maxDistance)
+        if distanceChanged then
+            TravelConfig.SetFollowDistance(distance)
+        end
+        ImGui.SameLine()
+        CommonUI.HelpMarker("How close to get to whoever this character is following before standing still. They get about three quarters of it again to move around in before the gap is closed once more, which is the room that keeps a follow from being a shadow.")
+
+        ImGui.TableNextRow()
+        ImGui.TableNextColumn()
+
+        ImGui.Dummy(0, 0)
+        ImGui.SameLine()
+
+        local relax, relaxClicked = ImGui.Checkbox("Give the fight room", TravelConfig.GetCombatRelax())
+        if relaxClicked then
+            TravelConfig.SetCombatRelax(relax)
+        end
+        ImGui.SameLine()
+        CommonUI.HelpMarker("Hold further back while there is a fight going on around the group -- ours, or one somebody else called out. It only ever reaches a character with nothing to do in that fight, since anything with a job in it is busy at a band above follow: what it stops is a caster parked in the melee ring, and a follower spending the fight closing a gap nobody needed closed instead of leaving those frames to buffing and resting. Off holds the same spacing whatever is happening.")
+
+        local relaxOff = not TravelConfig.GetCombatRelax()
+        if relaxOff then ImGui.BeginDisabled(true) end
+        ImGui.SameLine()
+        ImGui.SetNextItemWidth(60)
+        local combatDistance, combatChanged = ImGui.DragInt("Fighting distance",
+            TravelConfig.GetCombatFollowDistance(), 1, TravelConfig.GetFollowDistance(), maxDistance)
+        if combatChanged then
+            TravelConfig.SetCombatFollowDistance(combatDistance)
+        end
+        if relaxOff then ImGui.EndDisabled() end
+        ImGui.SameLine()
+        CommonUI.HelpMarker("How close to get while there is a fight on. Never nearer than the follow distance -- relaxing to somewhere closer is not relaxing. A run is not a fight either: travel mode holds the follow distance whatever this says.")
+
+        ImGui.EndTable()
+    end
+    ImGui.PopStyleVar()
 end
 
 return FollowState

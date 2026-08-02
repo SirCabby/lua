@@ -8,6 +8,7 @@ local Time = require("utils.Time.Time")
 local Action = require("cabby.actions.action")
 local ActionCommand = require("cabby.commands.actionCommand")
 local Combat = require("cabby.combat")
+local Cons = require("cabby.cons")
 local Menu = require("cabby.ui.menu")
 local Roles = require("cabby.roles")
 local SpellDpsStateConfig = require("cabby.configs.spellDpsStateConfig")
@@ -68,6 +69,15 @@ local petTargetTypes = { ["pet"] = true, ["pet2"] = true }
 ---the numbers have already allowed, with nothing remembered between passes. "And reapply it if it
 ---fades" needs no setting at all, because a spell that leaves an effect behind is already left
 ---alone while the effect is there (`alreadyWorking`).
+---
+---What every slot carries, both halves alike, is *how much of a fight this has to be*
+---(`dps_con`). The three numbers on the page are restraint within a fight -- when to start, when
+---to stop, what mana to keep -- and none of them says which fights are worth the effort at all. A
+---damage shield is where that is felt first: it is the most expensive thing in a rotation and the
+---least needed on something that dies in two swings, so "put it on the tank when we are actually
+---in trouble" is a floor on the con and nothing else. It is a fact about the mob, so a shield is
+---judged against what we are *fighting* rather than against whoever would wear it, and a slot in a
+---spread judges each mob on its own.
 ---
 ---The debuff's other question is *how many* (`dps_spread`), and it is the one thing the order in
 ---the list cannot answer. A slow, a tash or a snare belongs on everything in the fight before a
@@ -527,6 +537,24 @@ local function timingAllows(slot, spawn)
     return true
 end
 
+---Is this fight worth this slot at all?
+---
+---The other half of `timingAllows`, and the half that is not about *this* fight's progress but
+---about which fights are worth the effort: a slot's floor (`dps_con`) says how much of a fight
+---something has to be before what it costs -- a four second cast, an item on a long timer, the
+---mana in a shield -- is worth spending rather than kept for the next pull. Asked of both halves
+---of the list, unlike timing, because how much trouble we are in is a fact about the mob whether
+---the cast lands on it or on the tank.
+---
+---Re-derived every pass off the world like everything else here, and nothing is remembered: a
+---slot passed over on a green is the same slot that fires on the red that walks in behind it.
+---@param slot Action
+---@param spawn any mq spawn TLO for the mob being judged
+---@return boolean isWorthIt
+local function conAllows(slot, spawn)
+    return Cons.Meets(spawn, SpellDpsStateConfig.GetMinCon(slot))
+end
+
 ---@class DpsPick
 ---@field action ActionType
 ---@field targetId number|nil what the cast should aim at; nil for a spell that aims itself
@@ -541,6 +569,9 @@ end
 ---@param who table
 ---@return DpsPick? pick
 local function pickAtMob(slot, action, spell, spawn, who)
+    -- each mob in a spread is judged on its own, exactly as it is for timing: how much of a fight
+    -- something is, is a fact about it and not about the one we happen to be killing
+    if not conAllows(slot, spawn) then return nil end
     if not timingAllows(slot, spawn) then return nil end
     if alreadyWorking(spell, who) then return nil end
     if not action:IsReady(SpellDpsState.CastRequest(who.id)) then return nil end
@@ -611,12 +642,19 @@ end
 ---@param slot Action
 ---@param action ActionType
 ---@param spell any mq spell TLO
+---@param spawn any mq spawn TLO for what we are fighting
 ---@return DpsPick? pick
-local function pickOnFriend(slot, action, spell)
+local function pickOnFriend(slot, action, spell, spawn)
     -- a friendly cast that leaves nothing behind has no way of being finished with: there is
     -- nothing to read back, so it would go out again every time the gem came up. `DescribeSlot`
     -- says so on the page rather than leaving it a silent puzzle
     if durationMs(spell) <= 0 then return nil end
+
+    -- and it is judged against what we are *fighting*, not against whoever would wear it: a shield
+    -- on the tank is effort spent on this fight, so which fight it is decides whether it is worth
+    -- spending. This is the half of the list the setting was wanted for -- a shield is the most
+    -- expensive thing in a rotation and the least needed on something that dies in two swings
+    if not conAllows(slot, spawn) then return nil end
 
     local subject = action:Subject()
     local aim = aimOf(subject)
@@ -692,7 +730,7 @@ local function choosePick(onlyFriendly, spawn)
                     if (friendly or not onlyFriendly) and Action.GetLuaResult(slot) then
                         local pick
                         if friendly then
-                            pick = pickOnFriend(slot, action, spell)
+                            pick = pickOnFriend(slot, action, spell, spawn)
                         elseif isSpread(slot, spell) then
                             pick = pickAcrossFight(slot, action, spell)
                         else
@@ -742,6 +780,9 @@ end
 ---asked. A slot aimed at the mob, holding something that leaves an effect behind -- which is the
 ---debuff half of the list and nothing else: a nuke has nothing to finish, and a slot cast on a
 ---friend is already told who it is for
+---@field conable boolean whether *how much of a fight this is* can be asked of this slot, which is
+---every slot that resolved to a spell at all: what a cast costs is worth weighing on either half
+---of the list, so this is the one dial that is not about which half the slot is in
 ---@field aim string one of `aims`
 ---@field aimText string what that means, in words
 ---@field scopes table set of scope values this slot may be given; one entry means it is decided,
@@ -758,6 +799,7 @@ function SpellDpsState.DescribeSlot(slot)
         friendly = false,
         timed = false,
         spreadable = false,
+        conable = false,
         aim = aims.single,
         aimText = "at what we are fighting",
         scopes = {},
@@ -784,6 +826,10 @@ function SpellDpsState.DescribeSlot(slot)
         facts.problem = "no spell data"
         return facts
     end
+
+    -- a spell resolved, which is the whole of what this one asks: the floor is about what a cast
+    -- costs, and every cast costs something
+    facts.conable = true
 
     facts.friendly = isFriendly(spell)
     facts.timed = not facts.friendly

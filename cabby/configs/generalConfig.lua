@@ -2,6 +2,7 @@ local mq = require("mq")
 local ImGui = require("ImGui")
 
 local Debug = require("utils.Debug.Debug")
+local Movement = require("utils.Movement.Movement")
 local StringUtils = require("utils.StringUtils.StringUtils")
 local TableUtils = require("utils.TableUtils.TableUtils")
 
@@ -21,14 +22,17 @@ local GeneralConfig = {
     key = "GeneralConfig",
     keys = {
         version = "version",
-        tellToMe = "tellToMe"
+        tellToMe = "tellToMe",
+        consentOnDeath = "consentOnDeath"
     },
     eventIds = {
         groupInvited = "groupInvited",
         tellToMe = "tellToMe",
         inspectRequest = "inspect",
         restart = "restart",
-        doType = "dotype"
+        exit = "exit",
+        doType = "dotype",
+        consentOnDeath = "consentondeath"
     },
     equipmentSlots = {
         "charm",
@@ -83,6 +87,15 @@ local function initAndValidate()
         -- on: forwarding is the reason the event exists, and with no speak override it only
         -- reaches this character's own console, so leaving it on broadcasts nothing
         GeneralConfig._.config:GetConfigRoot()[GeneralConfig.key][GeneralConfig.keys.tellToMe] = true
+        taint = true
+    end
+    if GeneralConfig._.config:GetConfigRoot()[GeneralConfig.key][GeneralConfig.keys.consentOnDeath] == nil then
+        DebugLog("General consentOnDeath was not set, updating...")
+        -- on: consent is only ever given to a group, raid or guild this character is already in,
+        -- and it grants nothing but dragging the corpse we just left on the floor. Off by default
+        -- would mean flipping a switch on every character in a fleet to get the behaviour the
+        -- setting exists for, which is the friction rather than the caution
+        GeneralConfig._.config:GetConfigRoot()[GeneralConfig.key][GeneralConfig.keys.consentOnDeath] = true
         taint = true
     end
     if taint then
@@ -152,6 +165,29 @@ function GeneralConfig.Init()
             end
         end
         Commands.RegisterCommEvent(Command.new(GeneralConfig.eventIds.restart, event_Restart, restartDocs))
+
+        local exitDocs = ChelpDocs.new(function() return {
+            "(exit) Tells listener(s) to camp to desktop and stop their lua scripts",
+            " -- Example: /bc exit",
+            " -- Movement is dropped first, so nothing this script is doing interrupts the camp"
+        } end )
+        local function event_Exit(_, speaker)
+            if Commands.GetCommandOwners(GeneralConfig.eventIds.exit):HasPermission(speaker) then
+                DebugLog("Camping to desktop on request of speaker [" .. speaker .. "]")
+                -- Keys first, and immediately: a held movement key is client state that outlives
+                -- the script holding it, and a character still running is a character whose camp
+                -- is cancelled a moment after it started. Movement.Stop alone would only ask for
+                -- the release and leave the sending to a pulse that is not going to come.
+                Movement.StopNow()
+                mq.cmd("/camp desktop")
+                mq.cmd("/lua stop")
+            else
+                DebugLog("Ignoring exit request of speaker [" .. speaker .. "]")
+            end
+        end
+        -- Comm command only, deliberately: `/exit` is the client's own command for leaving the
+        -- game, and an mq.bind of that name would take it over.
+        Commands.RegisterCommEvent(Command.new(GeneralConfig.eventIds.exit, event_Exit, exitDocs))
 
         local doTypeDocs = ChelpDocs.new(function() return {
             "(dotype /<command>) Tells listener(s) to type the given slash command line as their own",
@@ -224,6 +260,20 @@ function GeneralConfig.Init()
             set = GeneralConfig.SetTellToMe
         })
 
+        ToggleCommand.Register({
+            key = GeneralConfig.key,
+            phrase = GeneralConfig.eventIds.consentOnDeath,
+            summary = "Turns consenting your group, raid and guild on death on or off",
+            about = {
+                "Consent is what lets somebody else drag your corpse -- out of where it fell, or",
+                "over to whoever is going to rez it.",
+                "Given the moment you die, and only for the ones you are actually in. The server",
+                "allows one consent every two seconds, so the three of them take about five."
+            },
+            get = GeneralConfig.GetConsentOnDeath,
+            set = GeneralConfig.SetConsentOnDeath
+        })
+
         Menu.RegisterConfig(GeneralConfig)
 
         GeneralConfig._.isInit = true
@@ -243,6 +293,18 @@ function GeneralConfig.SetTellToMe(enable)
     print("Forwarding received tells is Enabled: [" .. tostring(enable) .. "]")
 end
 
+---@return boolean isEnabled whether dying consents the group, raid and guild this character is in
+function GeneralConfig.GetConsentOnDeath()
+    return getConfigSection()[GeneralConfig.keys.consentOnDeath] == true
+end
+
+---@param enable boolean
+function GeneralConfig.SetConsentOnDeath(enable)
+    getConfigSection()[GeneralConfig.keys.consentOnDeath] = enable == true
+    GeneralConfig._.config:SaveConfig()
+    print("Consenting my group, raid and guild on death is Enabled: [" .. tostring(enable) .. "]")
+end
+
 ---@diagnostic disable-next-line: duplicate-set-field
 function GeneralConfig.BuildMenu()
     local generalConfig = getConfigSection()
@@ -255,6 +317,14 @@ function GeneralConfig.BuildMenu()
     end
     ImGui.SameLine()
     CommonUI.HelpMarker("Repeat tells from other players on this character's own console, so a question aimed at one boxed character is not missed. Tells that were one of this script's commands, and tells from NPCs, are not repeated. The forwards stay on this console -- the group-facing default speak list is deliberately not used. To send them somewhere else (a tell to your driver, for example), set a speak override for the telltome event under Command > Speak Channels, or /speak telltome <channel>. Toggle from chat or a hotbar button with: telltome")
+
+    ImGui.SeparatorText("Death")
+    local consentOnDeath, consentOnDeathClicked = ImGui.Checkbox("Consent my group, raid and guild", GeneralConfig.GetConsentOnDeath())
+    if consentOnDeathClicked then
+        GeneralConfig.SetConsentOnDeath(consentOnDeath)
+    end
+    ImGui.SameLine()
+    CommonUI.HelpMarker("On dying, give your group, raid and guild consent to drag the corpse you just left -- out of where it fell, or over to whoever is going to rez it. Nothing else is granted by it, and only the ones you are actually in are consented: a group you are not in stamps nothing. The consents go out the moment you die, while the corpse is still lying in a zone that has people in it, and the server allows one every two seconds, so the three of them take about five. Toggle from chat or a hotbar button with: consentondeath")
 
     ImGui.SeparatorText("Hotbars")
     ImGui.SameLine()

@@ -11,7 +11,9 @@ local Time = require("utils.Time.Time")
 ---
 ---Hold/Release record *desired* key state and send nothing. `Apply()` reconciles desired
 ---against what we have actually told the client (`/keypress <key> hold` presses and holds,
----a plain `/keypress <key>` releases), so a key command is only ever emitted on transition.
+---a plain `/keypress <key>` releases), so a key command is emitted on transition -- and, for
+---a key we are holding, again every `reassertMs`, because what we told the client is a belief
+---and the player's own keys can quietly undo it.
 ---
 ---**Apply() must only be called from the host's main loop**, which in practice means only
 ---from `Movement.Pulse()`. Driving EQ's mappable commands from inside an ImGui render
@@ -39,6 +41,34 @@ local Locomotion = {
     ---A gap that changed by more than this in one pulse was not closed by running, it was a
     ---teleport -- ours or theirs -- and is not a speed to aim stops with.
     closingClamp = 30,
+    ---How long a hold we have sent is trusted before it is sent again.
+    ---
+    ---`applied` is a belief about the client, and the client takes movement orders from more than
+    ---us. The player's own keys drive the same mappable commands: a physical tap of forward fires
+    ---the key-down (harmless, it was already down) and then a key-up that releases *our* hold, and
+    ---nothing tells us it happened. From there a transition-only Apply never speaks again -- both
+    ---desired and applied still say held, so there is no transition to emit -- and the character
+    ---simply stops where it stands.
+    ---
+    ---What follows is worse than the stop. The task is still asking to move, so the stuck detector
+    ---correctly reports a wedge and the unsticker starts recovering: it re-holds forward, which is
+    ---still a no-op, and adds a strafe, which is a real transition and does get sent. The only key
+    ---reaching the client is the strafe, alternating sides on every attempt -- a character sliding
+    ---back and forth beside a mob it will never close on, for as long as the fight lasts. Nothing
+    ---breaks the loop, because the only thing that would resync the belief is a release, and a
+    ---melee that never casts can go a whole fight without one.
+    ---
+    ---Re-sending each held key on this interval heals the whole family of ways the client can be
+    ---told something we did not tell it -- the player's keys, a focus loss, a zone -- inside a
+    ---quarter second, which is short enough that no stuck window ever closes on it. Repeating the
+    ---down costs nothing: these are level commands, and MQ2MoveUtils drove them by writing the
+    ---same flags outright on every single pulse. It is deliberately not logged; four lines a
+    ---second per held key would bury the transitions that actually mean something.
+    ---
+    ---Only holds repeat. A release is sent once and left alone, because repeating those would fire
+    ---a key-up every quarter second at a player leaning on their own movement key -- that is us
+    ---fighting the person at the keyboard, which is the one direction of this that would be ours.
+    reassertMs = 250,
     ---EQ mappable command names, keyed by direction
     keys = {
         forward = "forward",
@@ -49,6 +79,7 @@ local Locomotion = {
     _ = {
         desired = {},
         applied = {},
+        assertedMs = {},
         lastStandMs = 0
     }
 }
@@ -86,17 +117,23 @@ end
 ---Send the key commands needed to make the client match what was asked for.
 ---**Main loop only** -- see the note on this module.
 function Locomotion.Apply()
+    local now = Time.current_time()
     for _, key in pairs(Locomotion.keys) do
         local desired = Locomotion._.desired[key] == true
         if desired ~= (Locomotion._.applied[key] == true) then
             if desired then
                 DebugLog("Holding movement key [" .. key .. "]")
                 mq.cmd("/keypress " .. key .. " hold")
+                Locomotion._.assertedMs[key] = now
             else
                 DebugLog("Releasing movement key [" .. key .. "]")
                 mq.cmd("/keypress " .. key)
             end
             Locomotion._.applied[key] = desired
+        elseif desired and now - (Locomotion._.assertedMs[key] or 0) >= Locomotion.reassertMs then
+            -- say it again, in case something else told the client to let go -- see reassertMs
+            mq.cmd("/keypress " .. key .. " hold")
+            Locomotion._.assertedMs[key] = now
         end
     end
 end

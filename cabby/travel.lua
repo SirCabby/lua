@@ -8,8 +8,11 @@ local Time = require("utils.Time.Time")
 local Timer = require("utils.Time.Timer")
 
 local ChelpDocs = require("cabby.commands.chelpDocs")
+local Combat = require("cabby.combat")
 local Commands = require("cabby.commands.commands")
 local Event = require("cabby.commands.event")
+local Status = require("cabby.status")
+local TravelConfig = require("cabby.configs.travelConfig")
 
 ---The traveling core: the movement orders, and the procedures that carry them out.
 ---
@@ -27,15 +30,15 @@ local Event = require("cabby.commands.event")
 ---enabled, there is never a pass in which both run. Neither state knows the other exists; the
 ---ordering is the whole of the coordination, which is the design working as intended.
 ---
----**It holds the orders, because they cannot be re-derived**: who to follow, where to stand, and
----progress through a zone line -- clicking one's switch, or walking through after somebody where
----there is no switch to click (a clicked door looks exactly like an unclicked one, and a walk
----aimed at an invisible trigger looks exactly like walking). The one measurement kept alongside
----them -- where the follow target was last seen, which way they were going and whether they were
----still moving -- exists for the same reason: it is the fact their vanishing is judged by, and
----there is nobody left to ask once they are gone. Everything else is read from the world on every
----drive. Follow and anchor are contradictory, so taking either order clears the other -- with
----only one ever standing, "which am I doing" stays something to read.
+---**It holds the orders, because they cannot be re-derived**: who to follow, where to stand and in
+---which zone, and progress through a zone line -- clicking one's switch, or walking through after
+---somebody where there is no switch to click (a clicked door looks exactly like an unclicked one,
+---and a walk aimed at an invisible trigger looks exactly like walking). The one measurement kept
+---alongside them -- where the follow target was last seen, which way they were going and whether
+---they were still moving -- exists for the same reason: it is the fact their vanishing is judged
+---by, and there is nobody left to ask once they are gone. Everything else is read from the world
+---on every drive. Follow and anchor are contradictory, so taking either order clears the other --
+---with only one ever standing, "which am I doing" stays something to read.
 ---@class Travel
 local Travel = {
     key = "Travel",
@@ -51,8 +54,9 @@ local Travel = {
         followCommand = "followme",
         -- the spawn the movement service is following, re-resolved whenever it is not following
         followSpawnId = 0,
-        -- where we were told to stand
-        anchor = { set = false, x = 0, y = 0 },
+        -- where we were told to stand, and the zone those numbers are a place in: a coordinate
+        -- pair only names a spot inside one zone, so the zone is half of the order
+        anchor = { set = false, x = 0, y = 0, zoneId = 0 },
         -- where the follow target was last seen, and in which zone: the spot their vanishing is
         -- judged from. Gone within click range of a switch reads as clicked-through; gone on
         -- the move anywhere else reads as a walk-through zone line taking them, with heading
@@ -74,18 +78,17 @@ local Travel = {
     }
 }
 
--- How close the movement service closes us to the follow target. Tight spacing by preference
--- (2026-07): about melee range, close enough to feel like a group -- but not so near that a
--- parked follower is stood on whoever it is following.
-local followDistance = 13
--- and how far they get before we close on them again, which is the buffer zone that keeps a
--- follow from being a shadow: inside it they can turn around, back up and step past us without
--- anything of ours moving. Scaled alongside followDistance rather than left where it was, since
--- what matters is the room between the two -- a thin buffer is barely a buffer.
--- Nothing here re-measures it -- the follow task owns it (Follow.WithinHold)
-local followResumeDistance = 23
--- how close we have to be before there is no point starting a follow at all
-local keepCloseDistance = 15
+-- How far past the distance we close to the target may get before we close on them again, as a
+-- fraction of that distance: the buffer zone that keeps a follow from being a shadow, since inside
+-- it they can turn around, back up and step past us without anything of ours moving. A fraction
+-- rather than a fixed margin because what matters is the room between the two -- a thin buffer is
+-- barely a buffer, and a buffer that stayed at ten units while the distance went to forty would be
+-- exactly that. Nothing here re-measures it: the follow task owns it (Follow.WithinHold).
+local holdBufferScale = 0.75
+-- How much further than the distance we hold at still counts as close enough not to bother
+-- starting a follow. Only ever asked with no follow running, which is the one moment there is no
+-- hysteresis to read (see closeEnough below); the buffer above is what answers it after that.
+local keepCloseSlack = 2
 -- how close to an anchor still counts as being parked on it
 local anchorRadius = 15
 -- how long to leave a failed attempt at clicking through a zone line alone. Without it, a door
@@ -111,10 +114,11 @@ local zoneWalkNearDistance = 60
 -- how long to leave a failed walk-through alone, for the same reason as clickZoneRetryMs
 local zoneWalkRetryMs = 15000
 
--- The command id the click-zone procedure speaks on. The command itself is registered by the
--- follow state (it owns the order surface); this is the same id, so what the procedure says lands
--- wherever that command is configured to speak.
+-- The command ids the procedures here speak on. The commands themselves are registered by the
+-- follow state (it owns the order surface); these are the same ids, so what gets said lands
+-- wherever those commands are configured to speak.
 local clickZoneSpeakId = "clickzone"
+local anchorSpeakId = "anchor"
 
 ---Steps of the click-zone procedure, in order.
 local clickZoneSteps = {
@@ -172,6 +176,31 @@ local function followTargetInReachId()
         return mq.TLO.Spawn("id " .. Travel._.followTargetId .. " radius 200 los").ID()
     end
     return mq.TLO.Spawn("pc radius 200 los " .. Travel._.followTarget).ID()
+end
+
+---How close we hold station on the follow target right now, and how far they get before we close
+---on them again.
+---
+---Re-derived from the world every time it is asked rather than fixed when the follow started,
+---because the answer changes underneath a running follow: a fight breaks out around a character
+---that has no business being at melee range, and the follow it already has going is the one that
+---has to hear about it (see `Movement.SetFollowHold`).
+---
+---The fight is `Combat.IsGroupFighting` rather than our own engagement, because the character this
+---setting is for is precisely the one *not* fighting: anything with a job in the fight is busy at a
+---band above follow and never reaches this core at all. A run is not a fight -- `Status.IsFleeing`
+---is the same order Combat reads, and a follower that spread out while the group ran for the zone
+---line would be the one that did not make it.
+---@return number distance
+---@return number resumeDistance
+local function holdDistances()
+    local distance = TravelConfig.GetFollowDistance()
+
+    if TravelConfig.GetCombatRelax() and not Status.IsFleeing() and Combat.IsGroupFighting() then
+        distance = math.max(TravelConfig.GetCombatFollowDistance(), distance)
+    end
+
+    return distance, distance * (1 + holdBufferScale)
 end
 
 ---Say, once, that we are waiting on the follow target rather than every pass.
@@ -268,11 +297,14 @@ local function event_FollowTargetDied(_, name)
     Travel.ClearFollowOrder()
 end
 
----One-time wiring of the game-text listeners the orders depend on. Both patterns hear every
----death in range, so the handler answers only to the name it is holding a follow order for.
+---One-time wiring: the settings the following is carried out by, and the game-text listeners the
+---orders depend on. Both death patterns hear every death in range, so the handler answers only to
+---the name it is holding a follow order for.
 function Travel.Init()
     if Travel._.isInit then return end
     Travel._.isInit = true
+
+    TravelConfig.Init()
 
     local slainDocs = ChelpDocs.new(function() return {
         "(followtargetslain) Ends autofollow when the character being followed is slain"
@@ -325,17 +357,34 @@ function Travel.ClearFollowOrder()
 end
 
 ---Take an anchor order. Being told to stand somewhere cancels being told to follow somebody.
+---
+---The zone we are standing in when the order arrives is taken down with it, because it is the
+---rest of the order rather than decoration: "y 400, x -1200" is a place in Kaesora and a
+---different place everywhere else, and the ways out of a zone that leave an anchor standing --
+---a death and the bind point it wakes us at, a gate, a port -- all end with those numbers
+---pointing at somewhere we were never told to be.
 ---@param y number
 ---@param x number
 function Travel.SetAnchor(y, x)
     Travel.ClearFollowOrder()
-    Travel._.anchor = { set = true, x = x, y = y }
+    Travel._.anchor = { set = true, x = x, y = y, zoneId = tonumber(mq.TLO.Zone.ID()) or 0 }
 end
 
 ---Stop holding a spot.
 function Travel.ClearAnchor()
-    Travel._.anchor = { set = false, x = 0, y = 0 }
+    Travel._.anchor = { set = false, x = 0, y = 0, zoneId = 0 }
     Movement.StopFor(Travel.key)
+end
+
+---Drop whatever standing order is in force -- following somebody, holding a spot, or neither.
+---
+---The two are one order to whoever gives them, since each cancels the other and only one is ever
+---standing: "stop" means stop travelling, not a guess at which of the two is the one to forget.
+---A character told to stop while parked on an anchor would otherwise walk straight back to it,
+---which reads as the order having been ignored.
+function Travel.ClearOrders()
+    Travel.ClearFollowOrder()
+    Travel.ClearAnchor()
 end
 
 ---Forget every order and everything measured about carrying one out.
@@ -344,7 +393,7 @@ function Travel.Reset()
     Travel._.followTargetId = 0
     Travel._.followCommand = "followme"
     Travel._.followSpawnId = 0
-    Travel._.anchor = { set = false, x = 0, y = 0 }
+    Travel._.anchor = { set = false, x = 0, y = 0, zoneId = 0 }
     Travel._.lastSeen = EmptyLastSeen()
     Travel._.clickZone = { step = nil, timer = nil, lastFailedMs = 0 }
     Travel._.walkZone = { active = false, taskId = 0, destY = 0, destX = 0, fromZoneId = 0, lastFailedMs = 0 }
@@ -364,6 +413,18 @@ end
 ---@return table anchor { set, x, y } -- read-only
 function Travel.GetAnchor()
     return Travel._.anchor
+end
+
+---How close this character is holding station on whoever it follows, as of right now.
+---
+---For the Follow State page, and the reason it is worth a row there: the setting pair only ever
+---shows what *would* be held, and this is the one that is. It is also how the relax is seen to be
+---doing anything at all -- a caster that stayed at thirteen while the group fought would otherwise
+---look exactly like one whose relax never fired.
+---@return number distance
+function Travel.GetHoldDistance()
+    local distance = holdDistances()
+    return distance
 end
 
 ---------------- Driving --------------------
@@ -465,6 +526,12 @@ local function FollowPass()
         lastSeen.seenMs = Time.current_time()
     end
 
+    -- How much room we are keeping, as of this pass. A fight opening or closing around us is an
+    -- answer that changes with a follow already running, so a follow that is running is told --
+    -- before anything reads what it makes of it, since IsParked below is exactly that reading.
+    local distance, resumeDistance = holdDistances()
+    Movement.SetFollowHold(Travel.key, distance, resumeDistance)
+
     -- Close enough: the follow task parks itself, and so do we.
     --
     -- Once a follow is running that reading is the task's to make rather than ours, because the
@@ -477,7 +544,7 @@ local function FollowPass()
         closeEnough = Movement.IsParked()
     else
         local targetDistance = targetSpawn.Distance3D()
-        closeEnough = targetDistance ~= nil and targetDistance < keepCloseDistance
+        closeEnough = targetDistance ~= nil and targetDistance < distance + keepCloseSlack
     end
 
     if closeEnough then
@@ -501,8 +568,8 @@ local function FollowPass()
         Travel._.followSpawnId = followSpawnId
         Travel._.stuck.checking = false
         Movement.Follow(followSpawnId, {
-            distance = followDistance,
-            resumeDistance = followResumeDistance,
+            distance = distance,
+            resumeDistance = resumeDistance,
             owner = Travel.key
         })
         return true
@@ -522,9 +589,30 @@ local function FollowPass()
 end
 
 ---One pass of standing where we were told to stand.
+---
+---An anchor does not outlive the zone it was given in, the same way a follow order does not
+---outlive its target. Dying is how that usually happens: we wake up at a bind point somewhere
+---else, still holding a spot that no longer exists anywhere we can walk, and the distance to it
+---is only a number -- a large one, since it is measured between two zones' coordinate systems --
+---which is what a character running for the horizon after a wipe was doing. A gate and a port
+---are the same story with no death in them. Nothing here waits to be sure: leaving is the
+---answer, and it is read off the world every pass.
 ---@return boolean isBusy
 local function AnchorPass()
     if not Travel._.anchor.set then return false end
+
+    -- A zone id the client will not give us is a client mid-load, not a new zone -- and mid-load
+    -- is exactly when this gets asked. Judge nothing until it answers, and judge nothing for an
+    -- anchor that never got a zone written on it.
+    local zoneId = tonumber(mq.TLO.Zone.ID()) or 0
+    if zoneId > 0 and Travel._.anchor.zoneId > 0 and zoneId ~= Travel._.anchor.zoneId then
+        DebugLog("Anchor was set in zone " .. tostring(Travel._.anchor.zoneId) .. ", we are in "
+            .. tostring(zoneId) .. " -- dropping it")
+        Commands.GetCommandSpeak(anchorSpeakId):speak(
+            "I left the zone I was anchored in, dropping the anchor")
+        Travel.ClearAnchor()
+        return false
+    end
 
     -- already walking back to it, let that finish
     if Movement.IsMovingTo() and Movement.IsOwnedBy(Travel.key) then

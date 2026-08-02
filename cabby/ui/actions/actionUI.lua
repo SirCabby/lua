@@ -76,9 +76,10 @@ end
 
 ---What a picked action is called in the list.
 ---
----A spell that is not on the spell bar is worth saying out loud: an action slot only fires what
----is memorized, so a slot holding an unmemorized spell is configured correctly and will still
----never go off, which is otherwise a silent puzzle.
+---A spell that is not on the spell bar is worth saying out loud, though it no longer stops
+---anything: picking one costs a memorize the first time it is wanted -- a few seconds standing
+---still, into an empty gem where there is one -- and that is worth knowing before choosing it
+---over a spell already on the bar.
 ---
 ---What the book files a spell under is worth saying out loud too, but only once the narrowing is
 ---off: that is the moment somebody is looking for a spell the categories did not offer them, and
@@ -89,7 +90,7 @@ end
 local function ChoiceLabel(action, category)
     local label = action:Name()
     if action.IsMemorized ~= nil and not action:IsMemorized() then
-        label = label .. "  (not memorized)"
+        label = label .. "  (not memorized -- will be)"
     end
     if category ~= nil and category ~= "" then
         label = label .. "  -- " .. category

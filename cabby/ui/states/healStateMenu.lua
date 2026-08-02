@@ -1,14 +1,23 @@
 ---@diagnostic disable: undefined-field
+local Time = require("utils.Time.Time")
+
 local AAs = require("cabby.actions.aas")
 local ActionUI = require("cabby.ui.actions.actionUI")
 local AvailableActions = require("cabby.actions.availableActions")
 local CommonUI = require("cabby.ui.commonUI")
+local CureTypes = require("cabby.actions.cureTypes")
+local Curing = require("cabby.curing")
 local HealStateConfig = require("cabby.configs.healStateConfig")
 local Items = require("cabby.actions.items")
 local Roles = require("cabby.roles")
 local Spells = require("cabby.actions.spells")
 
-local HealStateMenu = {}
+local HealStateMenu = {
+    _ = {
+        cures = nil,      -- what this character would answer each request with
+        curesReadMs = 0
+    }
+}
 
 local scopeOrder = {
     HealStateConfig.scopes.Any,
@@ -17,6 +26,40 @@ local scopeOrder = {
     HealStateConfig.scopes.Others,
     HealStateConfig.scopes.Pet
 }
+
+local cureModeOrder = {
+    HealStateConfig.cureModes.Off,
+    HealStateConfig.cureModes.OutOfCombat,
+    HealStateConfig.cureModes.Always
+}
+
+---How long an answer to "what would I cure this with" is reused for.
+---
+---Working it out is a walk of the beneficial half of the book and the whole AA list, reading
+---effects off each -- perfectly cheap once, and something no page should do sixty times a second
+---while it is open. The answer only moves when the character levels or buys an AA.
+local cureLookIntervalMs = 2000
+
+---@return table cures { [type key] = { single = name|nil, group = name|nil, selfOnly = name|nil } }
+local function getCures()
+    local now = Time.current_time()
+    if HealStateMenu._.cures == nil or now - HealStateMenu._.curesReadMs >= cureLookIntervalMs then
+        HealStateMenu._.curesReadMs = now
+
+        local cures = {}
+        for _, cureType in ipairs(CureTypes.All()) do
+            local single, group, selfOnly = CureTypes.Best(cureType)
+            cures[cureType.key] = {
+                single = single ~= nil and single:Name() or nil,
+                group = group ~= nil and group:Name() or nil,
+                selfOnly = selfOnly ~= nil and selfOnly:Name() or nil
+            }
+        end
+        HealStateMenu._.cures = cures
+    end
+
+    return HealStateMenu._.cures
+end
 
 ---How much room the per-slot heal controls need under the action row.
 local extrasHeight = 26
@@ -154,7 +197,27 @@ function HealStateMenu.BuildMenu(healState)
             HealStateConfig.SetEmergencyPct(emergency)
         end
         ImGui.SameLine()
-        CommonUI.HelpMarker("Below this, someone is in trouble rather than merely hurt. It does not choose a heal -- the slots below do that -- it decides what is worth throwing away a heal in progress for, and it holds back group heals while somebody is about to die.")
+        CommonUI.HelpMarker("Below this, someone is in trouble rather than merely hurt. It does not choose a heal -- the slots below do that -- it decides what is worth throwing away a heal in progress for, it holds back group heals while somebody is about to die, and it is what curing waits for.")
+
+        ImGui.TableNextRow()
+        ImGui.TableNextColumn()
+
+        ImGui.Dummy(0, 0)
+        ImGui.SameLine()
+
+        local cureMode = HealStateConfig.GetCureMode()
+        ImGui.SetNextItemWidth(190)
+        if ImGui.BeginCombo("Curing", HealStateConfig.GetCureModeDisplay(cureMode)) then
+            for _, known in ipairs(cureModeOrder) do
+                local _, pressed = ImGui.Selectable(known.display, cureMode == known.value)
+                if pressed then
+                    HealStateConfig.SetCureMode(known.value)
+                end
+            end
+            ImGui.EndCombo()
+        end
+        ImGui.SameLine()
+        CommonUI.HelpMarker("Whether this character answers cure requests, and when. Somebody carrying a poison, disease, curse or corruption with more than a minute left on it asks the group for a cure -- every character does that, whether or not it can cure anything -- and this decides whether this one answers. Cures are cast ahead of ordinary heals, because a cure ends a cost instead of paying it back, and behind anybody below the emergency point. The Cures tab shows what would be cast for each kind and who is waiting.")
 
         ImGui.EndTable()
     end
@@ -195,6 +258,85 @@ function HealStateMenu.BuildMenu(healState)
                 ImGui.PopID()
                 ImGui.PopStyleColor()
             end
+
+            ImGui.EndTabItem()
+        end
+
+        if ImGui.BeginTabItem("Cures") then
+            ImGui.TextDisabled("Nothing to fill in: whoever needs one names the kind, and the best of that kind this character owns answers it.")
+            ImGui.SameLine()
+            CommonUI.HelpMarker("A cure has no slot list because it cannot have one. The person afflicted is the only one who can see it -- another player's debuffs are unreadable until they are targeted -- and they have no idea what anybody hearing them can cast. So they say what is on them and every listener answers with its own best, which is the one with the most counters rather than the highest rank. Whether this character answers at all is the Curing setting above.")
+
+            local cures = getCures()
+            local cureFlags = bit32.bor(ImGuiTableFlags.RowBg, ImGuiTableFlags.BordersInner)
+            if ImGui.BeginTable("healCures", 3, cureFlags) then
+                ImGui.TableSetupColumn("Kind", ImGuiTableColumnFlags.WidthFixed, 110)
+                ImGui.TableSetupColumn("One at a time", ImGuiTableColumnFlags.WidthStretch)
+                ImGui.TableSetupColumn("On the group", ImGuiTableColumnFlags.WidthStretch)
+                ImGui.TableHeadersRow()
+
+                for _, cureType in ipairs(CureTypes.All()) do
+                    local cure = cures[cureType.key] or {}
+                    ImGui.TableNextRow()
+                    ImGui.TableNextColumn()
+                    ImGui.Text(cureType.key)
+
+                    ImGui.TableNextColumn()
+                    if cure.single ~= nil then
+                        ImGui.Text(cure.single)
+                    elseif cure.selfOnly ~= nil then
+                        ImGui.TextDisabled(cure.selfOnly .. " (only on me)")
+                    else
+                        ImGui.TextDisabled("nothing")
+                    end
+
+                    ImGui.TableNextColumn()
+                    if cure.group ~= nil then
+                        ImGui.Text(cure.group)
+                    else
+                        ImGui.TextDisabled("nothing")
+                    end
+                end
+
+                ImGui.EndTable()
+            end
+
+            ImGui.Spacing()
+            ImGui.SeparatorText("Waiting")
+            local requests = healState.GetCureRequests()
+            if #requests < 1 then
+                ImGui.TextDisabled("Nobody has asked for a cure")
+            else
+                for _, request in ipairs(requests) do
+                    ImGui.Text(request.name .. ": " .. request.typeKey ..
+                        " -- " .. request.action:Name() ..
+                        (request.casts > 0 and (", cast " .. tostring(request.casts) .. "x") or ""))
+                end
+            end
+            ImGui.SameLine()
+            CommonUI.HelpMarker("Worked through oldest first, skipping anybody out of range for now rather than holding the rest up for them. A request stays here until the affliction is actually off them -- one cure strips a fixed number of counters and a big one carries more than that -- and it is dropped when they stop repeating it, which they do every twenty seconds for as long as it is still on them.")
+
+            ImGui.Spacing()
+            ImGui.SeparatorText("On me")
+            local afflictions = Curing.GetAfflictions()
+            local anything = false
+            for _, cureType in ipairs(CureTypes.All()) do
+                local remaining = afflictions[cureType.key]
+                if remaining ~= nil then
+                    anything = true
+                    local seconds = tostring(math.floor(remaining / 1000)) .. "s left"
+                    if remaining >= Curing.WorthCuringMs() then
+                        ImGui.Text(cureType.key .. ": " .. seconds)
+                    else
+                        ImGui.TextDisabled(cureType.key .. ": " .. seconds .. " -- too short to be worth curing")
+                    end
+                end
+            end
+            if not anything then
+                ImGui.TextDisabled("Nothing on me")
+            end
+            ImGui.SameLine()
+            CommonUI.HelpMarker("What this character is carrying that a cure would take off, and how long it has left. Anything over a minute is asked about on a channel, once and then every twenty seconds until it is gone -- turn that off with the callcure command. It is asked about whatever this page says: answering and asking are separate, because every class has to ask and only some can answer.")
 
             ImGui.EndTabItem()
         end

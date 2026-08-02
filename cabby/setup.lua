@@ -9,6 +9,8 @@ local Combat = require("cabby.combat")
 local Classes = require("cabby.classes.classes")
 local CommandConfig = require("cabby.configs.commandConfig")
 local CommandQueue = require("cabby.commandQueue")
+local Consent = require("cabby.consent")
+local Curing = require("cabby.curing")
 local DebugConfig = require("cabby.configs.debugConfig")
 local CabbyGiving = require("cabby.giving")
 local GeneralConfig = require("cabby.configs.generalConfig")
@@ -148,6 +150,13 @@ function Setup:Init(configFilePath, stateMachine)
     -- what is *here*, which is the wider question: registered after Combat because it merges
     -- Combat's answers with a sweep of its own, and pulses after it for the same reason
     Mobs.Init(stateMachine)
+    -- what is on *us* that a cure would take off, and who has said so. Every class, not just the
+    -- healers: the character standing in a poison DoT is the only one who can see it, and is
+    -- usually the one with nothing to cure it with. HealState is the half that casts.
+    Curing.Init(stateMachine)
+    -- what our own death owes the people we are already with: the consents that let them drag the
+    -- corpse. Watches for the death itself, so it needs no order and holds no frames
+    Consent.Init(stateMachine)
     Travel.Init() -- the standing movement orders; the world's death messages end a follow here
     ClassSetup(stateMachine)
 

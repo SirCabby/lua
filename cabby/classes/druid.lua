@@ -20,7 +20,6 @@ local Druid = BaseClass.new({
         { state = BuffState, priority = Priorities.buff }
     },
     unimplemented = {
-        "curing poison and disease",
         "snare, for pulls and for runners",
         "ports, and evacuating a group that is losing"
     }

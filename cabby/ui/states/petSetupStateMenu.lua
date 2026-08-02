@@ -129,6 +129,8 @@ function PetSetupStateMenu.BuildMenu(petState)
             ImGui.Text("<none>")
         elseif pet.gearing then
             ImGui.Text(pet.name)
+        elseif not pet.judged then
+            ImGui.Text(pet.name .. " (just turned up -- looking at what it is holding)")
         elseif pet.wasHereAtStartup then
             ImGui.Text(pet.name .. " (already here when the script started -- left as it is)")
         else

@@ -7,6 +7,7 @@ local AvailableActions = require("cabby.actions.availableActions")
 local Combat = require("cabby.combat")
 local CombatConfig = require("cabby.configs.combatConfig")
 local CommonUI = require("cabby.ui.commonUI")
+local Cons = require("cabby.cons")
 local Items = require("cabby.actions.items")
 local Roles = require("cabby.roles")
 local SpellDpsStateConfig = require("cabby.configs.spellDpsStateConfig")
@@ -32,16 +33,38 @@ local timingOrder = {
 ---How much room the per-slot rotation controls need under the action row.
 local extrasHeight = 26
 
----What a rotation slot needs saying about it beyond which spell it is: who it is for, when it is
----cast on somebody rather than at what we are fighting, and when in a fight it has its moment when
----it is aimed at the mob. What it can be aimed at is the spell's own business and is only reported
------ along with the reason a slot will never fire, when there is one.
+---What a rotation slot needs saying about it beyond which spell it is: how much of a fight it is
+---worth using on, who it is for when it is cast on somebody rather than at what we are fighting,
+---and when in a fight it has its moment when it is aimed at the mob. What it can be aimed at is the
+---spell's own business and is only reported -- along with the reason a slot will never fire, when
+---there is one.
 ---@param liveAction Action what the controls here write to
 ---@param shownAction Action what the row is currently holding -- the staged pick while it is being
 ---edited -- which is what the spell is read from
 ---@param spellDpsState SpellDpsState
 local function DrawDpsFields(liveAction, shownAction, spellDpsState)
     local facts = spellDpsState.DescribeSlot(shownAction or liveAction)
+
+    -- how much of a fight it has to be, which is the coarsest question here and the only one both
+    -- halves of the list are asked: everything after it is about *how* the slot is aimed, and this
+    -- is about whether the fight is worth it at all
+    if facts.conable then
+        local con = SpellDpsStateConfig.GetMinCon(liveAction)
+
+        ImGui.SetNextItemWidth(105)
+        if ImGui.BeginCombo("##con", Cons.ThresholdDisplay(con)) then
+            for _, known in ipairs(Cons.ladder) do
+                local _, pressed = ImGui.Selectable(Cons.ThresholdDisplay(known.value), con == known.value)
+                if pressed then
+                    SpellDpsStateConfig.SetMinCon(liveAction, known.value)
+                end
+            end
+            ImGui.EndCombo()
+        end
+        ImGui.SameLine()
+        CommonUI.HelpMarker("How much of a fight the mob has to be before this slot is worth using. Any con is everything, which is what a slot does until it is told otherwise; above that it holds back, and what it holds back is the effort -- a four second cast, an item on a long timer, the mana in a damage shield -- for the pulls that are actually going to be a fight. It is read off the mob the cast is aimed at, and off what we are fighting for a shield, since how much trouble we are in is a fact about the mob and not about whoever ends up wearing it. A mob the client will not con counts as not tough enough rather than as tough enough, so nothing expensive goes out on a guess. It only ever narrows: the slot still has to come up in the order and get past everything else.")
+        ImGui.SameLine()
+    end
 
     -- only the scopes this slot's spell can actually be given. A spell that lands on one kind of
     -- person has answered the question already, so the dial shows that answer and is not offered
@@ -184,7 +207,7 @@ function SpellDpsStateMenu.BuildMenu(spellDpsState)
         local backOffDisabled = not Combat.IsEngaged()
         if backOffDisabled then ImGui.BeginDisabled(true) end
         if ImGui.Button("Back Off", 70, 23) then
-            Combat.Disengage("the Back Off button")
+            Combat.CallOff("the Back Off button")
         end
         if backOffDisabled then ImGui.EndDisabled() end
 
@@ -272,7 +295,7 @@ function SpellDpsStateMenu.BuildMenu(spellDpsState)
 
     ImGui.SeparatorText("Rotation")
     ImGui.SameLine()
-    CommonUI.HelpMarker("Tried in order, top to bottom: the first one ready is cast, then the state waits for it to finish before choosing again. A slot aimed at what we are fighting says when in a fight its moment is -- right away, once the mob is hurt, or once it turns and runs -- which is how the same root is a fight-opener on one slot and a runner-stopper on another, and a debuff can also say it belongs on every mob in the fight rather than only on the one being killed, in which case nothing below it is reached until they all have it. A damage shield is not aimed at the mob, so a slot holding one asks who it is for instead, the way a heal slot does, and is left alone once it is up on them. Only memorized spells are used, so keep the rotation on the spell bar. For anything more specific than that -- holding while the tank is low, saving a nuke for a named -- put it in a slot's LUA expression.")
+    CommonUI.HelpMarker("Tried in order, top to bottom: the first one ready is cast, then the state waits for it to finish before choosing again. Every slot says how much of a fight it is worth using on, which is how the expensive half of a rotation is kept for the pulls that need it and skipped on the ones that do not. A slot aimed at what we are fighting says when in a fight its moment is -- right away, once the mob is hurt, or once it turns and runs -- which is how the same root is a fight-opener on one slot and a runner-stopper on another, and a debuff can also say it belongs on every mob in the fight rather than only on the one being killed, in which case nothing below it is reached until they all have it. A damage shield is not aimed at the mob, so a slot holding one asks who it is for instead, the way a heal slot does, and is left alone once it is up on them. Only memorized spells are used, so keep the rotation on the spell bar. For anything more specific than that -- holding while the tank is low, saving a nuke for a named -- put it in a slot's LUA expression.")
 
     local actions = SpellDpsStateConfig.GetActions()
     local availableActions = AvailableActions.new()

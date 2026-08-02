@@ -217,6 +217,16 @@ function Commands.SetSpeak(speak)
     Commands._.speak = speak
 end
 
+---The default speak list -- where this character talks when no command or event has an override
+---of its own. For anything that speaks without being a command or an event (the startup
+---announcement in `cabby.lua`); a command or event asks `GetCommandSpeak`/`GetEventSpeak` instead,
+---so its own override is honoured.
+---@return Speak? speak nil when the configured channel list would not build (an invalid channel
+---name in config), which is a thing callers have to survive rather than crash on
+function Commands.GetSpeak()
+    return Commands._.speak
+end
+
 ---@param command SlashCmd
 function Commands.RegisterSlashCommand(command)
     command.command = command.command:lower()

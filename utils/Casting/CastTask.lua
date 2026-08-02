@@ -47,6 +47,15 @@ local retryIntervalMs = 2000
 ---thing worse than waiting is waiting silently.
 local stuckNoticeMs = 30000
 
+---How long a completed cast waits for the client to say the bar went down for a bad reason.
+---
+---The gap being covered is one round trip: a fizzle is rolled where the *server's* copy of the
+---cast ends, which is half a ping behind the bar our client has already finished drawing, and the
+---line saying so spends the other half getting back to us. The floor on top is for a server that
+---answers on its own beat rather than the instant the cast is up. Short enough to vanish inside
+---the spell recovery that follows every cast anyway.
+local verdictWaitMs = 300
+
 ---@param str string
 local function DebugLog(str)
     Debug.Log(CastTask.key, str)
@@ -64,7 +73,8 @@ end
 --- owner: string, whose cast this is (a state key)
 --- priority: number, that owner's place in the priority chain; smaller is stronger
 --- targetId: number, target this spawn before casting
---- gem: number, memorize into this gem when the spell is not already memorized
+--- gem: number, memorize into exactly this gem, whatever is in it -- for a caller that named one
+--- memGem: number, where a spell goes when no gem is free and the caller named none
 --- settleMs / readyWaitMs / memorizeRetryMs: timings, all defaulted
 --- mayStopMovement: fun(priority, movementOwner): boolean -- may this cast cancel the movement
 ---   task that is running? Defaults to yes; the host installs the real policy.
@@ -84,6 +94,7 @@ function CastTask.new(subject, options)
         subject = subject,
         targetId = options.targetId,
         gem = options.gem,
+        memGem = options.memGem,
         settleMs = options.settleMs or 250,
         readyWaitMs = options.readyWaitMs or 1500,
         memorizeRetryMs = options.memorizeRetryMs or 15000,
@@ -107,6 +118,7 @@ function CastTask.new(subject, options)
         requiresStillness = true,
         targetedAtMs = nil,
         memorizedAtMs = nil,
+        memorizedLandedMs = nil,
         firedAtMs = nil,
         castTimeMs = 0
     }
@@ -127,7 +139,11 @@ end
 local function finish(self, outcome, reason)
     self._.outcome = outcome
     self._.reason = reason or CastOutcome.Describe(outcome)
-    self._.status = outcome == CastOutcome.succeeded and CastStatus.succeeded or CastStatus.failed
+    -- A late outcome is not a reason the cast failed, it is what the spell did once it landed --
+    -- so hearing one is proof the cast completed. The status is about the *cast* and the outcome
+    -- beside it about what the spell then did: a resisted nuke is a cast that went off.
+    self._.status = (outcome == CastOutcome.succeeded or CastOutcome.IsLate(outcome))
+        and CastStatus.succeeded or CastStatus.failed
     self._.step = nil
     DebugLog("Cast of [" .. self._.subject:Describe() .. "] finished: " .. self._.status ..
         " (" .. self._.reason .. ")")
@@ -149,6 +165,27 @@ local function advance(self, nextStep)
     return true
 end
 
+---A spell cannot go out through a fear. The character runs where the server points them, so the
+---stillness a cast bar needs is not coming, and one that somehow started would be lost to the
+---first step taken.
+---
+---Asked at each of the three points a fear can reach a cast -- before anything is spent, while we
+---are waiting to settle, and at the commit -- rather than once at the top, because the seconds
+---spent getting on target and memorizing are exactly when it lands. The middle one matters most:
+---a cast already waiting to stand still would otherwise wait out the whole fear, holding its
+---caller's priority floor up over a cast that was never going to happen.
+---
+---It ends the cast rather than waiting it out, for the reason this task never retries anything:
+---by the time the fear breaks the mob may be dead or the heal no longer needed, and that is the
+---caller's call to make on the pass after this one. Items and AAs are left alone, as they are for
+---a silence -- an instant clicky or AA is not a cast bar to lose, and one of them may be the way
+---out of the fear.
+---@param self CastTask
+---@return boolean isFeared
+local function feared(self)
+    return self._.subject:IsSpell() and mq.TLO.Me.Feared() ~= nil
+end
+
 ---Everything the client can tell us before we commit anything: do we have it, can we afford
 ---it, is it off cooldown.
 ---
@@ -165,6 +202,10 @@ local function validate(self)
 
     if mq.TLO.Me.Silenced() ~= nil and subject:IsSpell() then
         return finish(self, CastOutcome.silenced)
+    end
+
+    if feared(self) then
+        return finish(self, CastOutcome.feared)
     end
 
     local manaCost = subject:ManaCost()
@@ -255,6 +296,10 @@ local function holdStill(self)
         return advance(self, self.Memorize)
     end
 
+    if feared(self) then
+        return finish(self, CastOutcome.feared)
+    end
+
     -- Cancel the movement that is running, if this cast outranks whoever asked for it. A task
     -- we may not cancel is not fatal: a follow that has caught up is holding position with the
     -- keys released, which is standing still, so the check below can still succeed.
@@ -274,15 +319,48 @@ local function holdStill(self)
     return waiting(self, self._.immobilizer:Reason() or "waiting to stand still")
 end
 
+---An empty gem, if there is one.
+---
+---Asked here rather than when the cast was requested, because seconds pass in between -- getting
+---on target, standing still -- and what is on the bar is the player's to change in them. The
+---answer is only worth having at the moment it is acted on.
+---@return number|nil gem
+local function freeGem()
+    local gems = math.floor(tonumber(mq.TLO.Me.NumGems()) or 8)
+    for gem = 1, gems do
+        if mq.TLO.Me.Gem(gem).ID() == nil then return gem end
+    end
+    return nil
+end
+
+---Where this spell is about to go.
+---
+---A gem the caller named wins outright: that is what naming one means. Otherwise an empty gem,
+---and only failing that the configured one -- because the whole cost of memorizing something is
+---what it replaces, and an empty gem replaces nothing. It also settles on its own: each spell a
+---rotation is short of takes an empty gem once and stays there, rather than a rotation with two
+---unmemorized spells in it spending the fight casting them over each other.
+---@return number|nil gem
+local function gemFor(self)
+    if self._.gem ~= nil then return self._.gem end
+    return freeGem() or self._.memGem
+end
+
 ---Memorize the spell if it is not in a gem. Items and AAs skip straight through.
 local function memorize(self)
     local subject = self._.subject
 
     if subject:IsMemorized() then
+        -- when a memorize *we* asked for is what put it there, note the moment it landed: the gem
+        -- is not castable for a beat afterwards, and `fire` has no other way to tell that apart
+        -- from the gem timer moving under us
+        if self._.memorizedAtMs ~= nil and self._.memorizedLandedMs == nil then
+            self._.memorizedLandedMs = Time.current_time()
+        end
         return advance(self, self.Fire)
     end
 
-    local gem = self._.gem
+    local gem = gemFor(self)
     if gem == nil or gem < 1 then
         return finish(self, CastOutcome.notMemorized, "no gem to memorize into")
     end
@@ -308,6 +386,10 @@ local function fire(self)
         return finish(self, CastOutcome.stunned)
     end
 
+    if feared(self) then
+        return finish(self, CastOutcome.feared)
+    end
+
     -- Something is already casting and it is not us, since we have not fired yet: a hand cast,
     -- or the cast this one is replacing still winding down from its /stopcast. Wait for it. The
     -- alternative is failing on a cast that is about to end anyway, and being told to start over
@@ -317,6 +399,15 @@ local function fire(self)
     end
 
     if not subject:IsReady() then
+        -- A gem we have only just memorized into is greyed out for a moment, and the spell landing
+        -- in it is what `IsMemorized` reports -- so arriving here "not ready" straight after a
+        -- memorize is the gem settling, not a refusal. Failing that would mean spending eight
+        -- seconds memorizing and then throwing the cast away a tenth of a second short.
+        if self._.memorizedLandedMs ~= nil and
+            Time.current_time() - self._.memorizedLandedMs < self._.readyWaitMs then
+            return waiting(self, "waiting for " .. subject:Name() .. " to be ready")
+        end
+
         -- the gem timer moved under us between validate and here, most likely a recovery from
         -- something else that went off in the meantime
         return finish(self, CastOutcome.notReady)
@@ -371,12 +462,17 @@ local function confirmStart(self)
     return waiting(self, "casting " .. self._.subject:Name())
 end
 
----The cast is up. It ends when the client stops showing it, and the reason it ended has either
----already arrived as a chat line (handled before we get here) or there was no reason, which
----means it went off.
+---The cast is up. It ends when the client stops showing it, and the reason it ended is either a
+---chat line that has already arrived (handled before we get here), one that is still a round trip
+---behind, or no reason at all -- which means it went off.
 local function inFlight(self)
     if mq.TLO.Me.Casting.ID() == nil then
-        return finish(self, CastOutcome.succeeded)
+        -- The bar is down, so there is no longer a cast to lose: stop pinning the character
+        -- before spending a moment finding out how it ended.
+        self._.requiresStillness = false
+        self._.step = self.ConfirmLanded
+        self._.stepDeadlineMs = Time.current_time() + verdictWaitMs + ping() * 2
+        return waiting(self, "waiting on the result of " .. self._.subject:Name())
     end
 
     if Time.current_time() > (self._.stepDeadlineMs or 0) then
@@ -392,6 +488,32 @@ local function inFlight(self)
     return waiting(self, "casting " .. self._.subject:Name())
 end
 
+---The cast bar has closed and the client has not yet said why.
+---
+---Both endings look identical from the TLOs -- the bar goes down whether the spell went off or
+---the cast was lost -- and only the chat line tells them apart. That line is not in step with the
+---bar: a fizzle is decided at the server's end of the cast, so it arrives a round trip after our
+---client has finished drawing a bar that ran its full length. Finishing the instant the bar drops
+---therefore reports every fizzle as a landed spell, which is the one mistake a buff cannot
+---survive -- the caller believes it is on somebody, and stops asking for the next half hour.
+---
+---So a completed cast waits to be contradicted, and the contradiction lands through the pending
+---outcome that `Pulse` applies ahead of any step. An evidence window rather than a give-up timer:
+---running out *is* the answer, since the client had its chance to say the cast was lost and said
+---nothing. Nothing is held hostage by it either -- the character may move (there is no bar left to
+---lose) and the wait is shorter than the spell recovery that follows the cast regardless.
+---
+---A *late* line landing in here ends the wait early and the other way: "your target resisted it"
+---is the spell reporting on what it did after it went off, which settles the only question this
+---step was asking. It is finished as the success it is, carrying the resist as its outcome.
+local function confirmLanded(self)
+    if Time.current_time() > (self._.stepDeadlineMs or 0) then
+        return finish(self, CastOutcome.succeeded)
+    end
+
+    return waiting(self, "waiting on the result of " .. self._.subject:Name())
+end
+
 -- Steps are held as methods so each one can name the next by identity, the way the cabby
 -- states name their action functions
 CastTask.Validate = validate
@@ -401,6 +523,14 @@ CastTask.Memorize = memorize
 CastTask.Fire = fire
 CastTask.ConfirmStart = confirmStart
 CastTask.InFlight = inFlight
+CastTask.ConfirmLanded = confirmLanded
+
+---Whether the cast bar is already down and the only thing left is hearing how it went.
+---@param self CastTask
+---@return boolean isAwaitingVerdict
+local function awaitingVerdict(self)
+    return self._.step == CastTask.ConfirmLanded and not CastStatus.IsTerminal(self._.status)
+end
 
 ---A cast that keeps waiting on the same thing is not failing, but it is worth mentioning.
 ---
@@ -479,9 +609,13 @@ end
 
 ---Ask for this cast to end. Interrupting a committed cast happens on the next pulse, which is
 ---what makes this safe to call from an ImGui callback or a chat event handler.
+---
+---Ignored once the cast bar is down: there is nothing left to call off, the mana is spent either
+---way, and the moment still outstanding is only the one spent hearing whether it was lost. Cutting
+---that short would throw away the answer and report a spell that landed as cancelled.
 ---@param outcome? string defaults to aborted
 function CastTask:RequestStop(outcome)
-    if CastStatus.IsTerminal(self._.status) then return end
+    if CastStatus.IsTerminal(self._.status) or awaitingVerdict(self) then return end
     self._.stopOutcome = outcome or CastOutcome.aborted
 end
 
@@ -493,6 +627,14 @@ end
 function CastTask:Abandon(outcome)
     outcome = outcome or CastOutcome.aborted
     if CastStatus.IsTerminal(self._.status) then return self._.status end
+
+    -- The cast bar is already down, so there is nothing to interrupt and nothing to cancel. This
+    -- form cannot wait for the pulse that would have heard the verdict -- it is what the shutdown
+    -- path uses -- so it settles on the evidence as it stands: nothing said the cast was lost.
+    if awaitingVerdict(self) then
+        finish(self, CastOutcome.succeeded)
+        return self._.status
+    end
 
     if CastStatus.IsCommitted(self._.status) then
         if mq.TLO.Me.Mount.ID() ~= nil then

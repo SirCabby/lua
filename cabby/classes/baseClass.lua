@@ -1,6 +1,7 @@
 local Debug = require("utils.Debug.Debug")
 
 local AdvLootState = require("cabby.states.advLootState")
+local CorpseState = require("cabby.states.corpseState")
 local FleeState = require("cabby.states.fleeState")
 local FollowState = require("cabby.states.followState")
 local MeleeState = require("cabby.states.meleeState")
@@ -29,7 +30,7 @@ local BaseClass = { key = "BaseClass" }
 
 ---The states every class registers, whatever it is.
 ---
----Five jobs have nothing to do with what the character can do, so no class should have to
+---Six jobs have nothing to do with what the character can do, so no class should have to
 ---remember to ask for them. Following is the first -- a wizard follows the same way a warrior
 ---does; and FollowState is also the anchor and click-to-zone state, all three at the follow band
 ---because they are one state and one `Go()`. Resting is the second: sitting to get health, mana
@@ -60,6 +61,13 @@ local BaseClass = { key = "BaseClass" }
 ---and above follow and rest, so rolls are cleared promptly without ever being answered ahead of
 ---a swing.
 ---
+---Getting our own gear back off the ground is the sixth, and everyone dies the same way. It does
+---nothing at all until somebody says `lootcorpse`, and then it empties every corpse of this
+---character's within reach. One step weaker than minding the window (`loot + 5`), because a roll
+---nobody has answered is a roll the whole group is waiting on, while our own gear is waiting on
+---nobody -- and above follow, so a character told to loot does that rather than trotting off after
+---the group with its gear still on the floor.
+---
 ---A class that wants one of these somewhere else in its chain declares it itself: a profile
 ---entry naming the same state wins over the common one, priority and all. That is exactly how the
 ---melee classes keep their melee at `dps`.
@@ -71,6 +79,7 @@ local function CommonStates()
         { state = FleeState, priority = Priorities.passive },
         { state = MeleeState, priority = Priorities.dps + 5 },
         { state = AdvLootState, priority = Priorities.loot },
+        { state = CorpseState, priority = Priorities.loot + 5 },
         { state = FollowState, priority = Priorities.follow },
         -- last of all, deliberately: resting is what a character does with the frames nothing
         -- else wants, and everything above it gets first refusal every pass

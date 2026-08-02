@@ -29,6 +29,8 @@ cabby.lua
        ├─ ClassSetup         — this character's class module assembles + registers its states
        ├─ HotbarsUI.Init()   — ImGui shell for the hotbar windows
        └─ Menu.Init()        — ImGui shell (must be last)
+  └─ "Online"                — announced on the default speak channels: setup is done, orders can
+                               be taken. Silent when no speak channels are configured
   └─ stateMachine:Start()    — main loop
 ```
 
@@ -44,7 +46,7 @@ fall through until one of them finds something worth doing.
 
 **Services** run every frame regardless of which state is busy (`RegisterService`, anything
 with `key` + `Pulse()` and optionally `Stop()`). They are for work that cannot wait for its
-requesting state to get another turn. Seven exist: **Movement**, which has to release its keys
+requesting state to get another turn. Nine exist: **Movement**, which has to release its keys
 on the frame its task ends rather than whenever FollowState next runs; **Casting**, whose whole
 point is that the caster is starving everything below it while the cast runs, so the cast has to
 progress without a turn of its own; **CommandQueue** (`commandQueue.lua`), which runs command
@@ -54,9 +56,14 @@ gaining a level, an AA or a bag of clickies and re-reads what it can do; **Comba
 (`combat.lua`), which holds what we are fighting for the several states that fight it; **Mobs**
 (`mobs.lua`), which holds what is *in* the fight — a wider question than Combat's and one several
 jobs need the same answer to, assembled from four angles including a sweep that has to be paced;
-and **Giving** (`utils/Giving`, wired by `giving.lua`), which walks the four commands and three
+**Giving** (`utils/Giving`, wired by `giving.lua`), which walks the four commands and three
 waits that put an item in somebody else's hands, because a state that walked them itself would
-leave a give window standing open with an item in it the first time a fight took the frame away.
+leave a give window standing open with an item in it the first time a fight took the frame away;
+**Curing** (`curing.lua`), which holds what is on *this* character that a cure would take off and
+who has said so, for the healer that does the casting; and **Consent** (`consent.lua`), which
+watches for this character's own death and consents the group, raid and guild to drag the corpse,
+because everything it does happens in the seconds while no state is going to be given a frame for
+it and the player is looking at a respawn window.
 
 This is a **priority-chain cooperative scheduler**: state order = priority; `Go()` returning
 `false` yields to lower states. The priority bands live in `classes/priorities.lua`:
@@ -65,10 +72,17 @@ This is a **priority-chain cooperative scheduler**: state order = priority; `Go(
 |---|---|---|---|
 | 1 | My commands / Task / DZ | 69 | Tank / grab aggro |
 | 19 | Flee (travel mode) / passive | 79 | DPS (melee/spells) |
-| 29 | Cure | 89 | Looting |
+| 29 | Cure *(reserved, see below)* | 89 | Looting |
 | 39 | Heal | 99 | Anchor |
 | 49 | Pulling | 109 | Following |
 | 59 | Mez (in combat) | 119/129 | Buff / Rest (misc) |
+
+**The cure band is reserved and nothing registers at it.** Curing landed inside the heal state
+instead (see Curing below): a cure and a heal are the same character choosing what to cast with one
+set of gems, and the choice is made in one place rather than by two states taking the frame off each
+other. The band stays in `priorities.lua` because a cure state that acted *without* a healer to
+arbitrate against — a bard, a dedicated curebot — would belong there, and moving the job would then
+be a registration rather than a rewrite.
 
 A bigger number is weaker. The gaps of ten are room for "the same job, but not as strongly":
 `Priorities.heal + 5` is a hybrid healing below the class that heals for a living — and a pet
@@ -129,7 +143,15 @@ Held state is only what cannot be re-derived, and it comes in two kinds:
   drawn from it: FollowState briefly held a `job` field saying whether following or anchoring was
   in force, and it turned out to be unnecessary once conflicting orders cancel each other (a
   follow and an anchor contradict, so the newer one clears the older) — with only one order ever
-  standing, which one it is went back to being something to read.
+  standing, which one it is went back to being something to read. It follows that ending one ends
+  both: `stopfollow` drops the anchor as well, since a character told to stop while parked on one
+  has no second order left to be carrying out, and walking back to the spot reads as the order
+  having been ignored. Keep *all* of the order, too:
+  an anchor is a spot and the zone that spot is in, and the zone was missing until a wipe put a
+  camp full of characters at their bind points still holding the old zone's coordinates and
+  running at them (2026-07). Coordinates only name a place inside one zone, so leaving the zone
+  ends the anchor — a death, a gate and a port are one case — which is the conclusion the follow
+  already reached about a remembered sighting from another zone.
 - **Progress through a procedure the world cannot describe** — a clicked door looks exactly like
   an unclicked one, so FollowState's click-zone chain keeps its step.
 
@@ -161,6 +183,19 @@ cabby/
   mobs.lua            service: what is *in* the fight -- the engagement, the extended target
                       window, the group's defend reports and a sweep for anything in combat
                       stance nearby, merged into one roster that records which angle saw what
+  curing.lua          service: what is on *this* character that a cure would take off, said out
+                      loud for whoever can answer, plus the queue of everyone who has said it.
+                      Every class -- the character standing in a DoT is the only one who can see
+                      it and usually the one with nothing to cure it with; HealState does the
+                      casting
+  consent.lua         service: the consents this character's own death owes -- group, raid and
+                      guild, so the people it is already with may drag the corpse it just left.
+                      Watches for the death itself and paces the commands past the server's
+                      one-every-two-seconds throttle; no order, no frames
+  cons.lua            reader: the con ladder, weakest to toughest, and whether a spawn is at least
+                      a given rung of it. How much of a fight something is, in the one measure the
+                      client gives -- so that "not worth the effort" is spelled one way across
+                      every list that comes to want it
   roles.lua           reader: main tank / main assist, out of the group and raid windows
   travel.lua          the traveling core: follow/anchor orders, trail-follow, and following
                       through zone lines -- clicking a switch, or walking through after a target
@@ -179,12 +214,17 @@ cabby/
                       pet it is (summoned, an enchanter's animation, or charmed) and which of
                       those words it is listening for; no frames
   states/             baseState, fleeState, followState, mezState, meleeState, spellDpsState,
-                      petDpsState, healState, buffState, petSetupState, advLootState, restState
+                      petDpsState, healState, buffState, petSetupState, advLootState, corpseState,
+                      restState
   classes/            priorities (the bands), baseClass (assembly), classes (the registry),
                       and one profile per EQ class
   commands/           the chat-command bus (see below), incl. the toggle/action command factories
   configs/            per-domain config modules (see below)
-  actions/            ActionType interface + implementations + registries
+  actions/            ActionType interface + implementations + registries, plus buffTypes: the
+                      named buffs (`invis`, `lev`, `sow`, ...) a `buff <type>` request is answered
+                      from, each defined by the SPA effects its spells carry; and cureTypes, the
+                      four counters (poison, disease, curse, corruption) that say both what is on
+                      somebody and what would take it off, told apart by the sign of one base value
   ui/                 ImGui menu shell + per-domain panels (states/, actions/, hotbars)
   utils/ (sibling)    Movement/, Casting/ and Giving/ (see below), Time/Timer/StopWatch, Config,
                       Debug/FlowTracer, FileSystem, Json, PriorityQueue (unused), Stack,
@@ -475,6 +515,25 @@ Design rules that matter when adding a caller:
   readings, and FollowState asks `Movement.IsParked()` rather than measuring the distance itself.
   Nothing else inherits this — `m2m` is a `MoveTo` and still arrives exactly, and `Stick` holds
   its engage range for melee, where a buffer would be a swing missed.
+- **How much room a follow keeps is a setting, and a fight moves it.** The pair above is what
+  `TravelConfig` hands `travel.lua`: **Follow distance** (13) is what a quiet group holds, and the
+  buffer is derived from it at three quarters again (so 13 → 22.75, and a distance moved to 40
+  takes its buffer with it) — one knob, because moving one of the two alone is the mistake the
+  bullet above describes. Beside it is **Give the fight room** and a **Fighting distance** (40),
+  which is the same pair re-derived: while `Combat.IsGroupFighting` is true the follow holds out
+  there instead, and `travel.lua` pushes the change into the follow already running
+  (`Movement.SetFollowHold` → `Follow:SetHold`) rather than restarting it, because a fresh task
+  starts with no trail and a straight line through whatever is between us. The trail, the task id
+  and the hysteresis all survive the retune — which threshold is in force is about what we were
+  doing a moment ago, and that did not change because the numbers did. Two things it buys: a caster
+  is not parked in the melee ring for every ae and rampage, and a follower that is standing still is
+  a follow band that is *not busy*, so buffing and resting (below follow in the chain) get frames
+  for as long as the fight walks around. It can only ever reach a character with nothing to do in
+  the fight — anything with a job in it is busy at a band above follow and never drives the travel
+  core at all — which is why it is on by default. A run is not a fight: `Status.IsFleeing` holds the
+  base distance whatever the setting says, since the follower that spread out on the way to the zone
+  line is the one that did not make it. The Follow State page shows the distance **in force**
+  alongside the two settings, which is how the relax is seen doing anything.
 - **Parking stops the walking, not the recording.** The target's route while we sit is precisely the
   part that is *not* history yet, so a parked follow keeps banking it and walks it when they move
   off. All that being parked retires is a warp seam — standing with them is proof that a jump in
@@ -583,11 +642,26 @@ Rules that matter when adding a caller:
   stun look identical from outside. `CastOutcome` registers an `mq.event` per line and feeds the
   reason in; the sequencer checks that before anything it can work out itself. Lines arriving
   while a cast is merely *preparing* are somebody else's (a proc, a pet) and are ignored.
-- **Resists arrive late.** "Your target resisted" comes after the cast bar closes, by which time
-  the cast has already been reported as a success. Rather than delay every result to wait for a
-  line that usually never comes, the service refines the recorded result for a couple of seconds
-  afterwards — so a caller that cares about resists reads `GetResult` on the frame *after* it
-  first goes terminal.
+- **The bar closing is not the answer, only the question.** A cast bar goes down the same way
+  whether the spell went off or the cast was lost, and a fizzle is decided at the *server's* end of
+  the cast — half a ping behind the bar our own client has already finished drawing, with the line
+  saying so spending the other half getting back. Finishing on the spot therefore reports every
+  fizzle as a landed spell, which is the one mistake a buff cannot survive: the caller believes it
+  is on somebody and stops asking for the next half hour. So a completed cast waits a round trip to
+  be contradicted (`CastTask.ConfirmLanded`) before it is called a success. An evidence window, not
+  a give-up timer — running out *is* the answer — and nothing is held hostage by it: the character
+  may move throughout, since there is no bar left to lose, and the wait is shorter than the spell
+  recovery that follows every cast anyway. Calling the cast off during it is ignored for the same
+  reason there is nothing to interrupt: the mana is spent either way, and cutting the wait short
+  would only throw away the answer.
+- **Resists arrive late too, and mean the opposite.** "Your target resisted" is not a reason the
+  cast ended — it is what the spell did once it landed, so hearing one is proof the cast completed.
+  Arriving inside the window above it settles the cast as the success it is, carrying the resist as
+  its outcome; arriving after, it refines the recorded result for a couple of seconds. Which is why
+  a caller that cares about resists reads `GetResult` on the frame *after* it first goes terminal.
+  A *broken* line that outruns the window gets the same treatment in reverse, flipping the recorded
+  success to the failure it really was, so nothing that says a cast was lost is ever simply
+  dropped.
 - **A behavior level with the cast still has to be asked.** The floor starves everything
   *weaker*, but the state that asked — a melee rotation firing a spell out of its own action
   list — keeps its turn, and re-sticking to the mob is exactly what loses the cast it just
@@ -604,6 +678,15 @@ Rules that matter when adding a caller:
   first, since between them they also say *where* the item is; behind them sits `ReagentNames`, a
   generated id → name table covering every component id in the client's own spell file, and an id
   is the last resort. "missing item 10015" is a puzzle; "missing Malachite" is a trip to a vendor.
+- **A fear refuses a spell rather than waiting it out.** While `Me.Feared` the character runs where
+  the server points them, so the stillness a cast bar needs is never coming — and a cast already
+  waiting to settle would wait out the whole fear with its caller's priority floor up, over a cast
+  that was never going to happen. `CastTask` asks at each of the three points a fear can reach a
+  cast (validate, hold-still, fire) rather than once, because the seconds spent targeting and
+  memorizing are exactly when it lands; `CastAction:IsReady` says the same up front, so a rotation
+  stops asking instead of burning a refused cast every frame. Items and AAs are not gated, as they
+  are not for a silence: an instant clicky or AA has no bar to lose, and one of them may be the way
+  out of the fear. Melee skills answer the same question for themselves, in `Skill:IsReady`.
 - **It never retries.** A fizzle or an interrupt is reported and the caller decides whether
   casting again is still the right thing to do; by then the mob may be dead or the heal no longer
   needed. MQ2Cast loops internally because a macro has nowhere else to put that decision. A state
@@ -611,6 +694,15 @@ Rules that matter when adding a caller:
 - Preparation runs as far as it can in one frame (the steps chain until one has to wait on the
   client), so a character standing still with the spell memorized casts on the frame it was asked
   to.
+- **A spell that is not memorized gets memorized, into an empty gem where there is one.** Which
+  gem is decided at the moment of memorizing rather than when the cast was asked for, because
+  seconds pass in between — targeting, standing still — and the bar is the player's to change in
+  them. The order is: the gem the caller named (`/ccast … gem4` means gem 4, whatever is in it),
+  then any empty gem, then the configured one. Preferring an empty gem is not a nicety: the whole
+  cost of memorizing is what it replaces, and it is what makes the behaviour settle — each spell a
+  rotation is short of claims an empty gem once and stays there, where a single fixed gem would
+  have two unmemorized slots casting over each other for the whole fight. Once the bar is genuinely
+  full that is what happens, and the configured gem is the user's say in which one pays for it.
 - **Preparing does not give up, and there is no setting to make it.** Waiting to stand still,
   waiting to get on target, waiting on a memorize, waiting for a hand cast to finish — every one
   is a wait for something that will change, and the retry *is* the command: `/mqtarget` and
@@ -623,9 +715,10 @@ Rules that matter when adding a caller:
   drops one when the target dies). A cast stuck on the same reason for thirty seconds says so once
   in chat rather than waiting silently.
 
-  Two things that look like give-ups are not: `notReady` after a short grace is the answer to "the
-  gem is on cooldown", which is a real no rather than a not-yet, and the in-flight timeouts below
-  are faults rather than waits.
+  Three things that look like give-ups are not: `notReady` after a short grace is the answer to
+  "the gem is on cooldown", which is a real no rather than a not-yet; `feared` above is the answer
+  to a wait that cannot end in a cast; and the in-flight timeouts below are faults rather than
+  waits.
 - What *is* bounded is everything after the command goes out, because those are faults rather than
   waits: a cast that never appears on the client is `didNotStart`, and a cast bar that never
   closes is `timedOut`.
@@ -637,7 +730,8 @@ cancels it. Settings (memorize gem, settle window, preparation budget) live in
 
 Callers today are `/ccast`, any configured action slot holding a spell, clicky or AA (see Action
 system below), and the five states that ask for casts directly: heal, spell dps, buff, pet and
-mez. Cure does not exist yet.
+mez. Cures are the heal state asking as well — a cure and a heal are one character choosing what to
+spend a gem on, so they go through one caller rather than two (see Curing).
 
 **Mez is the caller that reads a result twice**, and it is worth knowing why before writing
 another one: a resist arrives *after* the cast bar closes, so the service reports the cast a
@@ -702,7 +796,11 @@ and the pet state.
 
 - **Skill** (`skill.lua`): melee skills via `/doability`; static registry `skills.lua` tags
   each skill with attributes (facing, targeted, primary, secondary, melee, …) and builds
-  ordered category lists. Per-instance 500 ms wall-clock cooldown timer.
+  ordered category lists. Per-instance 500 ms wall-clock cooldown timer. `IsReady` is false
+  while `Me.Feared`: a feared character is pointed where the server points them, so the ability
+  is spent on whatever is in front of us and comes back on its reuse timer regardless. The
+  facing attribute does not cover it — the sweep past the target reads as facing it — and it is
+  answered here rather than by each caller because it is a fact about the character.
 - **Discipline** (`discipline.lua`): combat abilities via `/disc`; `disciplines.lua` scans
   `Me.CombatAbility(1..200)` at require time and buckets by SPA (92/192 → hate) and target
   type (Single → melee). (`taunt` bucket exists but is never populated — bug.)
@@ -716,16 +814,25 @@ and the pet state.
 
   `IsReady(request)` is deliberately stricter than the cast's own checks, because a rotation walks
   its whole list every frame and each item on it would otherwise raise the priority floor, starve
-  the states below, and then fail: not without the mana, not without a target in range, and — for
-  spells — **not unless it is memorized**. The request matters twice over: `targetId` is who the
-  range and line of sight are judged against (a heal is chosen for a group member nobody has
-  targeted yet), and `priority` is what decides whether a cast already in flight means "not now".
-  A cast in flight normally does — but a caller that outranks whoever is casting is exactly who
-  should take it over (`Casting.CanPreempt`), and answering "not now" to them would put the
-  priority chain's whole point out of reach: a heal could never interrupt a nuke. The casting
-  service *can* memorize, and anything asking for one specific cast should let it, but a
-  rotation that stops to memorize mid-fight stops for eight seconds. The picker marks which
-  spells are on the bar so a slot that will never fire is visible while it is being configured.
+  the states below, and then fail: not without the mana, and not without a target in range. The
+  request matters twice over: `targetId` is who the range and line of sight are judged against (a
+  heal is chosen for a group member nobody has targeted yet), and `priority` is what decides
+  whether a cast already in flight means "not now". A cast in flight normally does — but a caller
+  that outranks whoever is casting is exactly who should take it over (`Casting.CanPreempt`), and
+  answering "not now" to them would put the priority chain's whole point out of reach: a heal
+  could never interrupt a nuke.
+
+  **Not being memorized is not one of the reasons.** It was once, on the grounds that a rotation
+  stopping to memorize mid-fight stops for eight seconds — but what that bought was a slot the
+  user had configured, that the page marked ready, that never fired and never said why. A spell
+  not on the bar is a memorize away and the service does it (into an empty gem where there is
+  one, so the usual case costs only the seconds), once per spell rather than once per cast, with
+  everything stronger than the rotation free to preempt it meanwhile. The one thing `IsReady`
+  still has to be careful about is the gem timer: `CastSubject:IsReady` reads false for an
+  unmemorized spell too, so it is asked only of a spell that has a gem — otherwise a slot holding
+  one would be never ready, therefore never memorized, therefore never ready. The picker still
+  marks which spells are off the bar, now as a cost to know about rather than a slot that will
+  not work.
 
 **Action** (`action.lua`) is the *persisted config shape* for a user-configured action slot:
 `{ name, actionType, enabled, luaEnabled, lua, end_type, end_threshold }`. `luaEnabled`
@@ -863,19 +970,20 @@ it is worth it, and when to give up. What Combat does is narrow:
   bottom of the chain in the middle of a pull. It did, once: that was the warrior sitting down
   mid-fight. The linger is deliberately shorter than any real gap between pulls, because between
   pulls the fight *is* over and falling through to rest is the design working.
-- **Picks one up.** With `autoengage` on (throttled to 250 ms; every pulse while seeking): for
-  the main tank a live `defend` report first, then the main assist's target, then an
-  extended-target sweep — see Assisting and Defending below. `Auto Hater` is the client's own
-  word for "this is fighting you", which beats anything we could work out ourselves.
+- **Picks one up** (throttled to 250 ms; every pulse while seeking): for the main tank a live
+  `defend` report it can reach first, under its own `answerdefend` switch, and then — with
+  `autoengage` on — the main assist's target, then an extended-target sweep. See Assisting and
+  Defending below. `Auto Hater` is the client's own word for "this is fighting you", which beats
+  anything we could work out ourselves.
 - **Defends the group.** The mob eating the healer is invisible to the tank's client — the
   extended target window only lists what hates *you* — so the fact is spoken from where it is
   knowable: any character something is actually coming for (`PctAggro` 100, the same reading
   `IsUnderAttack` is built on) says `defend <ids>` out loud, once per NPC group-wide, and the
   main tank keeps the heard reports as standing facts and engages one the moment its hands are
-  free. Every character keeps that same table, which is what makes the dedup group-wide: it is
-  the tank's radar and everyone else's record of what has already been called. An engaged tank
-  never switches targets off a report — the reports are the memory, and the fight's own end is
-  when they are read. See Defending below.
+  free and it is close enough to reach it. Every character keeps that same table, which is what
+  makes the dedup group-wide: it is the tank's radar and everyone else's record of what has
+  already been called. An engaged tank never switches targets off a report — the reports are the
+  memory, and the fight's own end is when they are read. See Defending below.
 - **Honors a fight started by hand**, above the `autoengage` gate: the player's attack being on
   while the client says real combat has begun engages the client's target as an order. The combat
   flag is asked as well as the toggle because the toggle alone is not intent — autoattack survives
@@ -900,6 +1008,23 @@ it is worth it, and when to give up. What Combat does is narrow:
   the target (the death, the poofed corpse) is the seek's business, not this switch's. Neither
   reads while flee is on: travel drops auto attack every pass as bookkeeping, and the flee order
   has already said everything there is to say about the fight.
+- **Remembers being called off**, which is what makes any of the above stick. Disengaging alone
+  does not: every automatic way of picking a fight up is *memory that outlives the engagement*, so
+  a bare disengage is undone on the next pulse — a standing `defend` report re-engages the same mob
+  (and does it above the `autoengage` gate, so that switch is no answer), the hater sweep picks the
+  thing beating on us straight back up, and the client's own attack toggle left on from that fight
+  reads as a hand-started one. `Combat.CallOff` is the deliberate end — `attack off`, an `assist
+  off` call, `/cattack off`, the Back Off buttons, and the two switches above — and it records the
+  mob as **refused**: the defend pickup, the assist-target read, the hater sweep and the leftover
+  toggle all step over that id, and the Back Off button finally means what it says because the
+  swing is dropped too (from `Pulse`, not from the button — `SetAutoAttack` runs a game command).
+  Bounded by the world and never by a clock: a refusal dies with the mob, the zone or a flee,
+  swept on the same 250 ms cadence as the reports and the heard calls, or the moment a person names
+  the mob again — `Combat.Engage` is where that happens, and every route in from somebody's word
+  (`attack <id>`, an `assist` call, the Attack button, a *press* of the attack key) goes through
+  it. A fight ending by itself refuses nothing: dying, an empty seek and a flee are plain
+  `Disengage`, because a mob that killed us is not one we are being kept off when we come back for
+  it. `/cattack` lists what is standing.
 - **Says what is coming for us, and not only that something is.** `IsUnderAttack` in detail is
   `GetUnderAttackIds`, and the *leaving* of that list is a fact too: a mob somebody else has taken
   is one we are no longer most hated by, which is how the pet dps state knows a peel took without
@@ -919,6 +1044,16 @@ it is worth it, and when to give up. What Combat does is narrow:
   twenty TLO reads off the same list. It is what a debuff spread across the fight is aimed by (see
   Damage: melee and spells), and it says nothing about whether any of them can be *reached* —
   that is the caller's question, asked of the world every pass.
+- **Says whether there is a fight on at all, ours or not.** `IsGroupFighting` is `IsEngaged` for
+  the character that has no part in the fight it is standing in — a healer between casts, a caster
+  out of mana, anybody with auto-engage off — and it is every angle this client is handed, merged:
+  our own engagement (continuity and all, so it does not blink between two mobs of one fight),
+  anything on the extended target window, the standing defend reports, and a heard `assist` call.
+  The last three are the tables `GetFightIds` reads, already swept for death, zone and flee, which
+  is what keeps it from standing true over a camp that stopped fighting ten minutes ago. What it
+  cannot see is a fight nobody here is part of and nobody announced, and that silence is the honest
+  answer — there is no reading another player's combat state. `travel.lua` is what reads it: the
+  follow relaxes its hold distance while it is true (see Movement).
 - **Says what the group's main tank is fighting**, which is the one thing a client is ever told
   about another character's target — `Combat.GetTankTargetId`, assembled from the tank being us,
   the tank's own heard `assist` call, or the client's assist record when the tank holds that role
@@ -934,8 +1069,8 @@ it is worth it, and when to give up. What Combat does is narrow:
   pet state reads it for its taunt and for the same reason. What each state does about it is its
   own (see The two dps states).
 - **Owns the `attack` order**, the `assist` call, the `defend` report, the `autoengage`,
-  `callassist`, `calldefend`, `easeoff`, `engageonattack`, `assistonengage`, `disengageonattackoff`
-  and `disengageontargetclear` switches, and reports on `/cattack`.
+  `callassist`, `calldefend`, `answerdefend`, `easeoff`, `engageonattack`, `assistonengage`,
+  `disengageonattackoff` and `disengageontargetclear` switches, and reports on `/cattack`.
 
 **It runs no game command that decides anything**, which is what makes `Combat.Engage` safe to call
 from an ImGui button. The Attack button used to call `MeleeState.EngageTargetId`, which ran
@@ -974,6 +1109,14 @@ is what says whether something weaker may replace it:
 | `assist` | an `assist` call, or the assist's target | only by the next call |
 | `hater` | the extended-target sweep | no, while it lives |
 | `rescue` | a `defend` report, picked up by the main tank | no, while it lives |
+
+The table is about what may *replace* an engagement. What ends one without replacing it is the
+other half of the same question, and only `order` has an answer there: a fight that ends by itself
+(an empty seek, a death, a flee) leaves nothing behind, while one somebody **called off** leaves a
+standing refusal of that mob that the three automatic sources all step over — see
+`Combat.CallOff` above. Without it the strongest source is the weakest in practice: the three that
+this character works out for itself are all backed by memory that outlives the engagement, so they
+re-decide on the next pulse, and the order — which has no memory at all — loses.
 
 Rules the code depends on:
 
@@ -1066,16 +1209,41 @@ So the fact is spoken from where it is knowable, and the two halves are delibera
   **zone** (spawn ids do not survive one, so a kept id is meaningless at best and a collision
   with a fresh spawn at worst) or a **flee** (a run is the player taking the fight back; kept, a
   report would charge the tank across ten zones the moment the run ends — new ones are refused
-  meanwhile, exactly as `assist` calls are). With `autoengage` on, an unengaged tank engages the
-  longest-standing live report — the group's attackers before even the group's target, for the
-  one character whose job is protecting it — as source `rescue`, named for its victim ("it is
+  meanwhile, exactly as `assist` calls are). An unengaged tank engages the longest-standing live
+  report it can reach — the group's attackers before even the group's target, for the one
+  character whose job is protecting it — as source `rescue`, named for its victim ("it is
   attacking Lieph"), and `callassist` then announces it so the whole group converges. An engaged
   tank never switches targets off a report: the reports are the memory, and the fight's own end
   is when they are read — a fight whose target just died reads them from inside its seek, so a
-  pull's add is the same continuous fight and `IsEngaged` never blinks. The pickup sits
-  deliberately above the tank's own `CombatState` gate, because the tank is precisely *not* in
-  combat while the add is only on the healer; the reporter already asked the combat-flag
-  question on the client where the fact lives.
+  pull's add is the same continuous fight and `IsEngaged` never blinks. That wait is the point,
+  not a limitation of it: a tank that switched the moment a report landed would drop a mob at 5%,
+  walk its hate list back to nothing, and drag the group's damage across the camp — and a group
+  whose mez is holding because the tank is standing still would watch the tank run through the
+  mezzed pile to get somewhere. The pickup sits deliberately above the tank's own `CombatState`
+  gate, because the tank is precisely *not* in combat while the add is only on the healer; the
+  reporter already asked the combat-flag question on the client where the fact lives.
+
+  **`answerdefend` is the switch, on by default, and it is deliberately not a corner of
+  `autoengage`**: answering the group's call for help is a different choice from picking fights up
+  unbidden, and a tank the player is driving by hand — auto-engage off, taking `attack` orders
+  only — still wants the add that went for the healer. Only the main tank role acts on it, so
+  every other character carries it unused until the day it is handed the role.
+
+  **A report is answered only from where it can be answered**: closer than 100 (`Distance3D`) and
+  in sight, the same reach the melee state's engage distance defaults to. A report is heard from
+  anywhere in the zone — bc reaches every connected character — and answering one blind is a
+  charge across the camp through everything in between. Out of reach is *not* stale, and the two
+  are answered differently: the world taking a mob back drops its entry for good, while distance
+  or a wall only skips it, leaving it standing to be picked up the beat the group closes on it.
+  A mob the tank was **called off** by hand is skipped on that same footing and for the same
+  reason — the report is still true, somebody is still being eaten, and it is the tank that is
+  being kept off it. This is the standing report meeting the standing refusal, and the refusal
+  wins: the report is this client working something out, the refusal is a person's word. Put the
+  tank back on the mob by name and the report is answered on that pass.
+  Unreadable line of sight reads as visible, the way it does everywhere else in cabby — the client
+  declining to answer is not a wall, and a group member is being eaten. Sight and distance are
+  asked only of a report that would win on age, so the usual pulse pays for one reachability read
+  rather than one per entry.
 
 The listener's ACL is the usual owner list **widened by the group**: reports are machine-spoken
 by whichever characters happen to be grouped with the tank, and a group assembled fresh would
@@ -1351,7 +1519,7 @@ What each one holds:
 | Gets on target | yes, `/mqtarget` from its own pulse | no, the casting service targets |
 | Movement | sticks, at the configured engage distance | none; it casts from where it is |
 | Actions offered | skills, discs, AAs, clickies | damage spells and damage shields, AAs, clickies |
-| Holds back for | a mob pulled off the main tank (`easeoff`) — otherwise nothing, swinging is free | the same, plus target above `start below %` (shields excepted), below `stop below %`, mana under the floor, a slot's own moment |
+| Holds back for | a mob pulled off the main tank (`easeoff`) — otherwise nothing, swinging is free | the same, plus target above `start below %` (shields excepted), below `stop below %`, mana under the floor, a slot's own moment, a slot's own con floor |
 | Switch | `melee` | `nuke` |
 | Action command | `action` | `nukeaction` |
 
@@ -1383,6 +1551,31 @@ resume on the pass the tank is back on top of that hate list, with nothing remem
 no timer anywhere — "it has been a while, start again" would be starting again into a mob that is
 still coming for us. The switch is on by default, and a group that has named no main tank never sees
 it.
+
+**Every slot also carries a con floor** (`dps_con`), which is the one dial on this page both
+halves of the list get. The three numbers above are restraint *within* a fight — when to start,
+when to stop, what mana to keep back — and none of them says which fights are worth the effort in
+the first place. That is what a floor says: how much of a fight the mob has to be before what this
+slot costs (a four second cast, an item on a long timer, the mana in a damage shield) is worth
+spending rather than kept for the next pull. It is a ladder, weakest to toughest — *any con* (the
+default, and what every slot does until it is told otherwise), then green, light blue, blue, white
+and yellow, each including everything above it, then *red only* at the top. A floor at the bottom
+rung is answered without reading the world at all, so a rotation that never asked the question pays
+nothing for it and behaves exactly as it did before the setting existed.
+
+Which mob is being conned falls out of what the slot is: one aimed at the mob is judged against
+what it would be cast at, and a slot spread across the fight judges each mob on its own, exactly as
+timing is asked per mob. A slot cast on a *friend* is judged against **what we are fighting** — how
+much trouble we are in is a fact about the mob and not about whoever ends up wearing the shield —
+and that is the half the setting was wanted for: a damage shield is the most expensive thing in a
+rotation and the least needed on something that dies in two swings, so "put it on the tank when
+this is actually a fight" is a con floor and nothing else. A mob the client will not con counts as
+*not* tough enough rather than as tough enough, the same reading an unreadable health gets, so
+nothing expensive goes out on a guess.
+
+The ladder itself lives in `cons.lua` rather than in this state, because the question is the same
+wherever it turns up next — the grey mob not worth a damage shield is not worth a discipline, a mez
+or a summoned pet either — and one spelling of "light blue" for all of them is the point.
 
 **A slot aimed at the mob also carries its own moment** (`dps_timing`), because the numbers above
 are one answer for the whole rotation and a debuff is the case where that is not enough. The same
@@ -1499,17 +1692,22 @@ three people were scuffed.
 
 The order things are decided in, every pulse:
 
-1. **An order first** (`healnow <id>`, `healme`). Someone asking outranks the state's own judgment —
+1. **A cure, unless somebody is in real trouble** (see Curing below). Above every heal because the
+   two are not the same kind of cost — a heal gives back what has been taken, a cure stops the
+   taking, and what it stops is finite. Below anyone at or under the emergency point, judged the
+   careful way (is there somebody in trouble this state *would* cast at, not merely somebody with a
+   low number), so a rezzed group-mate parked at 15% cannot block curing forever.
+2. **An order** (`healnow <id>`, `healme`). Someone asking outranks the state's own judgment —
    that is the point of being able to ask — so the slots are read only for *which* heal suits
    them: scope still applies, the health the slot was written for does not. A target already at
    full health is refused out loud rather than healed, and an order that cannot be acted on within
    ten seconds is dropped rather than landing long after it mattered.
-2. **A group heal**, when enough of the group is at or below the slot's threshold (`group_min`).
+3. **A group heal**, when enough of the group is at or below the slot's threshold (`group_min`).
    Whether a slot *is* a group heal is the spell's aim, not a setting — a group heal is what it is,
    and asking the user to say so is one more thing to get wrong. Skipped entirely while anyone is
    below the emergency point: three people at 60% is what a group heal is for, and one person at
    15% is not, however many others are scuffed.
-3. **Whoever is worst off**, with the first slot whose aim, scope and threshold fit them.
+4. **Whoever is worst off**, with the first slot whose aim, scope and threshold fit them.
 
 **A heal in the air is reconsidered every pulse.** It is called off when the target dies or leaves,
 when they climb back above the threshold that triggered it (plus a margin, so a heal landing from
@@ -1523,8 +1721,10 @@ Two smaller rules worth knowing:
   new health, and without a settle window the next pulse reads the old number and casts the same
   heal at someone who no longer needs it. Anyone below the emergency point is exempt — chain
   healing a tank at 20% is the entire job.
-- **Only memorized spells are used**, because that is what `CastAction:IsReady` requires of every
-  action slot (see Action system). A heal that stops to memorize stops for eight seconds.
+- **A heal that is not on the spell bar is memorized first**, like every other action slot (see
+  Action system) — into an empty gem where there is one. It costs seconds the first time that heal
+  is wanted and nothing afterwards, which is the trade that was worth making: the alternative was
+  a configured heal that silently never went out.
 
 **Who is watched is what the two switches decide**, and it is worth saying plainly because the
 names invite the other reading: `healgroup` is whether group members are somebody this character
@@ -1551,6 +1751,116 @@ switch in the family, complaining about spawn ids nobody typed. Worth knowing be
 commands for the next state: **no registered phrase may be a prefix of another** — and where a name
 is worth the collision anyway (`petgear` inside `petgearing`, see Pet setup state), the handler has
 to drop lines whose next character is not a space, which only a command with no arguments can do.
+
+There is one way out of that for a command whose arguments are *mandatory*: **register the phrase
+with a trailing space**. The phrase is substituted into the pattern as literal text, so `"buff "`
+listens for `<#1#> buff #2#` — text `buffme` and `buffgroup` do not contain and every real
+`buff <type>` line does. It buys a name that would otherwise be unusable, and it costs nothing
+anywhere else, because every consumer reads a phrase as `Split(...)[1]`. It is only correct when the
+command cannot be spoken bare: `buff` on its own would no longer be heard at all. See Buff state
+requests below, which is the one command that does this.
+
+### Curing (`curing.lua` + `actions/cureTypes.lua`)
+
+Curing is **two jobs owned by two different characters**, and that is the whole shape of it. The
+asking runs on every class as a service; the answering rides in the heal state.
+
+**Why it has to split that way.** Another player's debuffs are not readable — the client caches a
+spawn's buffs only when it is targeted, and nothing targets a group-mate mid-fight to check. So the
+fact "there is a two-minute poison on me" exists *only* where it is suffered, and the character
+suffering it is usually a warrior with nothing to cure it with. A healer that tried to discover
+afflictions would be a healer target-swapping around the group every few seconds. So the afflicted
+character says so, and whoever can answer, answers.
+
+**The counter is the whole model** (`actions/cureTypes.lua`). EverQuest gives every curable
+affliction a number of counters of one of four kinds — poison, disease, curse, corruption — and a
+cure removes some of them. The affliction carries the counter effect at a *positive* base ("Increase
+Disease Counter by 9"); the cure carries the same effect at a *negative* one. That sign is the only
+difference between the two, and it is what lets one table answer both halves: what is on somebody,
+and what would take it off. No spell name and no heading is consulted, the same standard
+`buffTypes.lua` and `Spells.Controls` are held to. It also means **"best" has an exact answer**:
+the most counters stripped, read straight off the effect — which is where this departs from
+`BuffTypes.Best`, whose "best" is the highest rank of a line. Cure ranks are not reliably in level
+order, and an old one-counter cure and a new nine-counter one are the same spell to a level sort.
+
+**The asking** (`curing.lua`, a service, every class). Twice a second the buff and short-duration
+windows are walked, one `Spell.CounterType` per occupied slot — "None" for everything a cure cannot
+touch, which is nearly every buff on nearly every bar — and only a slot that answers otherwise is
+read properly. There is deliberately no character-level gate in front of that walk:
+`Me.TotalCounters` is the obvious one and is **a lie on an emu server**, because the client sums it
+out of per-buff slot data that EQEmu never sends (`// TODO: implement slot_data stuff`, RoF2
+encoder). It reads zero on a character visibly dissolving, so gating on it did not make curing cheap
+— it turned curing off everywhere, silently. The rule it leaves behind: **anything read off a
+buff's instance rather than its spell is suspect here**; the spell file is local, complete and the
+same on every server. Duration is fine — it is what the icon counts down. Anything with **more than
+a minute left** is said out loud as `cure <type>`, once, and again every twenty seconds while it
+lasts. The minute is the line between "this will keep hurting" and "this is nearly over": a cure has
+to be chosen, aimed, cast and land, and a DoT with twenty seconds left will have faded through all
+of it. It is read against what is *left*, not the spell's length, so the same three-minute DoT is
+worth asking about in its first two minutes and not in its last. Off with `callcure off`; the
+fallback channel is bc, like the defend report, because it is machine-to-machine traffic rather than
+something the group reads.
+
+**The repetition is load-bearing, not chatter.** It is what keeps the queue honest across everything
+no client can see — a cure that fizzled, a curer that zoned, a request that arrived while nobody
+could answer. It is also what a request's TTL is measured against: an entry nobody has repeated in
+three windows has stopped meaning anything (a **domain TTL on the meaning of an order**, not a
+give-up timer — the affliction has gone, or its owner has).
+
+**Keeping a request and casting on one are measured differently**, and the gap between them is what
+stops cures landing on people who are already clean. Keeping is a bet that a line went missing, so
+it tolerates three silent windows. Casting is a claim about the world *right now*, and the only
+character who can make that claim is the one afflicted — who says so every twenty seconds for
+exactly as long as it stays true and goes quiet the moment it does not. So a request nobody has
+repeated in one window and a half is **held rather than dropped**: it stays queued in case the line
+was lost, and one repeat makes it live again. Without that gap the queue happily casts on a
+minute-old statement — a DoT that had a minute left when it was said and seconds left when the cure
+lands, and then a second cure after it is gone entirely.
+
+**The queue** lives in the service, because "who has said they need a cure" is a fact a curer reads
+rather than a state's private bookkeeping — the same relationship every state has with Combat's
+engagement. Requests are keyed by *person and kind*, so saying it again refreshes rather than
+stacks, and a queue cannot grow for as long as somebody is poisoned. Nothing is queued that this
+character cannot answer (`CureTypes.Best` comes back empty), so a warrior hears every request and
+holds none. Our own afflictions take a place in the same queue, put there and taken out by the scan
+rather than by chat — which is what makes a solo cleric cure itself, and what makes hearing our own
+line on an echoing channel a no-op rather than a duplicate.
+
+**The answering** (heal state). One setting, `curing` — Disabled / out of combat / in battle too —
+because the second question only means anything when the first is on; two checkboxes would offer a
+fourth state that stands for nothing. There is **no slot list**, and that is the point: the person
+afflicted has no idea what anybody hearing them can cast, so the answer is discovered rather than
+configured. The state walks the whole queue rather than only its head — a cure is aimed at a person,
+and holding everybody up for one who is out of range while somebody reachable asks again every
+twenty seconds would be a healer doing nothing — but takes the first it *can* cast, so a reachable
+queue is still answered oldest first.
+
+**A cure that landed is not a job that is done.** A cure strips a fixed number of counters and an
+affliction can carry more than one cast's worth, so the request stays queued and what finishes it is
+the counters actually being gone. That is read back off the target's buff cache — which the cure's
+own targeting is what populated — with the three answers kept apart: still on them, off them, and
+*no way to tell*, which must never be read as the second. An empty cache and a clean bar are
+identical from here. Being unable to see is exactly what the repetition from the other end covers,
+and a cast budget bounds the case where neither ever resolves.
+
+**That read-back gates the cure itself, not only the drop.** A queue that has been held up — the
+asker around a corner, out of range, a fight this character will not cure during — is precisely a
+queue full of answers nobody has checked, and a blockage lifting then discharges it as a burst of
+cures at people who no longer need them. So a request's bar is read *before* the cast as well as
+after, and what makes the reading trustworthy is **having looked at them**, tracked as its own thing
+rather than inferred from having cured them. Looking means targeting: another player's bar arrives
+in one complete packet when the client targets them and never otherwise. Any target counts — the
+cure's own, a heal at the same person, the player clicking them — and crucially **a cast that failed
+counts too**, because a cure targets first and checks line of sight second, so somebody behind a
+wall is targeted by every attempt and cured by none. Hanging it off successful casts is exactly what
+let that queue build up. The stamp waits for the cache to have something in it, since the buff
+packet follows the target by a round trip and that gap would otherwise read as a clean bar.
+
+A look is believed for one ask window. The client **counts the snapshot down by itself** — an entry
+whose duration runs out is dropped without re-targeting — so a look stays exactly right about an
+affliction *ending*, which is the question, and can only go wrong about one *arriving* since. That
+is why it is trusted at all and the only reason it expires; being wrong costs one refused cure and
+then a cast that re-targets them and settles it.
 
 ## Buff state (`states/buffState.lua`)
 
@@ -1603,9 +1913,11 @@ page says so on the row.
    be read back, only ever get a short window (the hand-removal grace), after which the buff
    itself is consulted again. And everybody else is *verified* about once a minute while there is
    nothing to cast: the state borrows the target long enough for the server to send what is
-   actually on them (`Target.BuffsPopulated`, a status re-checked each pass — never a held frame,
-   called off by a fight, timing out inconclusive after a second), squares every window against
-   the answer, and puts the target back. Only for somebody in line of sight and inside the reach
+   actually on them (a status re-checked each pass — never a held frame, called off by a fight,
+   timing out inconclusive after a second), squares every window against the answer, and puts the
+   target back. Borrowing means *changing* the target, including looking away first when it is
+   already on them: the client asks the server for a bar when the target changes and at no other
+   time, so a swap that is not a swap sends nothing and the reading never moves. Only for somebody in line of sight and inside the reach
    of a spell whose window is live — the reach read off the spell (`MyRange`/`Range`/`AERange`),
    the same way the cast checks it. Borrowing the player's target is an intrusion, and the answer
    buys nothing when the recast it might call for would be refused for range or sight anyway; the
@@ -1613,6 +1925,29 @@ page says so on the row.
    minute later. All of it is dropped wholesale by `/cbuff refresh` or
    the Check Everybody Now button. A cached entry ages by itself (it reports what is left *now*),
    so a stale cache decays into "they need it" rather than lying about it.
+
+4. **Did it actually land?** A cast aimed at one person is not believed until the buff has been
+   *seen* on them (`startConfirm`/`progressConfirm`). The casting service reports a cast the client
+   stopped showing as a success, and the client is not the authority on that: a fizzle is rolled at
+   the server's end and its line can arrive after the cast has already been called a success — for
+   a buff, the one mistake nothing else catches, since the person is crossed off and nothing asks
+   about them again until a buff that was never cast would have run out. So the state looks. Three
+   answers: **seen** (it landed, and what is really left on it replaces the estimate in the
+   window), **a fresh reading without it** (it did not land, so the caller retries — a request at
+   the same person, the upkeep list on its five-second failure window), and **no fresh reading at
+   all** (the world said nothing, so the cast's own account stands, which is what happened before
+   any of this existed). What makes this a *look* rather than a watch is that the buff landing on
+   somebody already targeted is never seen: the reading held is the snapshot taken when the cast
+   targeted them, from before it was fired, and the partial update carrying the new buff is
+   discarded by MQ on purpose — so freshness is read off the cache entries' own timestamps
+   (`CachedBuff.Staleness`) and a newer reading has to be provoked by looking away and back. Two
+   things are deliberately never confirmed: a cast that already reported failure (it is about to be
+   retried anyway, and a target swap between the failure and the retry buys nothing), and anything
+   landing in the song window, which cannot be read on anybody else at any price — the client sends
+   songs down with the rest of a target's bar and the reader throws that part away, so confirming
+   one would fail every bard song ever cast. A pairing whose sighting has contradicted a cast is
+   taken at the cast's word again for five minutes, a backstop against anything else that turns out
+   to land invisibly.
 
 The order things are decided in, every pass that looks:
 
@@ -1622,7 +1957,8 @@ The order things are decided in, every pass that looks:
    necessity: the casting service would happily wait to stand still, but it would wait holding a
    target and a gem, and a state at the bottom of the chain can afford to ask again later. Bards
    are exempt, since they sing on the move and the casting service knows it.
-2. **The first slot somebody is missing.** List order is the whole priority — unlike healing there
+2. **Anything somebody asked for by name** — see Requests below.
+3. **The first slot somebody is missing.** List order is the whole priority — unlike healing there
    is nobody to rank, since everyone standing here is equally unbuffed, so the ordering that
    matters is the one the user already gave. A group buff is cast as soon as one person in scope is
    short of it, and covers the rest.
@@ -1637,9 +1973,103 @@ missing", so it stays open until a run of casts goes quiet rather than ending on
 which reports busy only while it is actually walking — so buffing happens exactly when the group is
 standing still, without any of the `- 1` band juggling the two dps states needed.
 
-`/cbuff` reports what it is doing and how many buffs each person is missing (worked out on demand;
-it is a whole pass over the list per person). `/cbuff off` calls off the buff in progress,
-`/cbuff refresh` forgets what was worked out about who has what.
+### Requests — `buff <type>` (`actions/buffTypes.lua`)
+
+The other kind of buffing, and the opposite question to everything above. A slot says *keep this on
+these people forever* and is answered from configuration; a request says *hand me one of these,
+now* and is answered from the book. `buff invis` reaches a group of six and the two characters with
+an invisibility spell cast it on whoever asked; the other four say nothing at all.
+
+**A type is defined by the effect its spells carry, never by a name or a heading** — the same
+standard the mez list is held to, for the same reasons. `invis` is `SPA_INVISIBILITY` (12), `sow` is
+`SPA_MOVEMENT_RATE` (3) *with a positive base* (a negative one is a snare), `haste` is SPA 11 **or
+98**, the bard-only effect a haste read would otherwise miss a whole class over. That is what lets
+one typed word land on whichever of Invisibility, Superior Camouflage or Improved Invisibility each
+character hearing it happens to own. The catalogue is data: a type nobody has asked for yet is one
+row, and it holds the buffs people shout for (invis/ivu/iva, seeinvis, lev, sow, eb, haste, ds, hp,
+regen, mana, rune, shrink, vision, resists) rather than the stat lines, which are upkeep and belong
+in the slot list. Names are matched with case and punctuation dropped, so `See-Invis` and
+`see invis` are `seeinvis`, and each type carries aliases — including the short ones people
+actually type: `si` for seeinvis, `c` for mana (the Clarity line, which is SPA 15 over a duration:
+an instant mana gift carries the same effect with no duration and is dropped, and a bigger mana
+*pool* is SPA 97 and a different buff), `uv` for vision, `camo`, `kei`, `stoneskin`.
+
+**Best means the highest rank of the line**, read out of `Spells.beneficial` — which is sorted
+level-first, so the first match wins — rather than out of the buff list, because that list narrows
+by heading and shrink and enduring breath are filed elsewhere. The narrowing buys nothing when the
+effect match is exact, and the duration check does the job the heading was really doing: what
+separates a buff from a heal is that a buff lasts. Self-only and pet-only spells are never chosen —
+neither can be handed to anybody, and both are already upkeep.
+
+**Where a single-target spell is used, the caster is cast on last.** This is the ordering, not a
+nicety: casting drops invisibility, so a character that invises itself first has nothing left to
+hand out and would have to re-cast on itself afterwards — a cast spent undoing a cast. It costs
+nothing for the buffs that do not work that way, so it is unconditional. Whoever asked comes first
+(they are usually not in the group at all — that is what a buff bot is), then the group window's
+order, then this character.
+
+`buff group <type>` prefers a group version when there is one — one gem timer for six people, cast
+at nobody — and falls back to one at a time when there is not. Going the other way, a request for
+one person uses the group spell only when they are actually in this character's group, since that
+is the only case where it reaches them.
+
+**Whoever asked has to be standing here, and that is as true of `group` as it is of one name.**
+Every other request in the family resolves the speaker to a spawn in this zone and declines when it
+cannot, and `group` used to be the exception: the line reaches every character, so one parked
+somewhere else would take it and cast on whoever happened to be around *it* — a group version lands
+on the group members in the caster's zone, not on the people the line was said to, and the
+one-at-a-time fallback walks its own local half of a split group. Out-of-zone group members were
+already dropped from that list (they have no spawn to cast at); this is the same fact one level up.
+A character elsewhere now says nothing rather than complaining, unlike the single-name case: the
+line went to everybody, the characters in the zone are answering it, and a request that was never
+this character's to take is not an error worth six copies of.
+
+**Nothing is remembered afterwards.** A request leaves no rebuff window and no verification mark: it
+is a buff handed over, not a record of what is on anybody, and the upkeep reading squares it with
+the world on its own schedule.
+
+**A failed cast is tried again, and the cast's status is the whole of the reading.** The casting
+service reports a landed cast as `succeeded` and refines it afterwards if it turned out to be
+resisted or unnecessary — so `succeeded` means the spell went off and there is nothing more to do at
+that person, since casting again would have the same no effect. `failed` means the opposite: a
+fizzle or an interrupt spent the mana and lost it, a refusal never left the ground, and in every one
+of those the buff is not on them. This is the one case the service deliberately leaves to the caller
+— it will not retry a cast that was *spent*, and says so, because only the caller knows whether
+casting again is still right — and for an order somebody typed it is, since the commonest failure is
+a fizzle, which is chance and says nothing about the next one. Bounded at four tries against the
+name at the front of the queue, three seconds apart so the retry is not spent on the recast the
+fizzle just started; past that the name is dropped with the reason said out loud, because one person
+behind a wall must not hold up everybody queued behind them.
+
+(This was a real defect, not a hypothetical: the first version moved on after any non-success, so a
+single fizzle on the last name — the caster's own — meant the character that answered the request
+was the one that ended up without the buff.)
+
+(And a second one underneath it, 2026-07: none of the above ran for the case it was written for,
+because the casting service was reporting fizzles as successes. Our cast bar closes before the
+server's does, so the line saying the spell fizzled arrived after the cast had already been called a
+landed one — and a buff believed landed is not asked about again for the length of its duration. The
+fix was the verdict window in `CastTask`, at the service that owns the fact; nothing in this state
+changed, because the reading here was right all along. Same shape as the warrior sitting down
+mid-fight: when a state misbehaves on a signal, audit the signal first.)
+
+A cast *we* called off (a fight starting mid-order) is not a failure at all: it costs no attempt and
+keeps its place until the holding stops. A target who has zoned or died is dropped where they stand,
+which is what finishes an order without a timer. Asking twice replaces the queued order rather than
+stacking a second one.
+
+**The registered phrase is `"buff "`, with the trailing space, and that is load-bearing.** A phrase
+goes into the channel pattern as literal text (`<#1#> buff #2#`), and a bare `buff` would therefore
+also fire on `buffme`, `buffgroup`, `buffing off` and every other switch in this family — which is
+exactly why the order command is called `buffnow`. The space is text those lines do not contain and
+every `buff <type>` line does, since a type has to follow it. Everything downstream reads a phrase
+as `Split(...)[1]`, so the space never leaves the registration: `/chelp buff`, `/cself buff invis`
+and a hotbar button all see `buff`.
+
+`/cbuff` reports what it is doing, what has been asked for and how many buffs each person is missing
+(worked out on demand; it is a whole pass over the list per person). `/cbuff off` calls off the buff
+in progress and every outstanding request, `/cbuff refresh` forgets what was worked out about who
+has what.
 
 ## Pet setup state (`states/petSetupState.lua`)
 
@@ -1974,6 +2404,102 @@ cleared promptly once the fighting is over.
 showing. (The phrase is cabby's own comm command over chat; the client mod separately owns the
 `/advloot` slash command, which this state never uses.)
 
+## Corpse state (`states/corpseState.lua`)
+
+The other half of looting: getting *our own gear* back off the ground after a death. `lootcorpse`
+said to a group of characters standing on their own corpses, and every one of them empties its own.
+
+**It does nothing until it is told to.** There is no habit here, nothing watching for deaths and
+nothing that happens on its own — looting is the one job where acting unasked is how a script loots
+the wrong corpse. And the order is a *job*, not a mode: every corpse of ours in reach is emptied,
+one after another, and when there is none left the order is over. `lootcorpse` again is how it
+happens again; `lootcorpse off` calls it off.
+
+**It walks nowhere.** Only corpses within **50** are looted, which is "we are standing on the pile"
+with room for a group spread around it. Getting the group back to where it died is the player's job
+today — a corpse-*walk* state is the neighbour still missing (see ROADMAP) — so "there is nothing of
+mine lying here" is answered the moment the order is given, on the channel it was given on, rather
+than left to stand as a silent nothing.
+
+**The corpse comes the rest of the way itself.** Each one is targeted (`/mqtarget id`), pulled to
+our feet (`/corpse`) and then opened, one command per pass, so the click that opens it is a click on
+something in arm's reach — finding a corpse reaches 50, looting one reaches a great deal less. The
+pull is fired once per corpse and is the one command here with no answer of its own, which is
+exactly right: the server allows it out to 100 (`Corpse::Summon`, which `GMMove`s the corpse to
+where we are standing without remaking the entity, so the spawn id survives), and that is twice as
+far as this state ever looks. Nothing of ours in reach can be refused the pull, and if one somehow
+does not move, the open below is fired and watched the way it always was.
+
+**Three actions, three answers.** Opening a corpse (`/click right target` on it), looting an item
+(`/itemnotify loot<slot> rightmouseup`) and closing the window (`/notify LootWnd LW_DoneButton
+leftmouseup`) are each fired once and then watched for their evidence, because **the client refuses
+in chat and nowhere else**: too far to reach it, bags full, a lore item already carried, a corpse
+somebody else is looting. A window that never opens leaves that corpse; an item that never leaves
+its slot is left on it; a window that will not close ends the order. Those are evidence windows on
+actions we fired — the world answering no — and not give-up timers; what they buy is a job at this
+band that cannot wedge the chain underneath it.
+
+**What it keeps is progress, not decisions**: which corpse is being worked, that a click is out and
+waiting on a window, which slot was last asked for and what was in it. None of that is re-readable
+— a loot window cannot say who opened it or what was asked of it a moment ago — and every piece is
+confirmed or dropped on the next pass, which is exactly the exception `baseState` carves out for a
+procedure the world cannot reconstruct.
+
+**A window on somebody else's corpse is somebody else's**: not emptied, not closed, and ours waits
+behind it (there is only ever one loot window) — said once when it starts, since waiting is the one
+thing this state does silently and silence is what "broken" looks like. A window already open on a
+corpse *of ours* is the opposite case and is taken over — it is the very thing the order named, and
+who clicked it changes nothing. Anything on the cursor is put away first, because the client hands
+nothing over while it is full.
+
+**`LootWnd` is asked before `${Corpse}`**, and it is the one that decides whether anything is being
+looted at all. `${Corpse}` is the client's active-corpse pointer, and a pointer left over from a
+loot that has already ended reads exactly like one in progress — which would park the order behind
+an imaginary window for the rest of the session.
+
+Where it sits: `Priorities.loot + 5`, registered for every class by `BaseClass` — everyone dies the
+same way. One step below AdvLootState, because a roll nobody has answered is a roll the whole group
+is waiting on while our own gear is waiting on nobody; above follow and rest, so a character told to
+loot does that rather than trotting off after the group with its gear still on the floor.
+
+`lootcorpse` is the order, the Corpse State page has the same two buttons for a character being
+played by hand, and `/ccorpse` reports what it is doing and how far away the nearest corpse of ours
+is. A clean run is reported in our own console; anything left behind is said back to whoever asked.
+
+## Consent on death (`consent.lua`)
+
+The half of death recovery that has to happen *while* we are dead: letting the people we are
+already with drag the corpse. Consent is what the server checks before anybody but us may summon
+one (`Corpse::Summon` — the same `/corpse` CorpseState pulls its own over with), and a corpse
+carries three ids that grant it. `/consent group`, `raid` and `guild` stamp the id we hold **right
+now** onto every corpse of ours the server can find (`Client::ConsentCorpses` → world → every
+zone), which is why this is a service and not a setting said once: a consent given while alive
+names corpses we do not have yet.
+
+**It starts on the first frame `Me.State` reads DEAD or HOVER**, which is a frame with a corpse —
+the corpse is made in the same server tick that tells the client it died, and our answer travels
+back behind it. That is also the last comfortable moment: the consent has to *find* the corpse in
+a loaded zone, and the release to a bind point is what starts emptying the one we died in.
+
+**One consent every two and a half seconds.** The server allows one every two
+(`consent_throttle_timer`) and refuses a faster one with a red "You must wait 2 seconds between
+consents." and nothing else — the consent is lost, and nothing reads back as "that one did not
+take". The pacing is kept across deaths rather than per death, because the throttle it dodges is.
+Group and raid go first (both are stamped on the corpse where it lies, so both want that zone
+still loaded); guild last, since consenting a guild also writes the id onto every corpse of ours
+in the database, buried ones included.
+
+**Only the ties we actually have** are consented — a group we are not in stamps a zero, which is
+what no consent already is, and saying it anyway would spend a two-second slot the real ties are
+waiting for. Nothing goes out while `GameState` is not `INGAME`: a command typed into a loading
+screen is one nobody hears, and the release lands in the middle of this.
+
+What it holds is the one thing the world cannot answer — whether this death has been consented yet
+— which is the `baseState` exception for a procedure the world cannot reconstruct. A script that
+comes up next to a corpse it never watched being made consents nothing: that is a death nobody
+observed, not a reason to act. The switch is `consentondeath` (chat, hotbar button, or the General
+page), on by default, and turning it off drops whatever the current death still owed.
+
 ## Rest state (`states/restState.lua`)
 
 Sitting to get health, mana and stamina back. The job is one sentence — sit while something is
@@ -2130,6 +2656,11 @@ same shape with an empty exemption set.
 - The universal pattern is init-and-validate ("taint"): on Init, write any missing defaults,
   save if anything changed. FollowState manages its section inline; MeleeState has a
   dedicated config module; states diverge here.
+- **A setting belongs to whoever carries it out, not to the page it is edited on.** The follow
+  distances are `TravelConfig`'s (section `Travel`), because `travel.lua` does the following and
+  travel mode drives that same core from the flee state — a service reading a state's section would
+  be the same mistake as a state reading another state's. They are edited on the Follow State page
+  all the same, the way the mez page edits `MobsConfig`'s sweep radius.
 - `SaveConfig()` writes the whole file on every mutation. Several getters also write
   (e.g. `MeleeStateConfig.GetPrimaryCombatAbility` self-heals invalid values and saves).
 - There is a `version` key (GeneralConfig) but no migration mechanism yet.

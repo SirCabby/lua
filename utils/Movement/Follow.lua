@@ -180,6 +180,27 @@ function Follow:WithinHold(distance)
     return distance <= (self._.holding and self._.resumeDistance or self._.distance)
 end
 
+---Change how close this follow holds station, for a caller whose answer to that has changed since
+---the follow started -- a fight breaking out around a character that has no business standing in
+---it is the case this exists for (see `cabby.travel`).
+---
+---Set rather than restarted, because the two are not the same follow: a fresh task starts with no
+---trail, and a follower that drops the leader's route every time a fight opens or closes is a
+---follower with nothing to walk but a straight line through whatever is in between.
+---
+---Which of the two thresholds is in force (`holding`) is deliberately left alone. That is a fact
+---about what we were doing a moment ago, and it has not changed just because the numbers did: a
+---parked follower whose hold distance just widened is still parked, and one closing a gap still
+---has the gap to close.
+---@param distance number how close we close to the spawn
+---@param resumeDistance number how far the spawn gets before we close it again
+function Follow:SetHold(distance, resumeDistance)
+    self._.distance = distance
+    -- never inside distance, for the same reason it is clamped in `new`: closing and holding
+    -- would each undo the other
+    self._.resumeDistance = math.max(resumeDistance or distance, distance)
+end
+
 ---@return number count waypoints still on the trail
 function Follow:TrailSize()
     return self._.last - self._.first + 1

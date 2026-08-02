@@ -101,6 +101,15 @@ end
 ---@return boolean
 function Skill:IsReady()
     if self:Name():lower() == "none" then return true end
+
+    -- Feared, we do not decide where the character stands or which way they point -- the server
+    -- does -- so a skill fired now is spent for whatever happens to be in front of us, and the
+    -- reuse timer starts either way. The facing check below is not enough on its own: a feared
+    -- character sweeps past the target on the way round, and a frame caught mid-sweep reads as
+    -- facing it. Being feared is a fact about the character rather than about any one caller,
+    -- which is why the answer is given here instead of by each list that holds an ability.
+    if mq.TLO.Me.Feared() ~= nil then return false end
+
     if self:Targeted() then
         -- both are nil with no target, which a bare comparison would raise on
         local targetId = mq.TLO.Target.ID()

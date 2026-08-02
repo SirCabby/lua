@@ -5,13 +5,13 @@ Vision: one script that bots any class/race — states for every band in the pri
 (commands, passive, cure, heal, pull, mez, tank, dps, loot, anchor, follow, buff).
 
 Current coverage: Follow/Anchor/ClickZone, Melee, Spell DPS, Pet DPS, Heal, Buff, Pet Setup,
-AdvLoot, Rest and Flee states, over
+AdvLoot, Corpse, Rest and Flee states, over
 a shared engagement (`combat.lua`) that the group's main tank and main assist steer (`roles.lua`);
 all sixteen classes load as profiles over those (the nine melee
 classes melee, eleven cast damage, the three priests and three hybrids heal — as do MAG, NEC and
 SHD, whose heal lists are how a pet is kept up and how the empathy line is spent — the twelve with
 a spellbook buff, the six with a companion pet summon it, gear it and send it in, and everyone
-follows, rests, flees and minds the loot window). The casting and giving services and all five action
+follows, rests, flees, minds the loot window and loots its own corpse when told to). The casting and giving services and all five action
 types exist (Phase 3), so an action list can hold a spell, clicky or AA, `/ccast` can fire
 anything by hand and `/cgive` can hand anything over. Everything else below.
 
@@ -156,11 +156,17 @@ ARCHITECTURE.md ("Casting"). What landed:
   priority (cancel it if we outrank its owner, otherwise wait). Bards and instant casts skip it.
 - ~~**Targeting, mana, reagents, range, line of sight**~~ — checked before committing, since a
   refusal here costs nothing and one from the client costs a gem timer.
-- ~~**Gem memorization**~~ — `/memspell` into the configured gem (last gem by default) when a
-  spell is not memorized, with its own timeout.
+- ~~**Gem memorization**~~ — `/memspell` when a spell is not memorized, with its own retry. Into a
+  gem the caller named if it named one, otherwise an empty gem, otherwise the configured gem (last
+  gem by default). Which one is decided at the moment of memorizing, not when the cast was asked
+  for, since the bar is the player's to change in the seconds in between.
 - ~~**Outcome detection**~~ — `Me.Casting` for the shape of the cast, ~40 registered chat lines
   for the reason -- 37 of them (fizzle, interrupt, resist, immune, out of range, silenced, components...).
-  Late "resisted"/"did not take hold" lines refine a result already reported as a success.
+  A closing cast bar is not an answer on its own: it looks the same whether the spell went off or
+  the cast was lost, and a fizzle is decided at the server's end of the cast, so it arrives a round
+  trip behind. A completed cast therefore waits that long to be contradicted before it is called a
+  success. Late "resisted"/"did not take hold" lines settle it the other way — they are proof the
+  spell went off — and refine a result already reported as a success.
 - ~~**By hand**~~ — `/ccast <name> [item | alt | gem<#>] [targetid|<#>]`, plus a Casting config
   page showing live status.
 - **Deliberately not done**: retrying a cast that was *spent*. A fizzle or a resist is reported to
@@ -219,9 +225,14 @@ Still open in this phase:
   it nearly gone", which is a buff question start to finish. If cures or HoT tracking end up
   wanting the same reads, that is when it earns being lifted out.
 - Songs: a bard's action list works, but nothing twists.
-- A rotation cannot memorize. `CastAction:IsReady` requires the gem, deliberately (see
-  ARCHITECTURE.md); an action slot for a spell that is not on the bar therefore idles. Revisit
-  if configuring one turns out to be a common mistake rather than a rare one.
+- ~~A rotation cannot memorize.~~ It was a common mistake rather than a rare one — a spell dps slot
+  configured with a spell that was not on the bar, correctly set up, marked ready, silently never
+  firing. `CastAction:IsReady` no longer requires the gem; the service memorizes, into an empty gem
+  where there is one (see ARCHITECTURE.md, Casting and Action system). The remaining rough edge is
+  a **full spell bar**: two unmemorized slots then share the one configured gem and cast over each
+  other for as long as both are wanted. Better than idling silently, and visible when it happens
+  rather than silent, but if it turns out to bite, the answer is probably to let the rotation pick
+  the gem holding whichever of *its own* spells is furthest from being wanted.
 
 ## Phase 4 — The planned states
 
@@ -625,16 +636,31 @@ state's decisions (kill target never mezzed, refresh before the wear-off, the br
 the cache, immune and resist remembered, the softener deferral, AE count and centring, the AE safety
 switch, zone reset). **In-game verification still pending** — see Verify.
 
+**Curing landed 2026-07-31**, and it did *not* take the cure band. It is two halves: `cabby/curing.lua`
+is a service on every class that reads this character's own counters (poison, disease, curse,
+corruption), says `cure <type>` for anything with more than a minute left, and holds the queue of
+everyone who has said it; the heal state is the half that casts, ahead of every heal and behind
+anybody below the emergency point. `actions/cureTypes.lua` is the data — an affliction and its cure
+carry the same counter effect and differ only in the sign of the base, which is what makes "the best
+cure I have" an exact reading (most counters stripped) rather than a guess at spell rank. One
+setting, on the Heal State page: Disabled / out of combat / in battle too. 133 headless checks pass
+over the scan, the ask pacing, queue dedup and TTL, the cached-buff read-back, and where a cure sits
+in the heal state's pass. **In-game verification still pending** — see Verify. The cure band stays
+reserved in `priorities.lua` for a curer with no healer to arbitrate against; see ARCHITECTURE.md,
+"Curing".
+
 Still to come, per priority band: **Passive** (global pause; the same shape as flee with an empty
 exemption set, plus a /cpause slash + comm command),
-**Cure** (detrimental scan → cure actions), **Pull** (target selection, pathing, leash,
+**Pull** (target selection, pathing, leash,
 camp radius), **Tank** (taunt/hate
 action lists already modeled in MeleeStateConfig; needs aggro-loss detection for "as
 needed" usage),
-**Loot** (the roll-etiquette half exists: `AdvLootState` answers the akk-stack loot window's
-rolls with *Pass* for everyone but whoever controls the loot; still to come are old-style
-corpse-walk looting and the controller's own side — per-item rules, give-to routing,
-lock/unlock automation).
+**Loot** (two of the three halves exist: `AdvLootState` answers the akk-stack loot window's
+rolls with *Pass* for everyone but whoever controls the loot, and `CorpseState` empties this
+character's own corpses on the `lootcorpse` order — within 50, walking nowhere. Still to come
+are the corpse-*walk* that gets a character back to a corpse it cannot reach (and with it
+looting NPC corpses on the ground), and the controller's own side — per-item rules, give-to
+routing, lock/unlock automation).
 Each new state = state module + config section + UI panel + comm commands, which is why
 the Phase 1 module contract comes first. Landing one is also a sweep over `classes/*.lua`:
 the per-class view of this list is each profile's `unimplemented` lines, and a state that
@@ -642,9 +668,11 @@ exists moves from that list into the profile's `states` at its band.
 
 Heal's own leftovers, for when the bands around it exist: heal-over-time management (a HoT is
 wasted on someone about to be topped off; the duration reads the buff state uses are the half of
-that which now exists), rezzing, curing at the cure
-band, and any awareness of what *other* healers are doing — two clerics on one tank both cast, and
-only the group coordination in Phase 5 can fix that.
+that which now exists), rezzing, and any awareness of what *other* healers are doing — two clerics
+on one tank both cast, and only the group coordination in Phase 5 can fix that. Curing has the same
+gap and it is more visible there, because a cure request goes to everybody at once: two clerics hear
+one `cure poison` and both answer it. The queue is per-listener by design, so the fix is the same
+Phase 5 coordination rather than anything in `curing.lua`.
 
 Two of these are already half-written elsewhere and only need the state around them:
 **Tank** (MeleeState's taunt/hate lists run on a timer; what is missing is aggro-loss
@@ -673,8 +701,12 @@ backstab positioning; nothing asks for it).
 ## Cross-cutting gaps (no owner yet)
 
 - **Lifecycle events**: zoning, death/rez handling, camp/disconnect detection, GM detect →
-  a global interrupt that resets states safely (states currently keep stale targets/actions
-  across zone lines; only FollowState notices zone changes, and only for click-zoning).
+  a global interrupt that resets states safely. Zoning is currently noticed a module at a time,
+  each polling `Zone.ID` for itself and each drawing its own conclusion — Combat drops defend
+  reports and assist calls, MezState its mez records, PetSetupState carries the pet's gear record
+  across the line and restarts the grace on replacing a missing pet, FollowState notices only
+  click-zoning. Everything not on that list still keeps stale ids across a line, and there is no
+  one place that says "we just zoned".
 - **Leash/give-up timers** on engage (attackTarget can hold "busy" forever on an unreachable
   target, starving Follow below it).
 - **Config migration** when schemas change (version key exists, no mechanism).
@@ -751,7 +783,8 @@ backstab positioning; nothing asks for it).
    `item.Clicky.SpellID` find clickies in bags as well as worn gear, and does `Me.Book` return
    the sparse book this assumes rather than a packed list. After that, configure a spell in a
    melee action list on a hybrid and watch a fight: the rotation should cast when the spell is
-   memorized and idle when it is not, the stick should pause for the cast rather than fighting
+   memorized, and memorize it into an empty gem the first time it is wanted when it is not (and
+   over the configured gem when the bar is full), the stick should pause for the cast rather than fighting
    it, and melee should resume the frame the cast ends. Finally, gain a level and buy an AA and
    confirm the service picks both up within five seconds without a `/crefresh`.
 12. **Healing, in game.** On a cleric with a couple of slots configured: does the state pick the
@@ -1111,3 +1144,257 @@ backstab positioning; nothing asks for it).
    holding the group's Main Tank role, nothing eases off ever; and with an add that the tank is *not*
    on beating on a caster, the rotation should keep killing it (the tank's target is visible only
    through its `assist` call, so this is also a test of that call arriving).
+
+18. **Curing, in game**. The whole system rests on three client readings, and each has a cheap test.
+   First the **affliction read**: stand in a poison or disease DoT and run `/ccure` — it should name
+   the kind and the seconds left. This is the one that has already been wrong once (found in game
+   2026-07-31): the scan was gated on `Me.TotalCounters`, which the client sums out of per-buff slot
+   data that EQEmu never sends, so it read zero on a visibly afflicted character and no character
+   ever asked for anything. The gate is gone and the filter is now `Spell.CounterType`, read out of
+   the local spell file. What is left to confirm is the walk itself: "nothing on me" while visibly
+   afflicted now means the bar read or the effect read, not a gate. Confirm the short-duration
+   window is really covered, or that nothing curable ever lands there, by watching a debuff the
+   client files as a song.
+
+   Then the **ask**: a warrior with a two-minute DoT should put one `cure <type>` on bc, and one
+   more every twenty seconds until it fades — not per tick, not per DoT. A thirty-second DoT should
+   produce silence. `callcure off` should silence it entirely.
+
+   Then the **answer**, and start with the setting: the shipped default is *Curing, out of
+   combat*, and a DoT worth curing lands in a fight almost by definition — so the first honest
+   experience of curing is a healer that hears every request, queues every one and casts nothing
+   (found in game 2026-07-31, and it reads exactly like a broken feature). `/cheal` now names that
+   gate and every other live one; `/ccure` on the healer names what it can cure at all and what is
+   holding each queued request. Whether the default is the right one is still open — the argument
+   for it is in `healStateConfig.lua` and it is not a bad argument, but nobody meets curing out of
+   combat. With the setting on, a cleric hearing a call should cast the cure `/ccure` says it would
+   (worth confirming the spell it names is the one you would have picked — "best of that kind" is
+   the most counters). Watch the Heal State page's *Current Action* read `curing ...`. The one to watch closely is the **read-back**: the request should disappear
+   from the Waiting list once the counters are actually off, and *not* before. If cures keep firing
+   at somebody already clean, the cached-buff read is coming back stale and the fix is there.
+
+   Then the **held queue**, which is where the wasted cures actually came from: stand the healer
+   around a corner from somebody with a DoT so line of sight fails, and leave it. `/ccure` on the
+   healer should show the request with `last try:` naming the client's refusal — a queue failing
+   over and over must not look like one nobody has touched. Then let the DoT wear off *before*
+   walking back into line of sight. The request should be gone, or held with `it is off them`, and
+   no cure should go out when the corner is cleared. A burst of cures the moment line of sight
+   returns is the failure this is guarding.
+
+   Then the **staleness of the ask**: let
+   a DoT run out on the asker without being cured (hold the healer in combat with curing set to out
+   of combat, say). Once they stop calling, the healer's Waiting line should read `held: they have
+   not asked in a while` within about thirty seconds, and *stay* held until the entry ages out —
+   releasing the healer at that point must produce no cast at all. The failure it is guarding is a
+   cure aimed at a DoT that had a minute left when it was called and seconds left when it landed,
+   followed by another one after the DoT was gone.
+
+   Finally the **ordering**, which is the part with a real cost if it is wrong: with curing set to
+   *in battle too*, drop a group-mate below the emergency point while a cure is in the air — the
+   cure should be called off on that pass and the heal go out. Then set it to *out of combat* and
+   confirm a fight starting does the same. A healer that keeps curing while somebody dies is the
+   failure this feature could plausibly introduce, and it is worth provoking once on purpose.
+
+26. **Answering a defend call, in game** (2026-07-31, `answerdefend` + `defendReachDistance`). The
+   report half has been in for a while; what changed is that picking one up is now its own switch
+   rather than a corner of `autoengage`, and that a report out of reach is skipped instead of
+   charged at. Three things to watch, all from the tank.
+
+   First, **the switch**: turn `autoengage` **off** on the main tank, let an add jump the healer,
+   and the tank should still go — that is the whole reason the switch was split out, and it is the
+   case that used to do nothing at all. `/cattack` names both switches now, says whether this
+   character is even the one that answers, and marks each standing report it cannot reach.
+
+   Second, **the wait**, which is the one with a real cost if it is wrong: with the tank on a mob
+   at 5% and a report standing, the tank must finish the mob it is on. Nothing should move until
+   the corpse drops. The failure to watch for is the tank turning mid-fight — that is a hate list
+   walked back to nothing and, in a mez camp, the tank running through the mezzed pile to get
+   somewhere.
+
+   Third, **the reach**: a mob called from across the camp or through a wall should be left
+   standing (`/cattack` will say so) and picked up the pass the group closes on it — not a charge
+   the moment the line lands, and not silence afterwards either. 100 is a guess borrowed from the
+   melee engage distance; if a real camp is wider than that and the healer at the far end goes
+   unanswered, the fix is to make `defendReachDistance` a setting rather than to raise the
+   constant. Worth one look on the lenient line-of-sight read too: `LineOfSight` answering nothing
+   counts as visible, so a report that will not resolve at all would show up as the tank charging
+   something it cannot actually path to.
+
+27. **Waiting for the kill to be named, in game** (2026-07-31, `namedKill` + `isUnfoughtPull` in
+   `states/mezState.lua`). The symptom was an enchanter mezzing the mob on its way in: the roster
+   sees an inbound pull from two angles at once (the puller's `defend` report, and the sweep's
+   combat stance) long before anybody has picked it up, and to a crowd control state that looked
+   exactly like a loose add. The fix is one idea in two rules — **an add is only an add beside
+   something being killed** — so a *new* mob is chosen only once something has been named first to
+   kill, and a fight of one mob nobody has engaged is the pull rather than an add. Sixteen headless
+   checks settle the shape of it.
+
+   What names the kill is `Combat.GetTankTargetId` — the tank being us, the tank's `assist` call, or
+   the client's assist record — and **failing that, our own engagement**, which is the fallback that
+   keeps the rule from being a silent off switch in a group that never dragged anybody onto the Main
+   Tank role. The mob it names is itself never mezzed, which also closes an older hole: a chanter
+   with auto-engage off had no `Combat.GetTargetId` of its own and would read the tank's mob as just
+   another add.
+
+   The thing a harness cannot answer is where the boundary falls in a real camp. Four to watch.
+   **A single pull should arrive untouched** — `/cmez` reads *incoming* the whole way in and flips
+   to *killing* when the tank has it. **A two-pull should be held until the tank picks one**, then
+   the other mezzed on the very next pass: the wait is the point, and the thing to measure is
+   whether "the next pass" is fast enough that the add is still mezzable when it arrives. If a
+   two-pull regularly reaches the healer before the mez lands, the tank is naming its target too
+   late and the fix is on the tank (`callassist`), not here. **The beat between two mobs of one
+   fight must not stall a refresh**: with an add mezzed and the tank's mob dying, the kill is
+   unnamed for a beat — the already-mezzed exemption is what covers it, and a mez that lapses right
+   as a mob dies is that exemption failing. And **`/cmez` must always explain itself**: *first to
+   kill* is on the page and in the command, and a row that reads *waiting* with a named kill above
+   it is a bug.
+
+   Left deliberately alone: the **stun** slot, which still fires at a lone inbound mob that has
+   turned on this character. A stun does not stop a pull the way a mez does, and the mob beating on
+   the enchanter is exactly what it is for. If a camp turns out to want the pull mezzed on purpose
+   (a chain-mez pull, an enchanter doing its own pulling), the answer is a switch on the Mez page
+   rather than loosening the rule.
+
+28. **Two of a kind, in game** (2026-07-31, `suspicionSettleMs` in `states/mezState.lua`). The
+   symptom was an enchanter re-mezzing a mob that was still perfectly mezzed, in a camp holding two
+   mobs of the same name. The cause is the one thing the awakened line cannot say: it carries a
+   *name*, not an id, so a break in a camp of two identical mobs suspected both — and the old
+   answer was to call both loose. That is a coin toss, and losing it spends the mez, the gem timer
+   and three seconds of casting on the mob that was already held, while the one that actually woke
+   stands free for exactly those three seconds. Now the suspects are *watched* for a beat: the mob
+   that turns or steps is the one that woke (`cabby.mobs` samples position and heading four times a
+   second, and the animation read catches it too), and nothing is thrown away about the others
+   meanwhile — including the trust in a mez of ours that landed a beat ago, which the handler used
+   to drop for every mob of the name and which was the second way the same mob got mezzed twice.
+   Four headless checks drive the real chat handler; two of them fail against the old code.
+
+   What to watch, and it is one deliberate setup: **hold two mobs of the same name, break one, and
+   watch `/cmez`.** The held one should stay *mezzed* with `-- watching: one of these woke` against
+   it, the broken one should flip to *loose — it woke up* within a beat, and exactly one mez should
+   go out, at the broken one. Two casts is the bug returning.
+
+   The number to question is `suspicionSettleMs` (1 second, four pose samples). Too short and the
+   old coin toss is back, because the freed mob has not been seen to move yet. Too long and a real
+   break waits on it — though only when the mob is out of sight, since an animation that is not
+   *standing there* settles it on the same frame. If a camp on this server shows mezzed mobs whose
+   heading jitters, this window is where it will show up first, as an innocent twin being resolved
+   as the waker; the fix would be in `movedEpsilon`/`turnedEpsilonDegrees` in `mobs.lua`, not here.
+
+29. **Letting go of a mob, in game** (2026-07-31, `Combat.CallOff` in `combat.lua`). The symptom was
+   a main tank that could not be told to let go of a mob at all: the Back Off button, `attack off`
+   and `/cattack off` each disengaged for a fraction of a second, and the next pulse put the tank
+   straight back on the same target. The cause is that a call-off had no memory while every
+   automatic way of picking a fight up does — a standing `defend` report sits above the `autoengage`
+   gate and re-engages the same mob within 250 ms (so turning auto-engage off was no answer either),
+   the hater sweep picks up whatever is beating on us, and the client's attack toggle left on from
+   that same fight reads as a hand-started one. The strongest source, an order, was the only one
+   with nothing behind it, so it lost. Downstream that is a tank that cannot move: `MeleeState`
+   reports busy for as long as `IsEngaged`, so at the dps band it starves follow, anchor, loot and
+   rest, and only `flee` outranks it. Now a deliberate end records the mob as refused and every
+   automatic path steps over it; twenty-four headless checks cover the shape, including the leftover
+   toggle and each of the four ways a refusal is taken back.
+
+   First, **the thing that was broken**: with a `defend` report standing on a mob the tank is on,
+   press Back Off. The tank should stop, drop the swing, and *stay* stopped — and then follow, sit,
+   or take a new `attack <id>` like any other idle character. `/cattack` lists what is called off
+   and says what takes it back, which is the page to check first if a tank looks idle next to
+   something that is eating the group.
+
+   Second, **taking it back**, which is the half with a real cost if it is wrong — a mob nothing
+   will ever pick up again is a mob nobody is tanking. Four ways, worth one pass each: kill it (or
+   let it despawn), zone, `flee on`, and naming it again with `attack <id>`, an `assist` call, the
+   Attack button, or a press of the attack key. That last one is the subtle one: a *press* is a
+   person naming the mob, while the toggle merely still being on from the fight that was just
+   called off is not, and the difference is what keeps Back Off from being undone by the character's
+   own leftover swing.
+
+   Third, **the group**, since `assist off` from the tank now calls the listeners off for keeps
+   rather than for a pulse. Back the tank off mid-fight with adds out and watch what the group does
+   next: a wizard that had picked up its own add should keep fighting it (the refusal is about the
+   tank's mob), but a character the tank had called onto that mob will stand down and stay down
+   until the next `assist` call names something. If that reads as too much on a real pull, the
+   narrower rule is to refuse only the mob the *listener* was on by its own decision, and leave a
+   heard `assist off` a plain disengage.
+
+30. **Looting our own corpse, in game** (2026-07-31, `states/corpseState.lua`). **First contact the
+   same day: it loots.** Sixty-three headless checks cover the decisions — the order's life, the
+   three evidence windows, the corpse taken over, the stale corpse pointer, the cursor, two corpses
+   in one order, zoning and dying mid-order — and the ordinary path has now been seen working on a
+   real client. What is left below is the edges nobody has stood in yet.
+
+   The first run looked like a dead state and was not one: **`flee` was on**. It suppresses by
+   returning busy at the passive band, which starves every band under it, and looting is near the
+   bottom — so the order was taken and then never given a frame. That is the design working, but it
+   is invisible from the outside, which is why `/ccorpse` now says how long ago the state last had a
+   pass and warns when it has never had one. Worth remembering as the first thing to check whenever
+   a character takes an order and then does nothing at all: it is not specific to looting, and the
+   state chain has no central "who is holding the frame" report yet.
+
+   Still to see, in rough order of "if this is wrong, it matters":
+
+   - **Finding it** — *works*, with `corpse radius 50 <name>`. Written with `pccorpse` first, which
+     is the obvious filter and a trap: MacroQuest tells a PC corpse from an NPC one by whether the
+     spawn carries a **deity**, and an emu server need not send one — the search then comes back
+     empty and looks exactly like having no corpse. `/ccorpse` lists every corpse in reach and says
+     which it reads as ours, so it answers this on its own without dying for it.
+   - **Opening it** — *works*: `/click right target` on our own corpse brings the window up, and
+     `${Corpse}` names it. This was the assumption with no fallback; it held.
+   - **The reach** — *answered by pulling the corpse instead of measuring it* (2026-07-31). 50 is
+     the search *radius* and not the client's loot range, and rather than hunt for the real number,
+     each corpse is now targeted and pulled to our feet with `/corpse` before it is opened, so the
+     open is always a click on something standing on top of us. The server takes that pull out to
+     100 (`Corpse::Summon` in `zone/corpse.cpp`, distance-squared against 10000, moving the corpse
+     with `GMMove` and keeping its spawn id), which is twice the search radius — so nothing this
+     state can see is beyond the pull, and there is no answer to watch for. What is still unseen is
+     a *refused* pull, which on our own corpse means a GM lock and nothing else; it reads as an open
+     that never produced a window, and is reported as "could not open".
+   - **Emptying it** — the ordinary items come off. What has not been seen is a corpse full of our
+     own **NO TRADE** gear, which is the case this exists for: does the client pop a confirmation
+     for any of them (nothing here answers one — it would read as an item that will not come off,
+     and be left and reported)? Worth one run with bags nearly full as well, so the "left N I could
+     not pick up" path is seen for real rather than in a harness.
+   - **Closing it** — the window goes. What is unconfirmed is what an *emptied* player corpse does
+     next: if it poofs, that is what ends the order; if it lingers, confirm the order still ends
+     (it should — a corpse this order has finished with is never looked at again — but that is the
+     one place a lingering corpse could otherwise loop).
+   - **The band.** Die with the group, run back, and say `lootcorpse` to the channel while the group
+     is still following somebody: every character should stop where it is, loot, and only then carry
+     on following — and if something aggros mid-loot, the fighting bands should take the frame back
+     off it.
+   - **`${Corpse}` after a loot ends.** It is the client's active-corpse pointer, and the state now
+     asks whether `LootWnd` is *shown* before believing it, because a stale pointer would park an
+     order behind a window that is not there. Worth confirming which way this client behaves: loot
+     something, close the window, and read `${Corpse.Open}` — if it still says TRUE, that is the
+     reading the window check exists for, and anything else in the codebase trusting `${Corpse}` on
+     its own needs the same treatment.
+
+31. **Consenting on death, in game** (2026-08-01, `consent.lua`). Twenty-one headless checks cover
+   the scheduling — the death edge, the pacing across deaths, the ties skipped, the hold through a
+   zone, the switch turned off mid-run — and none of them touch EverQuest. What the harness cannot
+   answer is whether the client will send the command at all from where this says it.
+
+   - **`/consent` while dead.** The whole design turns on the first DEAD/HOVER frame being a frame
+     the command works from — the corpse exists by then (it is made in the same server tick as the
+     death packet), and `OP_Consent` is a connected opcode, so nothing in the server says no. What
+     is unseen is the *client* side: whether it will process a slash command typed into the death
+     screen. Die grouped, watch the console for the "Consenting group, ..." line, and then have a
+     group member target the corpse and `/corpse` it. If the drag is refused, the fix is to hold
+     the run until the respawn instead of starting at the death — the corpse keeps its consent
+     either way, provided the zone it is in still has somebody in it.
+   - **The two-second throttle.** Paced at 2500ms on the strength of `consent_throttle_timer` in
+     `Client::ConsentCorpses`. The refusal is a red "You must wait 2 seconds between consents." and
+     nothing else, so seeing that line in the log after a death is the one sign the pacing is
+     wrong — and it is worth one deliberate look, since a consent lost this way is silent.
+   - **Releasing mid-run.** Group and raid consent have to find the corpse in a *loaded* zone. Die,
+     release immediately, and confirm the second and third consents still land: the run holds
+     through the loading screen and resumes on the far side, but the death zone emptying out is the
+     case nothing here can do anything about. If it turns out to matter, the answer is to fire all
+     three before the release rather than to chase the corpse.
+   - **The alternative that may make this unnecessary.** The client has its own Auto Consent
+     Group/Raid/Guild checkboxes (`OGP_AutoConsent*Checkbox` in EQUI_OptionsWindow), and they are
+     not merely client-side: they set `groupAutoconsent` and friends in the player profile, and
+     every corpse made afterwards is consented at creation (`corpse.cpp`), with no throttle and no
+     race. Ticking those three once per character would do this job better and permanently. Nothing
+     but the checkbox appears to reach them (`/consent group` sends `OP_Consent`, not the
+     `SpawnAppearance` those use), so it would mean a `/notify` on the options window at startup —
+     which is fighting the player over their own client settings. Worth knowing before this grows.

@@ -155,6 +155,15 @@ function Movement.Stop()
     Movement._.blockedReason = nil
 end
 
+---Cancel the active task and put the movement keys down *now*, for a caller that knows there
+---will be no next frame -- a script about to stop itself, above all. `Stop` only records the
+---release; the key commands are sent by `Pulse`, and a `/keypress <key> hold` outlives the
+---script that pressed it, so stopping without this leaves the character running.
+function Movement.StopNow()
+    Movement.Stop()
+    Locomotion.ForceReleaseAll()
+end
+
 ---Cancel the active task only while the given owner still holds it, so a behavior cleaning
 ---up after itself cannot cancel a move some higher priority behavior has since started.
 ---@param owner string
@@ -304,6 +313,23 @@ end
 function Movement.IsFollowing(spawnId)
     if Movement.GetTaskType() ~= Movement.taskTypes.follow then return false end
     return spawnId == nil or Movement.GetSpawnId() == spawnId
+end
+
+---Retune how close a running follow holds station, while the given owner still holds it -- the
+---same gate `StopFor` uses, and for the same reason: an answer this caller re-derives is about
+---the follow *it* asked for, and a higher priority behaviour's follow is not its to reach into.
+---
+---Nothing else is disturbed: the trail, the hysteresis and the task's id all survive, which is
+---what makes this the right shape for an answer that changes while the follow runs. A caller with
+---a fixed answer says it once in the options to `Follow` and never comes back here.
+---@param owner string
+---@param distance number how close the follow closes to its target
+---@param resumeDistance number how far the target gets before it closes again
+---@return boolean applied false when this owner has no follow running
+function Movement.SetFollowHold(owner, distance, resumeDistance)
+    if not Movement.IsFollowing() or not Movement.IsOwnedBy(owner) then return false end
+    Movement._.task:SetHold(distance, resumeDistance)
+    return true
 end
 
 ---@param spawnId? number when given, also require the task to be sticking to this spawn

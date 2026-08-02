@@ -22,7 +22,6 @@ local Cleric = BaseClass.new({
         { state = BuffState, priority = Priorities.buff }
     },
     unimplemented = {
-        "cure at the cure band",
         "rez, in and out of combat",
         "the hammer pet, and knowing undead from everything else when picking a nuke"
     }

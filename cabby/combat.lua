@@ -43,6 +43,7 @@ local UserInput = require("cabby.utils.userinput")
 local Combat = {
     key = "Combat",
     eventIds = {
+        answerDefend = "answerdefend",
         assist = "assist",
         assistOnEngage = "assistonengage",
         attack = "attack",
@@ -81,6 +82,9 @@ local Combat = {
         ---{ [speaker] = id } for every assist call heard, which is the only way a client is told
         ---what another character is fighting
         assistCalls = {},
+        ---{ [id] = true } for every mob somebody said to stop fighting; see Combat.CallOff
+        calledOff = {},
+        dropAttack = false,
         zoneId = 0,
         attackWasOn = false,
         clientTargetWasId = 0,
@@ -107,6 +111,19 @@ local scanIntervalMs = 250
 ---pulls is the whole job of the state at the bottom of it. This bridges client lag inside one
 ---fight, nothing more.
 local fightLingerMs = 500
+
+---How close the main tank has to be to a called-out mob before it answers the report.
+---
+---A defend report is heard from anywhere in the zone -- bc reaches every connected character --
+---and answering one blind is a charge across the camp through everything in between. The tank
+---answers what it can already reach: the add that ran past it to the healer standing behind it,
+---not the mob that took somebody off exploring. Anything further is left standing rather than
+---dropped -- it is still eating somebody -- and answered the moment the group closes on it.
+---
+---The same 100 the melee state's engage distance defaults to, and for the same reason: past that
+---it stops being a fight this character is in. Fixed rather than configurable because it is a
+---question about the camp, not about this character's reach.
+local defendReachDistance = 100
 
 ---Where the assist call goes when nothing has been configured to speak on.
 ---
@@ -167,6 +184,36 @@ end
 ---@return boolean isSeeking the fight is open with its target lost, looking for the successor
 function Combat.IsSeeking()
     return Combat._.fightOpenUntilMs ~= nil
+end
+
+---Is there a fight going on around here at all -- ours, or one of the group's we have no part in?
+---
+---`IsEngaged` is the question "am I fighting", and a character with nothing to do in a fight
+---answers it no while standing in the middle of one: a healer between casts, a caster out of mana,
+---anybody whose auto-engage is off. That character still has to *behave* like a fight is on --
+---`cabby.travel` moves the follow out to arm's length off this answer, so a caster is not parked in
+---the melee ring and is not spending the follow band closing a gap nobody needs closed -- so the
+---fact is published here beside the engagement rather than guessed at by each reader.
+---
+---Every angle this client is ever handed, and nothing swept for: **our own fight** (continuity and
+---all, so it does not blink between two mobs of one fight); **anything on the extended target
+---window**, which is the client saying these are fighting us; **the standing defend reports**, mobs
+---beating on group members who could not shed them; and **a heard `assist` call**, somebody saying
+---out loud what they are on. The last three are the same tables `GetFightIds` reads, already swept
+---for death, zone and flee, which is what keeps this from standing true over a camp that finished
+---fighting ten minutes ago.
+---
+---What it cannot see is a fight nobody here is part of and nobody announced -- a group whose tank
+---is not running cabby, with auto-engage off on this character, and nothing yet on anybody's back.
+---There is no reading another player's combat state, so that silence is the honest answer; a reader
+---that must not be wrong about it should be reading its own engagement instead.
+---@return boolean isGroupFighting
+function Combat.IsGroupFighting()
+    if Combat.IsEngaged() then return true end
+    if #(Combat._.fightIds or {}) > 0 then return true end
+    if next(Combat._.defendReports) ~= nil then return true end
+    if next(Combat._.assistCalls) ~= nil then return true end
+    return false
 end
 
 ---What the group's main tank is fighting, as far as this client can be made to know.
@@ -365,6 +412,16 @@ end
 function Combat.Engage(id, by, source)
     id = tonumber(id) or 0
     if id < 1 then return end
+
+    -- Naming a mob is how a call-off is taken back, and this is the one line every route in from
+    -- a person lands on: an `attack` order, an `assist` call, the Attack button, the attack key.
+    -- The automatic paths never reach it for a mob that was called off -- each of them steps over
+    -- one before it gets here -- so a refusal can only ever be undone by somebody's word.
+    if Combat._.calledOff[id] ~= nil then
+        DebugLog("Taking the call-off on " .. tostring(id) .. " back: " .. (by or "an order"))
+        Combat._.calledOff[id] = nil
+    end
+
     if Combat._.targetId == id then return end
 
     Combat._.targetId = id
@@ -388,6 +445,44 @@ function Combat.Disengage(reason)
     Combat._.engagedBy = nil
     Combat._.source = nil
     Combat._.fightOpenUntilMs = nil
+end
+
+---Somebody said to stop fighting this: the Back Off button, `attack off`, the tank's `assist off`,
+---the attack key with `disengageonattackoff` on.
+---
+---Disengaging is not enough on its own, which is the whole reason this exists beside it. Every
+---automatic way of picking a fight up is *memory that outlives the engagement*, so a bare
+---disengage is undone on the next pulse: a standing defend report re-engages the same mob (and
+---does it above the auto-engage gate, so that switch is no answer either), the hater sweep picks
+---the thing beating on us straight back up, and the client's own attack toggle -- left on from the
+---fight that was just called off -- reads as a hand-started one. The order has to be remembered
+---the only way an order can be, as a refusal of *that mob*, and every automatic path steps over
+---it.
+---
+---Bounded by the world, never by a clock. A refusal dies with the mob, with the zone, with a flee,
+---or the moment a person names the mob again -- `Combat.Engage` is where that happens, and every
+---route into it from somebody's word goes through there. "It has been a while, try it again" would
+---be walking the character back into the fight the player just walked it out of.
+---
+---What it is *not* is a fight ending by itself. Dying, a seek that came up empty, and a flee are
+---all `Disengage`: nobody refused anything, and a mob that killed us is not one we are being kept
+---off when we come back for it.
+---@param reason? string
+function Combat.CallOff(reason)
+    if not Combat.IsEngaged() then return end
+
+    local id = Combat._.targetId
+    if id > 0 then
+        Combat._.calledOff[id] = true
+        DebugLog("Called off " .. tostring(id) .. "; nothing picks it up again by itself")
+    end
+
+    -- The client is still swinging at it, and backing off means backing off. Dropped from Pulse
+    -- rather than here because the Back Off buttons call this from inside a render callback and
+    -- SetAutoAttack runs a game command -- see its warning.
+    Combat._.dropAttack = true
+
+    Combat.Disengage(reason)
 end
 
 ---The target is lost but the fight may not be over: hold it open and look hard for the successor.
@@ -432,13 +527,17 @@ end
 
 ---Anything on the extended target window that is on us. `Auto Hater` is the client's own word for
 ---"this is fighting you", which is a better answer than anything we could work out ourselves.
+---
+---Skips what has been called off: the sweep that would have picked a mob up is exactly the one
+---that must not pick it up again once somebody has said to leave it. Skipped rather than stopped
+---at, so the add standing next to the mob we were backed off is still found.
 ---@return number|nil id
 local function findAutoHater()
     for slot = 1, 20 do
         local xtarget = mq.TLO.Me.XTarget(slot)
         if xtarget.TargetType() == "Auto Hater" then
             local id = tonumber(xtarget.ID())
-            if id ~= nil and id > 0 then return id end
+            if id ~= nil and id > 0 and Combat._.calledOff[id] == nil then return id end
         end
     end
     return nil
@@ -502,6 +601,11 @@ local function assistTargetId()
     local target = Roles.GetAssistTarget()
     if target == nil then return nil end
 
+    -- Called off, so this standing read of what the group is on is not what puts us back on it.
+    -- The assist *call* still does: that is the assist saying it out loud, which is a person
+    -- naming the mob, and it goes through Engage where the refusal is taken back.
+    if Combat._.calledOff[target.id] ~= nil then return nil end
+
     local spawn = mq.TLO.Spawn("id " .. tostring(target.id))
     if spawn.ID() == nil or spawn.Dead() or not fightableTypes[spawn.Type()] then return nil end
 
@@ -527,6 +631,19 @@ local function sweepDefendReports()
     end
 end
 
+---Drop the refusals the world has taken back, on the same reasoning and the same cadence as the
+---sweeps either side of it: a call-off is about one mob, and nobody is being kept off a mob that
+---is dead or gone. This is also what bounds the table -- a night's camp in one zone would
+---otherwise hold an entry for every mob the group ever backed off.
+local function sweepCalledOff()
+    for id in pairs(Combat._.calledOff) do
+        local spawn = mq.TLO.Spawn("id " .. tostring(id))
+        if spawn.ID() == nil or spawn.Dead() or not fightableTypes[spawn.Type()] then
+            Combat._.calledOff[id] = nil
+        end
+    end
+end
+
 ---Drop the assist calls the world has taken back, on the same reasoning and the same cadence as
 ---the defend sweep above.
 ---
@@ -543,11 +660,36 @@ local function sweepAssistCalls()
     end
 end
 
----The standing report of a mob beating on somebody who cannot shed it -- the longest-standing
----one, since that victim has been waiting longest. A report is said once and stands until the
----world takes it back, so the spawn is asked again here rather than trusted from the sweep,
----because acting is when it has to be true: a mob that went down in the last quarter second is
----not something to charge at.
+---Whether a called-out mob is one the tank could act on right now: close enough, and in sight.
+---
+---Unreadable line of sight reads as visible, the way it does everywhere else in cabby: the client
+---declining to answer is not the same as a wall, and what is waiting on the answer is a group
+---member being eaten.
+---@param spawn any mq spawn TLO for the mob a report names, already known to be alive and fightable
+---@return boolean
+local function isDefendReachable(spawn)
+    if spawn.LineOfSight() == false then return false end
+    local distance = tonumber(spawn.Distance3D())
+    return distance ~= nil and distance < defendReachDistance
+end
+
+---The standing report of a mob beating on somebody who cannot shed it -- the longest-standing one
+---the tank can actually get to, since that victim has been waiting longest. A report is said once
+---and stands until the world takes it back, so the spawn is asked again here rather than trusted
+---from the sweep, because acting is when it has to be true: a mob that went down in the last
+---quarter second is not something to charge at.
+---
+---Out of reach is not stale, and the two are answered differently: a mob the world has taken back
+---is dropped for good, while one across the camp or behind a wall is skipped and left standing --
+---it is still beating on somebody, and the beat it comes around the corner is when the answer
+---changes. Sight and distance are asked only of a report that would win, so the usual pulse pays
+---for one reachability read rather than one per entry.
+---
+---A mob that has been called off is skipped and left standing for the same reason an out-of-reach
+---one is. The report is still true -- somebody is still being eaten -- and it is the tank being
+---kept off it, not the report being wrong: put the tank back on the mob by name and it is answered
+---on that pass. This is the standing report meeting the standing refusal, and the refusal wins,
+---because the report is this client working something out and the refusal is a person's word.
 ---@return number|nil id
 ---@return string|nil reporter
 local function oldestDefendReport()
@@ -556,7 +698,9 @@ local function oldestDefendReport()
         local spawn = mq.TLO.Spawn("id " .. tostring(id))
         if spawn.ID() == nil or spawn.Dead() or not fightableTypes[spawn.Type()] then
             Combat._.defendReports[id] = nil
-        elseif bestReport == nil or report.firstMs < bestReport.firstMs then
+        elseif Combat._.calledOff[id] == nil
+            and (bestReport == nil or report.firstMs < bestReport.firstMs)
+            and isDefendReachable(spawn) then
             bestId, bestReport = id, report
         end
     end
@@ -689,15 +833,21 @@ function Combat.Pulse()
     ---an id means nothing on the far side of a zone line, and the character that spoke it will say
     ---the next one the moment it engages anything here. A run empties them for the same reason the
     ---reports go -- what the tank was on before the group ran is not what it is on now.
+    ---Standing call-offs go with them, on the first of those reasons and on one of its own: an id
+    ---means nothing across a zone line, and "leave that one alone" is about a mob in a camp we are
+    ---no longer standing in. A run ends them for the same reason it ends the reports -- what the
+    ---group was not fighting before it ran says nothing about what it is walking into now.
     local zoneId = tonumber(mq.TLO.Zone.ID()) or 0
     if zoneId ~= 0 and zoneId ~= Combat._.zoneId then
         Combat._.zoneId = zoneId
         if next(Combat._.defendReports) ~= nil then Combat._.defendReports = {} end
         if next(Combat._.assistCalls) ~= nil then Combat._.assistCalls = {} end
+        if next(Combat._.calledOff) ~= nil then Combat._.calledOff = {} end
     end
     if Status.IsFleeing() then
         if next(Combat._.defendReports) ~= nil then Combat._.defendReports = {} end
         if next(Combat._.assistCalls) ~= nil then Combat._.assistCalls = {} end
+        if next(Combat._.calledOff) ~= nil then Combat._.calledOff = {} end
     end
 
     -- The attack toggle and the client's target are watched every pulse without exception --
@@ -748,6 +898,17 @@ function Combat.Pulse()
         return
     end
 
+    -- The fight was called off by hand and the client is still swinging at what it was on: backing
+    -- off means backing off. Here rather than in CallOff itself because the Back Off buttons call
+    -- that from inside a render callback, where a game command is the crash-to-desktop hazard, and
+    -- one pulse later is soon enough. Below the edge watcher on purpose -- this pulse's toggle has
+    -- already been read, so the switch-off lands as cabby's own on the next one and can never read
+    -- as the player's hand.
+    if Combat._.dropAttack then
+        Combat._.dropAttack = false
+        Combat.SetAutoAttack(false, "the fight was called off")
+    end
+
     if Combat._.targetId > 0 then
         local spawn = mq.TLO.Spawn("id " .. tostring(Combat._.targetId))
         if spawn.ID() == nil then
@@ -773,7 +934,7 @@ function Combat.Pulse()
         -- with nobody choosing to stop, and coming to with the whole fight called off is not
         -- what this switch is for. A feign is a choice, and does count.
         if not (mq.TLO.Me.Stunned() or mq.TLO.Me.Mezzed() ~= nil or mq.TLO.Me.Charmed() ~= nil) then
-            Combat.Disengage("attack switched off by hand")
+            Combat.CallOff("attack switched off by hand")
         end
     end
 
@@ -785,7 +946,7 @@ function Combat.Pulse()
         -- one that goes down on exactly this pulse.
         local spawn = mq.TLO.Spawn("id " .. tostring(Combat._.targetId))
         if spawn.ID() ~= nil and not spawn.Dead() and spawn.Type() ~= "Corpse" then
-            Combat.Disengage("target cleared by hand")
+            Combat.CallOff("target cleared by hand")
         end
     end
 
@@ -800,6 +961,7 @@ function Combat.Pulse()
         -- a rate nothing is lost by, and both cost a run of TLO reads
         sweepDefendReports()
         sweepAssistCalls()
+        sweepCalledOff()
     end
 
     -- before the gates below, and deliberately: a tank whose fight has just closed has something
@@ -827,6 +989,12 @@ function Combat.Pulse()
     if (attackOn and mq.TLO.Me.CombatState() == "COMBAT")
         or (attackPressed and CombatConfig.GetEngageOnAttack()) then
         local id = tonumber(mq.TLO.Target.ID()) or 0
+        -- A toggle still on from the fight that was just called off is not somebody asking for it
+        -- back: it is the swing being dropped, a pulse behind the order, over a target the client
+        -- has not been told to let go of either. Without this, backing a character off the mob it
+        -- is standing on top of would be undone by its own leftover attack. A *press* is a hand on
+        -- the key naming the mob again, and Engage takes the refusal back.
+        if Combat._.calledOff[id] ~= nil and not attackPressed then id = 0 end
         if id > 0 then
             local spawn = mq.TLO.Spawn("id " .. tostring(id))
             if spawn.ID() ~= nil and not spawn.Dead() and fightableTypes[spawn.Type()] then
@@ -836,12 +1004,12 @@ function Combat.Pulse()
         end
     end
 
-    if not CombatConfig.GetAutoEngage() then return end
-
     -- Travel mode is exactly the case for not picking a fight up. Nothing would act on it -- every
     -- state that fights is held back while flee is on -- but an engagement recorded now is one that
     -- resumes the moment the run ends, against whatever we ran past ten zones ago. Standing defend
-    -- reports were already emptied at the top of this pulse, for the same reason.
+    -- reports were already emptied at the top of this pulse, for the same reason. Above both
+    -- switches below because it is the question of whether to pick a fight up at all, not of
+    -- which switch would have done it.
     if Status.IsFleeing() then return end
 
     -- the ambient throttle is for watching an empty room; a fight seeking its successor reads
@@ -851,13 +1019,24 @@ function Combat.Pulse()
 
     -- The group's attackers before even the group's target, for the one character whose job is
     -- protecting it: a live defend report is a mob beating on somebody who cannot shed it, and
-    -- the main tank picks it up the moment its hands are free -- never sooner. An engagement in
-    -- progress is not switched off a report; the standing reports are the memory, and the
-    -- fight's own end (the seek falling through to here every pulse) is when they are read,
-    -- which is what keeps one pull's add the same fight. Deliberately above the CombatState
-    -- gate below: the tank is precisely *not* in combat while the add is only on the healer,
-    -- and the reporter already asked the combat-flag question on the client where the fact lives.
-    if Roles.IsMainTank() then
+    -- the main tank picks it up the moment its hands are free -- never sooner.
+    --
+    -- Never sooner is the whole of it. Everything above this line has already returned if there
+    -- is a fight on, so a report can only ever be answered *between* mobs -- after the current
+    -- one is dead. A tank that switched the moment a report arrived would thrash: it would drop a
+    -- mob at 5%, walk its hate list back to nothing, and drag the group's damage across the camp
+    -- with it -- and a group whose mez holds because the tank is standing still would find the
+    -- tank running through the mezzed pile to get somewhere. The standing reports are the memory
+    -- that makes waiting free: the fight's own end (the seek falling through to here every pulse)
+    -- is when they are read, which is what keeps one pull's add the same continuous fight.
+    --
+    -- Its own switch rather than a corner of auto-engage: answering the group's call for help is
+    -- a different choice from picking fights up unbidden, and a tank the player is driving by hand
+    -- still wants the add that went for the healer. Deliberately above the CombatState gate below,
+    -- too: the tank is precisely *not* in combat while the add is only on the healer, and the
+    -- reporter already asked the combat-flag question on the client where the fact lives. What it
+    -- will not do is answer a report it cannot reach -- see defendReachDistance.
+    if CombatConfig.GetAnswerDefend() and Roles.IsMainTank() then
         local defendId, reporter = oldestDefendReport()
         if defendId ~= nil then
             Combat.Engage(defendId, "it is attacking " .. (reporter or "the group"),
@@ -865,6 +1044,8 @@ function Combat.Pulse()
             return
         end
     end
+
+    if not CombatConfig.GetAutoEngage() then return end
 
     -- The group's target before our own: what the main assist is fighting is what everyone else
     -- should be fighting, and a character that only ever answers what is hitting it is a character
@@ -901,7 +1082,11 @@ function Combat.Init(stateMachine)
         " -- Usage: attack <spawn id>",
         " -- Usage (call it off): attack off",
         " -- What fighting means is up to the listener: a warrior gets on it and swings, a",
-        "    wizard casts at it, and a character that does neither ignores it."
+        "    wizard casts at it, and a character that does neither ignores it.",
+        " -- Called off, the mob is left alone and stays left alone: nothing picks it up again by",
+        "    itself -- not a standing (" .. Combat.eventIds.defend .. ") report, not (" .. Combat.eventIds.autoEngage .. "), not an attack toggle left on",
+        "    from the fight -- until it dies or is gone, you zone, you flee, or somebody names it",
+        "    again with (attack <id>), an (" .. Combat.eventIds.assist .. ") call, the Attack button, or your attack key."
     } end )
     local function event_Attack(_, speaker, args)
         -- permission first: a speaker we take no orders from should cost us nothing, not even
@@ -921,7 +1106,7 @@ function Combat.Init(stateMachine)
         end
 
         if UserInput.IsFalse(args[1]:lower()) then
-            Combat.Disengage("called off by " .. speaker)
+            Combat.CallOff("called off by " .. speaker)
             return
         end
 
@@ -987,7 +1172,7 @@ function Combat.Init(stateMachine)
             -- the speaker taking their statement back, which is what makes the record a live fact
             -- rather than the last thing anybody happened to shout
             Combat._.assistCalls[speaker] = nil
-            Combat.Disengage("called off by " .. speaker)
+            Combat.CallOff("called off by " .. speaker)
             return
         end
 
@@ -1047,9 +1232,11 @@ function Combat.Init(stateMachine)
         "    remembers the ids already called, its own and everyone else's, so a mob bouncing",
         "    between the tank and its victims is never re-announced. Its death, a zone, or a flee",
         "    clears its entry, and only then is it news again.",
-        " -- Heard by the main tank with auto-engage on, a report stands until the mob is dead or",
-        "    gone, and the longest-standing one is engaged the moment the tank is not already",
-        "    fighting something. An engaged tank never switches targets off a report; it waits.",
+        " -- Heard by the main tank, a report stands until the mob is dead or gone, and the",
+        "    longest-standing one it can reach is engaged the moment it is not already fighting",
+        "    something -- see the (" .. Combat.eventIds.answerDefend .. ") switch. An engaged tank never switches targets",
+        "    off a report; it finishes what it is on first. One further than " .. tostring(defendReachDistance) .. " or out of",
+        "    sight is left standing rather than charged at, and answered once the group closes.",
         " -- Anyone in the listener's group may say it, owner or not -- defense of the group is",
         "    the group's to ask for. Speakers outside the group still need the owner list.",
         " -- Said by hand it is a request to peel: `defend ${Target.ID}` on a hotbar button asks",
@@ -1148,8 +1335,9 @@ function Combat.Init(stateMachine)
         summary = "Turns calling out mobs this character cannot shed on or off",
         about = {
             "On, anything actually coming for this character (the top of its hate list) that",
-            "nobody has yet called out is reported as (defend <id>), and the main tank engages",
-            "the report the moment it is not already fighting something. One line per mob,",
+            "nobody has yet called out is reported as (defend <id>), and a main tank with",
+            "(" .. Combat.eventIds.answerDefend .. ") on engages the report once it is not already fighting something,",
+            "and once it is close enough to reach it. One line per mob,",
             "group-wide, for as long as it lives in this zone -- its death, a zone, or a flee",
             "clears its entry, and only then is it news again. The fight the group was already",
             "put on is not reported, and the main tank itself never reports -- its own",
@@ -1158,6 +1346,26 @@ function Combat.Init(stateMachine)
         },
         get = CombatConfig.GetCallDefend,
         set = CombatConfig.SetCallDefend
+    })
+
+    ToggleCommand.Register({
+        key = Combat.key,
+        phrase = Combat.eventIds.answerDefend,
+        summary = "Turns picking up the mobs called out for the tank on or off",
+        about = {
+            "The listening half of (" .. Combat.eventIds.callDefend .. "). Only acts while this character holds the group's",
+            "Main Tank role, and only once its hands are free: the longest-standing report is",
+            "engaged after the current mob is dead, never in place of it, so a call never drags",
+            "the tank off a fight and through a mezzed pile. A report the tank cannot reach --",
+            "further than " .. tostring(defendReachDistance) .. ", or out of sight -- is left standing rather than answered,",
+            "and picked up the moment the group is close enough. So is one for a mob the tank was",
+            "backed off by hand (attack off, the Back Off button): the report stays true, but a",
+            "person's word outranks it until the mob dies or is named again.",
+            "Separate from (" .. Combat.eventIds.autoEngage .. ") on purpose: answering the group is not the same choice",
+            "as picking fights up unbidden, so a tank driven by hand can still do it."
+        },
+        get = CombatConfig.GetAnswerDefend,
+        set = CombatConfig.SetAnswerDefend
     })
 
     ToggleCommand.Register({
@@ -1252,7 +1460,7 @@ function Combat.Init(stateMachine)
         end
 
         if #args > 0 and UserInput.IsFalse(args[1]) then
-            Combat.Disengage("called off by /cattack")
+            Combat.CallOff("called off by /cattack")
             print("Attack called off")
             return
         end
@@ -1309,15 +1517,33 @@ function Combat.Init(stateMachine)
 
         -- the same table is the tank's radar and everyone else's record of what has been called
         print(" -- calling for defense (calldefend): " .. (CombatConfig.GetCallDefend() and "on" or "off"))
+        local answering = CombatConfig.GetAnswerDefend()
+        print(" -- answering defense calls (answerdefend): " .. (answering and "on" or "off") ..
+            ((answering and not Roles.IsMainTank())
+                and " -- but only the main tank answers one, and that is not me" or ""))
         local standing = 0
         for id, report in pairs(Combat._.defendReports) do
             standing = standing + 1
-            local name = mq.TLO.Spawn("id " .. tostring(id)).CleanName()
+            local spawn = mq.TLO.Spawn("id " .. tostring(id))
+            local name = spawn.CleanName()
+            -- the question somebody watching a motionless tank is actually asking
+            local reachable = spawn.ID() ~= nil and isDefendReachable(spawn)
             print(" -- defend report: " .. (name or ("spawn " .. tostring(id))) ..
-                " (id " .. tostring(id) .. "), called by " .. report.reporter)
+                " (id " .. tostring(id) .. "), called by " .. report.reporter ..
+                (reachable and "" or " -- too far off or out of sight, so it waits"))
         end
         if standing == 0 then
             print(" -- defend reports: none standing")
+        end
+
+        -- The other half of that radar, and the answer to "why is it just standing there next to
+        -- the thing eating the healer": a mob somebody backed this character off is left alone by
+        -- every automatic pickup, standing report included, until it dies or is named again.
+        for id in pairs(Combat._.calledOff) do
+            local name = mq.TLO.Spawn("id " .. tostring(id)).CleanName()
+            print(" -- called off: " .. (name or ("spawn " .. tostring(id))) ..
+                " (id " .. tostring(id) .. ") -- nothing picks it up again by itself until it" ..
+                " dies, we zone, we flee, or it is named again")
         end
         -- the one setting that makes this whole report a lie about what will happen next: an
         -- engagement is still recorded while fleeing, and nothing whatsoever acts on it
