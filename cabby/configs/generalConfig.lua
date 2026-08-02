@@ -23,7 +23,8 @@ local GeneralConfig = {
     keys = {
         version = "version",
         tellToMe = "tellToMe",
-        consentOnDeath = "consentOnDeath"
+        consentOnDeath = "consentOnDeath",
+        acceptRez = "acceptRez"
     },
     eventIds = {
         groupInvited = "groupInvited",
@@ -32,7 +33,8 @@ local GeneralConfig = {
         restart = "restart",
         exit = "exit",
         doType = "dotype",
-        consentOnDeath = "consentondeath"
+        consentOnDeath = "consentondeath",
+        acceptRez = "acceptrez"
     },
     equipmentSlots = {
         "charm",
@@ -96,6 +98,14 @@ local function initAndValidate()
         -- would mean flipping a switch on every character in a fleet to get the behaviour the
         -- setting exists for, which is the friction rather than the caution
         GeneralConfig._.config:GetConfigRoot()[GeneralConfig.key][GeneralConfig.keys.consentOnDeath] = true
+        taint = true
+    end
+    if GeneralConfig._.config:GetConfigRoot()[GeneralConfig.key][GeneralConfig.keys.acceptRez] == nil then
+        DebugLog("General acceptRez was not set, updating...")
+        -- on: a rez is offered to this character and nobody else, and taking it is the only reason
+        -- anybody cast it. Off by default would mean the character somebody just spent a rez on
+        -- hovers there until a human clicks for it, which is the friction rather than the caution
+        GeneralConfig._.config:GetConfigRoot()[GeneralConfig.key][GeneralConfig.keys.acceptRez] = true
         taint = true
     end
     if taint then
@@ -274,6 +284,20 @@ function GeneralConfig.Init()
             set = GeneralConfig.SetConsentOnDeath
         })
 
+        ToggleCommand.Register({
+            key = GeneralConfig.key,
+            phrase = GeneralConfig.eventIds.acceptRez,
+            summary = "Turns taking resurrections offered to you on or off",
+            about = {
+                "Answers Yes to the client's rez box, and picks the Resurrect line on the respawn",
+                "window when the rez arrives while you are still hovering over your corpse.",
+                "Only a rez: a box asking to sacrifice you is left for you to answer, and the",
+                "respawn window is never picked at without a rez actually waiting behind it."
+            },
+            get = GeneralConfig.GetAcceptRez,
+            set = GeneralConfig.SetAcceptRez
+        })
+
         Menu.RegisterConfig(GeneralConfig)
 
         GeneralConfig._.isInit = true
@@ -305,6 +329,18 @@ function GeneralConfig.SetConsentOnDeath(enable)
     print("Consenting my group, raid and guild on death is Enabled: [" .. tostring(enable) .. "]")
 end
 
+---@return boolean isEnabled whether a resurrection offered to this character is taken
+function GeneralConfig.GetAcceptRez()
+    return getConfigSection()[GeneralConfig.keys.acceptRez] == true
+end
+
+---@param enable boolean
+function GeneralConfig.SetAcceptRez(enable)
+    getConfigSection()[GeneralConfig.keys.acceptRez] = enable == true
+    GeneralConfig._.config:SaveConfig()
+    print("Taking resurrections offered to me is Enabled: [" .. tostring(enable) .. "]")
+end
+
 ---@diagnostic disable-next-line: duplicate-set-field
 function GeneralConfig.BuildMenu()
     local generalConfig = getConfigSection()
@@ -325,6 +361,13 @@ function GeneralConfig.BuildMenu()
     end
     ImGui.SameLine()
     CommonUI.HelpMarker("On dying, give your group, raid and guild consent to drag the corpse you just left -- out of where it fell, or over to whoever is going to rez it. Nothing else is granted by it, and only the ones you are actually in are consented: a group you are not in stamps nothing. The consents go out the moment you die, while the corpse is still lying in a zone that has people in it, and the server allows one every two seconds, so the three of them take about five. Toggle from chat or a hotbar button with: consentondeath")
+
+    local acceptRez, acceptRezClicked = ImGui.Checkbox("Take resurrections offered to me", GeneralConfig.GetAcceptRez())
+    if acceptRezClicked then
+        GeneralConfig.SetAcceptRez(acceptRez)
+    end
+    ImGui.SameLine()
+    CommonUI.HelpMarker("Take a rez the moment somebody offers one. Back on your feet, that is the client's rez box answered Yes. Still hovering over your corpse, there is no box: the offer is the Resurrect line on the respawn window, and picking it is what accepts it -- so the line is picked and Respawn clicked for you. Only a rez is ever answered: the box that asks to sacrifice you says \"Resurrection\" while it asks and is left alone, and the respawn window is never picked at unless the client has said a rez is actually waiting, because picking it with nothing behind it stops the respawn timer and leaves you hovering. Toggle from chat or a hotbar button with: acceptrez")
 
     ImGui.SeparatorText("Hotbars")
     ImGui.SameLine()

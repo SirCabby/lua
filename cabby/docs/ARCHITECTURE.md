@@ -60,10 +60,12 @@ jobs need the same answer to, assembled from four angles including a sweep that 
 waits that put an item in somebody else's hands, because a state that walked them itself would
 leave a give window standing open with an item in it the first time a fight took the frame away;
 **Curing** (`curing.lua`), which holds what is on *this* character that a cure would take off and
-who has said so, for the healer that does the casting; and **Consent** (`consent.lua`), which
+who has said so, for the healer that does the casting; **Consent** (`consent.lua`), which
 watches for this character's own death and consents the group, raid and guild to drag the corpse,
 because everything it does happens in the seconds while no state is going to be given a frame for
-it and the player is looking at a respawn window.
+it and the player is looking at a respawn window; and **Rez** (`rez.lua`), the other half of that
+window, which takes the resurrection somebody offers -- the client's confirmation box, or the
+`Resurrect` line on the respawn window we are still hovering at.
 
 This is a **priority-chain cooperative scheduler**: state order = priority; `Go()` returning
 `false` yields to lower states. The priority bands live in `classes/priorities.lua`:
@@ -192,6 +194,11 @@ cabby/
                       guild, so the people it is already with may drag the corpse it just left.
                       Watches for the death itself and paces the commands past the server's
                       one-every-two-seconds throttle; no order, no frames
+  rez.lua             service: taking the resurrection somebody offers -- Yes to the client's rez
+                      box on our feet, the Resurrect line on the respawn window while hovering.
+                      Reads every confirmation box before answering it (a sacrifice says
+                      "Resurrection" while it asks to kill us), and never picks at the respawn
+                      window without the client having said a rez is waiting
   cons.lua            reader: the con ladder, weakest to toughest, and whether a spawn is at least
                       a given rung of it. How much of a fight something is, in the one measure the
                       client gives -- so that "not worth the effort" is spelled one way across
@@ -2499,6 +2506,41 @@ What it holds is the one thing the world cannot answer — whether this death ha
 comes up next to a corpse it never watched being made consents nothing: that is a death nobody
 observed, not a reason to act. The switch is `consentondeath` (chat, hotbar button, or the General
 page), on by default, and turning it off drops whatever the current death still owed.
+
+## Taking a rez (`rez.lua`)
+
+The other half of the respawn window. A rez arrives as one of two things, and which one depends on
+whether we are still hovering over our own corpse when it lands.
+
+**On our feet** — released to bind, or dragged back and standing there — and the client puts up its
+confirmation box (`%1 wants to RESURRECT you. Do you wish this?`, eqstr 9046). Yes is the whole
+answer; the server does the rest (`Client::OPRezzAnswer`).
+
+**Still hovering dead**, and there is no box to answer: the offer is the `Resurrect` line on the
+respawn window, which the server puts there at death and always last (`Client::SendRespawnBinds`).
+Picking it *is* accepting — `Client::HandleRespawnFromHover` answers the rez itself rather than
+asking again — so the row is selected and Respawn clicked.
+
+**Every confirmation box is read before it is answered.** `ConfirmationDialogBox` is the client's one
+box and it asks about everything: destroying an item, deleting a character, and — the one that
+matters — `%1 wants to SACRIFICE you. You get NO experience back with Resurrection, even GM. Die &
+lose exp?` (eqstr 9054), which is a request to *kill* us and which says "Resurrection" while it asks.
+Only "wants to resurrect you" is answered Yes, and anything mentioning a sacrifice is the player's to
+answer whatever else it says.
+
+**The hover pick waits for evidence that a rez is really pending**, and that evidence is the client
+saying so ("You have been offered a resurrection.", the `rezoffered` event) or a rez box appearing
+while we are dead. The `Resurrect` row is on the respawn window from the moment we die, offer or no
+offer, and picking it with nothing behind it is not a harmless miss: `HandleRespawnFromHover` disables
+the respawn timer *before* it finds out there is no rez to give, so a blind click leaves the character
+hovering with the clock that would have released it switched off.
+
+What it holds is that offer — the one thing the world cannot answer, since a respawn window with a rez
+waiting behind it and one without look exactly alike. It is dropped the moment we read as alive, so an
+offer can never carry into the next death, and a script that comes up next to a corpse it never
+watched being made knows of no offer at all. Nothing goes out while `GameState` is not `INGAME`:
+taking a rez is what starts one of those loading screens. The switch is `acceptrez` (chat, hotbar
+button, or the General page), on by default, and turning it off drops the standing offer with it.
 
 ## Rest state (`states/restState.lua`)
 

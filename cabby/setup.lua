@@ -19,6 +19,7 @@ local HotbarsUI = require("cabby.ui.hotbarsUI")
 local Menu = require("cabby.ui.menu")
 local Mobs = require("cabby.mobs")
 local CabbyMovement = require("cabby.movement")
+local Rez = require("cabby.rez")
 local Roles = require("cabby.roles")
 local Travel = require("cabby.travel")
 
@@ -157,6 +158,9 @@ function Setup:Init(configFilePath, stateMachine)
     -- what our own death owes the people we are already with: the consents that let them drag the
     -- corpse. Watches for the death itself, so it needs no order and holds no frames
     Consent.Init(stateMachine)
+    -- the other half of being dead: taking the rez somebody offers us, whether that arrives as the
+    -- client's confirmation box or as the Resurrect line on the respawn window we are hovering at
+    Rez.Init(stateMachine)
     Travel.Init() -- the standing movement orders; the world's death messages end a follow here
     ClassSetup(stateMachine)
 
