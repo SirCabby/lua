@@ -668,11 +668,15 @@ exists moves from that list into the profile's `states` at its band.
 
 Heal's own leftovers, for when the bands around it exist: heal-over-time management (a HoT is
 wasted on someone about to be topped off; the duration reads the buff state uses are the half of
-that which now exists), rezzing, and any awareness of what *other* healers are doing — two clerics
+that which now exists), and any awareness of what *other* healers are doing — two clerics
 on one tank both cast, and only the group coordination in Phase 5 can fix that. Curing has the same
 gap and it is more visible there, because a cure request goes to everybody at once: two clerics hear
 one `cure poison` and both answer it. The queue is per-listener by design, so the fix is the same
-Phase 5 coordination rather than anything in `curing.lua`.
+Phase 5 coordination rather than anything in `curing.lua`. **Rezzing has it worst of the three**, and
+in a shape the others do not: two clerics standing over one corpse both cast a ten second rez, and
+the second lands on a corpse already rezzed and hands back nothing — the server zeroes the experience
+rather than refusing the cast (`Corpse::CastRezz`), so it is a full rez's mana spent on nothing.
+`rezzing.lua`'s offer window only knows about rezzes *this* character cast.
 
 Two of these are already half-written elsewhere and only need the state around them:
 **Tank** (MeleeState's taunt/hate lists run on a timer; what is missing is aggro-loss

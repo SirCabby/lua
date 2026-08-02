@@ -9,6 +9,7 @@ local ChelpDocs = require("cabby.commands.chelpDocs")
 local Commands = require("cabby.commands.commands")
 local Disciplines = require("cabby.actions.disciplines")
 local Items = require("cabby.actions.items")
+local Rezzes = require("cabby.actions.rezzes")
 local Skills = require("cabby.actions.skills")
 local SlashCmd = require("cabby.commands.slashcmd")
 local Spells = require("cabby.actions.spells")
@@ -107,6 +108,11 @@ function Character.Refresh(parts)
     if parts.aas then AAs.Refresh() end
     if parts.items then Items.Refresh() end
 
+    -- built out of the two above rather than read on its own, so it is re-derived whenever either
+    -- of them moves. A scribed rez and a bought rez AA are the same answer to "what can I bring
+    -- somebody back with", and both arrive this way
+    if parts.spells or parts.aas then Rezzes.Refresh() end
+
     Character._.signature = readSignature()
 end
 
@@ -116,7 +122,8 @@ function Character.Describe()
         ", discs: " .. tostring(#Disciplines.all) ..
         ", spells: " .. tostring(#Spells.all) ..
         ", AAs: " .. tostring(#AAs.all) ..
-        ", clickies: " .. tostring(#Items.all)
+        ", clickies: " .. tostring(#Items.all) ..
+        ", rezzes: " .. tostring(#Rezzes.all)
 end
 
 ---Service contract: watch the signature and re-read what moved.

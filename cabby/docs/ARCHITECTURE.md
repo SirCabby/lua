@@ -63,9 +63,11 @@ leave a give window standing open with an item in it the first time a fight took
 who has said so, for the healer that does the casting; **Consent** (`consent.lua`), which
 watches for this character's own death and consents the group, raid and guild to drag the corpse,
 because everything it does happens in the seconds while no state is going to be given a frame for
-it and the player is looking at a respawn window; and **Rez** (`rez.lua`), the other half of that
+it and the player is looking at a respawn window; **Rez** (`rez.lua`), the other half of that
 window, which takes the resurrection somebody offers -- the client's confirmation box, or the
-`Resurrect` line on the respawn window we are still hovering at.
+`Resurrect` line on the respawn window we are still hovering at; and **Rezzing** (`rezzing.lua`),
+the opposite end of that same event, which holds whose corpses are worth a rez and which rez to
+spend on them, for the healer that does the casting.
 
 This is a **priority-chain cooperative scheduler**: state order = priority; `Go()` returning
 `false` yields to lower states. The priority bands live in `classes/priorities.lua`:
@@ -199,6 +201,12 @@ cabby/
                       Reads every confirmation box before answering it (a sacrifice says
                       "Resurrection" while it asks to kill us), and never picks at the respawn
                       window without the client having said a rez is waiting
+  rezzing.lua         reader: the giving end of the same event -- whose corpses are lying here
+                      worth a rez (group members, ordered by the tank switch and the class list,
+                      narrowed in a fight to whoever that list says is worth breaking off for, plus
+                      whoever asked), which rez to spend on them, and which corpses have already
+                      been offered one. HealState does the casting, because a rez is a gem not
+                      spent on a heal; no frames
   cons.lua            reader: the con ladder, weakest to toughest, and whether a spawn is at least
                       a given rung of it. How much of a fight something is, in the one measure the
                       client gives -- so that "not worth the effort" is spelled one way across
@@ -229,9 +237,11 @@ cabby/
   configs/            per-domain config modules (see below)
   actions/            ActionType interface + implementations + registries, plus buffTypes: the
                       named buffs (`invis`, `lev`, `sow`, ...) a `buff <type>` request is answered
-                      from, each defined by the SPA effects its spells carry; and cureTypes, the
+                      from, each defined by the SPA effects its spells carry; cureTypes, the
                       four counters (poison, disease, curse, corruption) that say both what is on
-                      somebody and what would take it off, told apart by the sign of one base value
+                      somebody and what would take it off, told apart by the sign of one base
+                      value; and rezzes, every corpse-aimed cast carrying SPA_RESURRECT, ordered by
+                      the experience its base value hands back
   ui/                 ImGui menu shell + per-domain panels (states/, actions/, hotbars)
   utils/ (sibling)    Movement/, Casting/ and Giving/ (see below), Time/Timer/StopWatch, Config,
                       Debug/FlowTracer, FileSystem, Json, PriorityQueue (unused), Stack,
@@ -737,8 +747,9 @@ cancels it. Settings (memorize gem, settle window, preparation budget) live in
 
 Callers today are `/ccast`, any configured action slot holding a spell, clicky or AA (see Action
 system below), and the five states that ask for casts directly: heal, spell dps, buff, pet and
-mez. Cures are the heal state asking as well — a cure and a heal are one character choosing what to
-spend a gem on, so they go through one caller rather than two (see Curing).
+mez. Cures and rezzes are the heal state asking as well — a cure, a rez and a heal are one character
+choosing what to spend a gem on, so all three go through one caller rather than three (see Curing
+and Rezzing).
 
 **Mez is the caller that reads a result twice**, and it is worth knowing why before writing
 another one: a resist arrives *after* the cast bar closes, so the service reports the cast a
@@ -1715,6 +1726,10 @@ The order things are decided in, every pulse:
    below the emergency point: three people at 60% is what a group heal is for, and one person at
    15% is not, however many others are scuffed.
 4. **Whoever is worst off**, with the first slot whose aim, scope and threshold fit them.
+5. **A rez** (see Rezzing below). Dead last, because everybody alive comes first: somebody dead is
+   not getting any worse, and the corpse will still be lying there in three seconds. So this is the
+   frame nothing else in the state wanted — out of a fight that is every frame, and in one it is
+   the gap between two heals.
 
 **A heal in the air is reconsidered every pulse.** It is called off when the target dies or leaves,
 when they climb back above the threshold that triggered it (plus a margin, so a heal landing from
@@ -1868,6 +1883,147 @@ whose duration runs out is dropped without re-targeting — so a look stays exac
 affliction *ending*, which is the question, and can only go wrong about one *arriving* since. That
 is why it is trusted at all and the only reason it expires; being wrong costs one refused cure and
 then a cast that re-targets them and settles it.
+
+### Rezzing (`rezzing.lua` + `actions/rezzes.lua`)
+
+The third job riding in the heal state, and it is here for the reason curing is: a rez is a gem and
+a large piece of the mana bar, so choosing to spend them on a corpse is choosing not to heal with
+them, and that choice belongs where the healing is arbitrated. `rezzing.lua` is the choosing;
+HealState is the hands. Not to be confused with `rez.lua`, which is the *other* end of the same
+event — that one takes the resurrection somebody offers us.
+
+**Everything is discovered, and everything is overridable.** The discovery is what makes it work on
+a character nobody configured; the overrides are because a group that knows which rez it wants spent,
+and on whom, should not have to argue with a heuristic. Three settings, all on the page's Rezzes tab
+plus the `rezzing` switch: **when** (`off` / `on` / `combat`, the same three answers in the same
+words the cure mode takes, defaulting to out-of-combat for the same reason), **which rez** (two
+pickers, below), and **who first** (the class order, below).
+
+**A rez is the one beneficial cast aimed at a corpse**, and both halves of what makes one worth
+choosing are numbers sitting in the data: `SPA_RESURRECT` (81) carries the percentage of the lost
+experience it hands back in its base value, and the cast time says whether it could survive a fight.
+So `actions/rezzes.lua` is every corpse-aimed cast in the book and the AA list carrying that effect,
+ordered by experience returned with a shorter cast breaking ties. The corpse-aimed read is asked
+first and costs one member per spell, which is what keeps a refresh off the effect slots of the other
+seven hundred — and it is also what tells a rez from Summon Corpse, which aims at a corpse, is
+routed through the same server call, and brings nobody back.
+
+**Two rez settings, not one, because it is not one question.** Out of a fight the only thing that
+matters is the experience handed back; in one it is whether the cast bar survives at all. A cleric
+owning both a ten second Resurrection and an instant AA wants each of them in its own circumstance,
+and no single dial says that. Each setting defaults to the worked-out answer — *best I have* out of
+a fight, *quickest I have* in one — and either can name a spell instead. A name this character does
+not own falls back to the worked-out answer rather than casting nothing, since a settings file
+written on the cleric and read on the druid should not silently stop rezzing, and both `/cheal` and
+the page call the missing name out.
+
+**One rez is chosen for the pass, and waited for rather than substituted.** If it is a few seconds
+from ready, that is what standing over a corpse is for: quietly dropping to a weaker rank to save the
+wait would spend the group's experience to buy nothing, and a corpse is not in a hurry.
+
+**Group members' corpses, plus whoever asked.** The corpse is found by name — `<name>'s corpse`, the
+same reading CorpseState makes of its own, with the apostrophe telling `Cabby` from `Cabbyx` —
+searched per group member out to 100 with a plain `corpse` search rather than `pccorpse`, for the
+reason CorpseState gives (MQ tells a player corpse from an NPC one by whether the spawn carries a
+deity, and there is no promise this server sends one). It walks nobody anywhere. The real range check
+is the casting service's, measured against the corpse, so one behind a wall is stepped over rather
+than started and refused.
+
+**Who first is an ordered class list**, and it is one list read twice, the way the heal slots are one
+list read for several things: where a class sits is who is gone to first, and its flag is whether a
+fight is *interrupted* for them.
+
+**The flag is about when, never about whether.** There is deliberately no "rez this class at all"
+switch — a corpse left lying there forever is not a setting anybody reached for, and `rezzing off`
+already answers it for the whole character. So every class on the list is rezzed once the fighting
+stops, and the flag buys the judgment that actually differs between the two situations: out of a
+fight a rez costs time nobody is using, during one it costs a cast somebody alive may need, so a
+group that will break off for its cleric and nobody else says exactly that by clearing the rest. All
+on to start with, since rezzing in battle is already behind its own mode switch and already waits for
+everybody alive — the column narrows, it is not a second opt-in. Which is also why the tank rules
+above it cannot be undercut by a class nobody thought to tick: out of a fight the list gates nothing,
+and in one the tank's own row is the only thing that would.
+
+The order ships with an opinion rather than blank — whoever can put the rest of the group back on its
+feet leads it (CLR, DRU, SHM, PAL, NEC), then the people the fight cannot restart without, then
+everybody else. The whole list is repaired rather than trusted on load, because it is sixteen rows of
+hand-editable config deciding who gets picked up mid-fight: known rows keep their order, junk and
+duplicates go, any class missing is appended switched on (which is also how a list written by an
+older version picks up a class it never knew about), and a row carrying the `enabled` spelling this
+flag had before it was about *when* is read as the same flag. That read is spelled out rather than
+written with `and`/`or`, which cannot express it: `written ~= nil and written or fallback` hands back
+the fallback whenever `written` is *false* — which is precisely the value being asked about, so a
+class deliberately switched off would come back on.
+
+The full order is: whoever asked, then the main tank while that switch is on (the role is the job, not
+the class holding it), then the class list, then whoever is nearest — a tie-break and never a reason,
+broken finally by spawn id so the list cannot reshuffle between passes.
+
+**The class comes off the corpse, not the group window.** `Group.Member` has no `Class` member at all
+— only its `Spawn` does, and a member who released to bind is standing in another zone with no spawn
+here, which is precisely the corpse this is most often asked about. The corpse always knows: the
+server builds one from the client it came off and copies the class straight across (`Corpse::Corpse`,
+passing `c->GetClass()`), and MQ reads `Spawn.Class` off a corpse like any other spawn. It also
+answers for somebody outside the group, which the group window could never do. A corpse that will not
+name a class ranks last and is still rezzed — a failed read is not a reason to leave somebody there.
+
+**The scan is cached; the judgment is not.** Finding corpses is a spawn search per group member and
+is paced at a second; deciding what to do about them is reading a few settings and happens every
+pass. Keeping them apart is load-bearing rather than tidy — a class switched off, a class moved up
+the order, the tank switch flipped are all decisions the user just made on the page, and baking them
+into the cached reading meant every one of them went on being ignored until the next scan. It is also
+what makes the in-fight flag honest: whether it applies at all is decided by whether there is a fight
+on right now, so a pull narrows the list to whoever is worth breaking off for on the pass it happens
+rather than up to a second later. That is the "decide every pass" rule with only the expensive half
+cached, the same shape the heal state reads the group's health in.
+
+**A rez waits for the living, with one exception.** Nothing is cast at a corpse while somebody this
+state *would* heal is below the emergency point — the same guard curing is held to, asked the same
+careful way. The exception is the **tank's** corpse with a rez that has *no cast bar at all*: that
+spends a global cooldown, which is what a heal would have spent anyway, and hands the group back the
+person it is built around, so holding it for a second person at 30% is a trade nobody wants made for
+them. Anything with a cast bar spends seconds that person needs, however short it is, so the line is
+drawn at zero rather than at a number somebody has to choose — it is a property of the spell, it
+cannot be set wrong, and it is exactly the battle-rez AA this is for. (There *was* a "longest cast to
+start in a fight" dial doing this job and choosing the in-fight rez as well; it was removed as
+confusing, and both of its jobs are now said outright.) The exemption is carried on the pick rather
+than recomputed, so a rez allowed to start in front of an emergency is not thrown away by the next
+pass for the very reason it was allowed.
+
+**A rez is an offer, and the world will not say whether it was taken.** This is the one place
+rezzing needs memory. The server hands the corpse's owner a box (or a `Resurrect` line on their
+respawn window) and nothing comes back to the caster either way; the corpse does not go away when
+the offer is accepted, since its owner still has to loot it; and casting at a corpse that has already
+been rezzed is not even refused — `Corpse::CastRezz` re-sends the request with the experience zeroed.
+So a corpse this character has cast at is left alone for half a minute (a person noticing a box, with
+room to spare; a cabby on the far end answers in half a second), and after three unanswered offers it
+is left alone entirely. That bound is the same shape as curing's cast budget and exists for the same
+reason: the ordinary end of an offer is somebody accepting it, and nothing here can see that happen,
+so without one a linkdead corpse is cast at until the world intervenes. It is not a give-up on the
+person — `rezme` clears it and starts again, which is somebody saying they are at the keyboard to
+answer this time. A cast that was *refused* is a three second backoff instead, not counted against
+the budget, because a cast that never happened put nothing on anybody.
+
+**Orders remember the person, not the corpse.** `rezme` and `reznow <id | name>` reach somebody
+outside the group and put them ahead of everybody in it. What is stored is the character's name,
+which is what a corpse carries — and that is what makes an order worth giving at all, since the
+corpse is very often not in reach when it is spoken, so it is looked for every pass until it is. An
+order does not override the `rezzing` setting: a character with rezzing off, or set to stay out of
+fights, answers back rather than taking it on and expiring in silence. `rezme` takes no spawn search,
+unlike `healme`, because the character it is *for* is exactly the one a search would fail on — one
+who released and is standing at a bind point in another zone while their corpse lies here. An order
+nobody could act on within a minute is dropped; the last look at the ground is invalidated whenever
+the order changes, since the order is what put a non-group corpse in it.
+
+Everything held — the offers, the order, the last look — is dropped on a zone line, where spawn ids
+stop meaning anything.
+
+**A rez put in a heal slot is recognised and refused**, rather than treated as an ordinary
+single-target heal: `NeedsTarget` is true for one exactly as it is for a Complete Heal, so before
+this the first slot holding one would have been chosen for whoever was worst off and cast at a living
+person. The aims model gained a `corpse` answer, `appliesTo` refuses it for everybody, and the page
+says what the slot is and where rezzing actually lives. That is the same failure the pet aim exists
+to prevent, one target type over.
 
 ## Buff state (`states/buffState.lua`)
 
@@ -2509,8 +2665,10 @@ page), on by default, and turning it off drops whatever the current death still 
 
 ## Taking a rez (`rez.lua`)
 
-The other half of the respawn window. A rez arrives as one of two things, and which one depends on
-whether we are still hovering over our own corpse when it lands.
+The other half of the respawn window, and the receiving end of what the Rezzing section above
+describes: `rezzing.lua` offers a rez to somebody else's corpse, this takes the one offered to ours.
+A rez arrives as one of two things, and which one depends on whether we are still hovering over our
+own corpse when it lands.
 
 **On our feet** — released to bind, or dragged back and standing there — and the client puts up its
 confirmation box (`%1 wants to RESURRECT you. Do you wish this?`, eqstr 9046). Yes is the whole

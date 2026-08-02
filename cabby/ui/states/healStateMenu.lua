@@ -9,6 +9,8 @@ local CureTypes = require("cabby.actions.cureTypes")
 local Curing = require("cabby.curing")
 local HealStateConfig = require("cabby.configs.healStateConfig")
 local Items = require("cabby.actions.items")
+local Rezzes = require("cabby.actions.rezzes")
+local Rezzing = require("cabby.rezzing")
 local Roles = require("cabby.roles")
 local Spells = require("cabby.actions.spells")
 
@@ -31,6 +33,12 @@ local cureModeOrder = {
     HealStateConfig.cureModes.Off,
     HealStateConfig.cureModes.OutOfCombat,
     HealStateConfig.cureModes.Always
+}
+
+local rezModeOrder = {
+    HealStateConfig.rezModes.Off,
+    HealStateConfig.rezModes.OutOfCombat,
+    HealStateConfig.rezModes.Always
 }
 
 ---How long an answer to "what would I cure this with" is reused for.
@@ -63,6 +71,109 @@ end
 
 ---How much room the per-slot heal controls need under the action row.
 local extrasHeight = 26
+
+---One of the two rez pickers.
+---
+---Every rez this character owns is offered, plus the worked-out answer at the top -- which is the
+---default and is a real choice rather than an absence, so it says what it currently comes to right
+---there in the label. A name that is set and not in this character's book is called out instead of
+---quietly falling back, since that is exactly what a settings file copied between characters does.
+---@param label string
+---@param inCombat boolean which of the two settings this is
+local function DrawRezPick(label, inCombat)
+    local set = inCombat and HealStateConfig.GetBattleRezSpell() or HealStateConfig.GetRezSpell()
+    local auto = HealStateConfig.AutoRez()
+    local rez, isNamed, missing = Rezzing.RezFor(inCombat)
+
+    local autoLabel = (inCombat and "Quickest I have" or "Best I have") ..
+        (rez ~= nil and (" -- " .. Rezzes.Describe(rez)) or " -- nothing")
+
+    ImGui.SetNextItemWidth(330)
+    if ImGui.BeginCombo(label, isNamed and set or autoLabel) then
+        local _, autoPressed = ImGui.Selectable(autoLabel, set == auto)
+        if autoPressed then
+            if inCombat then
+                HealStateConfig.SetBattleRezSpell(auto)
+            else
+                HealStateConfig.SetRezSpell(auto)
+            end
+        end
+
+        for _, known in ipairs(Rezzes.all) do
+            local name = known.action:Name()
+            local _, pressed = ImGui.Selectable(Rezzes.Describe(known), set == name)
+            if pressed then
+                if inCombat then
+                    HealStateConfig.SetBattleRezSpell(name)
+                else
+                    HealStateConfig.SetRezSpell(name)
+                end
+            end
+        end
+        ImGui.EndCombo()
+    end
+
+    if missing ~= nil then
+        ImGui.SameLine()
+        ImGui.TextColored(1, 0.8, 0.2, 1, "[" .. missing .. "] is not in this character's book")
+    end
+end
+
+---The class order: who is gone to first, and who a fight is interrupted for.
+---
+---One list read twice, the way the heal slots are one list read for several things -- the position
+---is who goes first, and the box is whether a fight is interrupted for them -- so there is one thing
+---to understand rather than two. There is no "rez this class at all" box: everybody on the list is
+---rezzed once the fighting stops.
+local function DrawRezClasses()
+    local classes = HealStateConfig.GetRezClasses()
+
+    local classFlags = bit32.bor(ImGuiTableFlags.RowBg, ImGuiTableFlags.BordersInner,
+        ImGuiTableFlags.NoHostExtendX)
+    if not ImGui.BeginTable("healRezClasses", 4, classFlags) then return end
+
+    ImGui.TableSetupColumn("#", ImGuiTableColumnFlags.WidthFixed, 26)
+    ImGui.TableSetupColumn("Class", ImGuiTableColumnFlags.WidthFixed, 60)
+    ImGui.TableSetupColumn("In battle", ImGuiTableColumnFlags.WidthFixed, 80)
+    ImGui.TableSetupColumn("Order", ImGuiTableColumnFlags.WidthFixed, 100)
+    ImGui.TableHeadersRow()
+
+    for index, entry in ipairs(classes) do
+        ImGui.PushID(entry.class)
+        ImGui.TableNextRow()
+
+        ImGui.TableNextColumn()
+        ImGui.Text(tostring(index))
+
+        ImGui.TableNextColumn()
+        ImGui.Text(entry.class)
+
+        ImGui.TableNextColumn()
+        local inCombat, inCombatClicked =
+            ImGui.Checkbox("##incombat", HealStateConfig.GetRezClassEnabled(entry, true))
+        if inCombatClicked then
+            HealStateConfig.SetRezClassInCombat(entry.class, inCombat)
+        end
+
+        ImGui.TableNextColumn()
+        if index == 1 then ImGui.BeginDisabled() end
+        if ImGui.Button("Up", 40, 20) then
+            HealStateConfig.MoveRezClass(index, -1)
+        end
+        if index == 1 then ImGui.EndDisabled() end
+
+        ImGui.SameLine()
+        if index == #classes then ImGui.BeginDisabled() end
+        if ImGui.Button("Down", 50, 20) then
+            HealStateConfig.MoveRezClass(index, 1)
+        end
+        if index == #classes then ImGui.EndDisabled() end
+
+        ImGui.PopID()
+    end
+
+    ImGui.EndTable()
+end
 
 ---What makes a heal slot a *heal* slot, drawn under the action itself: how hurt they have to be,
 ---and who it is for. What the heal can be aimed at is the spell's own business and is only
@@ -219,6 +330,26 @@ function HealStateMenu.BuildMenu(healState)
         ImGui.SameLine()
         CommonUI.HelpMarker("Whether this character answers cure requests, and when. Somebody carrying a poison, disease, curse or corruption with more than a minute left on it asks the group for a cure -- every character does that, whether or not it can cure anything -- and this decides whether this one answers. Cures are cast ahead of ordinary heals, because a cure ends a cost instead of paying it back, and behind anybody below the emergency point. The Cures tab shows what would be cast for each kind and who is waiting.")
 
+        ImGui.TableNextRow()
+        ImGui.TableNextColumn()
+
+        ImGui.Dummy(0, 0)
+        ImGui.SameLine()
+
+        local rezMode = HealStateConfig.GetRezMode()
+        ImGui.SetNextItemWidth(190)
+        if ImGui.BeginCombo("Rezzing", HealStateConfig.GetRezModeDisplay(rezMode)) then
+            for _, known in ipairs(rezModeOrder) do
+                local _, pressed = ImGui.Selectable(known.display, rezMode == known.value)
+                if pressed then
+                    HealStateConfig.SetRezMode(known.value)
+                end
+            end
+            ImGui.EndCombo()
+        end
+        ImGui.SameLine()
+        CommonUI.HelpMarker("Whether this character rezzes the corpses lying around it, and when. Group members' corpses within " .. tostring(Rezzing.GetRadius()) .. " are rezzed without being asked; anybody else asks with rezme. Which rez, and who first, are on the Rezzes tab. Rezzing is the last thing this state does, behind every heal and every cure, because everybody alive comes first. It walks nobody anywhere: get back to the corpses first.")
+
         ImGui.EndTable()
     end
     ImGui.PopStyleVar()
@@ -337,6 +468,76 @@ function HealStateMenu.BuildMenu(healState)
             end
             ImGui.SameLine()
             CommonUI.HelpMarker("What this character is carrying that a cure would take off, and how long it has left. Anything over a minute is asked about on a channel, once and then every twenty seconds until it is gone -- turn that off with the callcure command. It is asked about whatever this page says: answering and asking are separate, because every class has to ask and only some can answer.")
+
+            ImGui.EndTabItem()
+        end
+
+        if ImGui.BeginTabItem("Rezzes") then
+            ImGui.TextDisabled("Which rez to spend, and whose corpse to go to first.")
+            ImGui.SameLine()
+            CommonUI.HelpMarker("A rez says what it is worth right there in its effect -- the percentage of the lost experience it hands back -- and its cast time says whether it could survive a fight. Both are read off the spell, so leaving these on their worked-out answers is a real answer; naming one is for when the group knows which rez it wants spent. Whether any of this happens at all is the Rezzing setting above.")
+
+            ImGui.Spacing()
+            DrawRezPick("Out of a fight", false)
+            DrawRezPick("In a fight", true)
+
+            ImGui.Spacing()
+            ImGui.SeparatorText("Who first")
+
+            local tankFirst, tankFirstClicked =
+                ImGui.Checkbox("The main tank, whatever their class", HealStateConfig.GetRezTankFirst())
+            if tankFirstClicked then
+                HealStateConfig.SetRezTankFirst(tankFirst)
+            end
+            ImGui.SameLine()
+            CommonUI.HelpMarker("On, the main tank's corpse goes ahead of the class order below -- the role is the job, not the class holding it. It is also the one corpse allowed ahead of a heal: if the rez in force has no cast bar at all, the tank is rezzed even while somebody is below the emergency point, because that spends a global cooldown the heal would have spent anyway. A rez with any cast bar never gets that, however short it is.")
+
+            ImGui.TextDisabled("Everybody here is rezzed once the fighting stops. In battle is who a fight is interrupted for.")
+            DrawRezClasses()
+            ImGui.SameLine()
+            CommonUI.HelpMarker("One list read twice: where a class sits is the order corpses are gone to in, under the tank switch above, and the box is whether a fight is interrupted for them. It is about when, never about whether -- every class here is rezzed once the fighting stops, and rezzing off is how a character is told to leave corpses alone entirely. Out of a fight a rez costs time nobody is using; during one it costs a cast somebody alive may need, so a group that will break off for its cleric and nobody else clears the box for everybody else. All on to start with, since rezzing in battle is already behind its own switch above.")
+
+            ImGui.Spacing()
+            ImGui.SeparatorText("Right now")
+            local notRezzing = Rezzing.ReasonNotRezzing()
+            if notRezzing ~= nil then
+                ImGui.TextColored(1, 0.8, 0.2, 1, "Not rezzing: " .. notRezzing)
+            else
+                ImGui.Text(Rezzing.Describe())
+            end
+
+            local order = Rezzing.GetOrder()
+            if order ~= nil then
+                ImGui.Text("Asked to rez: " .. order.name)
+            end
+
+            local lastRez = healState.GetLastRezResult()
+            if lastRez ~= nil then
+                ImGui.TextDisabled("Last: " .. lastRez)
+            end
+
+            ImGui.Spacing()
+            ImGui.SeparatorText("Corpses in reach")
+            local corpses = Rezzing.GetCorpses()
+            if #corpses < 1 then
+                ImGui.TextDisabled("None -- only corpses of group members within " ..
+                    tostring(Rezzing.GetRadius()) .. " are looked at, and this walks nobody there")
+            else
+                for _, corpse in ipairs(corpses) do
+                    local held = Rezzing.ReasonHeld(corpse)
+                    local note = corpse.name .. " (" .. tostring(corpse.class or "?") .. ") -- " ..
+                        tostring(math.floor(corpse.distance)) .. " away" ..
+                        (corpse.isTank and " (tank)" or "") ..
+                        (corpse.isOrdered and " (asked for)" or "")
+                    if held ~= nil then
+                        ImGui.TextDisabled(note .. " -- " .. held)
+                    else
+                        ImGui.Text(note)
+                    end
+                end
+            end
+            ImGui.SameLine()
+            CommonUI.HelpMarker("Listed in the order they would be rezzed: whoever said rezme, then the main tank, then the class order above, then whoever is nearest. The class comes off the corpse itself, which is how it is known for somebody who released and is standing in another zone. A corpse this character has already cast a rez at is left alone for half a minute, because nothing comes back to say whether the offer was taken -- the corpse stays lying there either way. After three unanswered offers it is left alone entirely, and saying rezme is what starts it again.")
 
             ImGui.EndTabItem()
         end

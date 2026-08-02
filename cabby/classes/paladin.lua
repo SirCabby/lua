@@ -23,8 +23,7 @@ local Paladin = BaseClass.new({
         { state = BuffState, priority = Priorities.buff }
     },
     unimplemented = {
-        "tanking as its own state: aggro-loss detection driving the taunt and hate lists",
-        "rez"
+        "tanking as its own state: aggro-loss detection driving the taunt and hate lists"
     }
 })
 

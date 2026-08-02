@@ -16,8 +16,11 @@ local Curing = require("cabby.curing")
 local HealStateConfig = require("cabby.configs.healStateConfig")
 local HealStateMenu = require("cabby.ui.states.healStateMenu")
 local Menu = require("cabby.ui.menu")
+local Rezzes = require("cabby.actions.rezzes")
+local Rezzing = require("cabby.rezzing")
 local Roles = require("cabby.roles")
 local SlashCmd = require("cabby.commands.slashcmd")
+local Speak = require("cabby.commands.speak")
 local Status = require("cabby.status")
 local ToggleCommand = require("cabby.commands.toggleCommand")
 local UserInput = require("cabby.utils.userinput")
@@ -62,7 +65,11 @@ local aims = {
     self = "self",     -- only ever lands on the caster
     pet = "pet",       -- only ever lands on this character's pet
     group = "group",   -- one cast covers the whole group and needs no target
-    single = "single"  -- one person at a time
+    single = "single", -- one person at a time
+    -- a rez. Here so that a rez put in a heal slot is *recognised* rather than treated as an
+    -- ordinary single-target heal and cast at somebody alive: rezzing is not configured at all
+    -- (see `cabby.rezzing`), so a slot holding one is a mistake worth naming on the page
+    corpse = "corpse"
 }
 
 local petTargetTypes = { ["pet"] = true, ["pet2"] = true }
@@ -88,9 +95,17 @@ local petTargetTypes = { ["pet"] = true, ["pet2"] = true }
 ---the healing is arbitrated. Where it sits in the pass is the whole of the arbitration: after
 ---anybody in real trouble and before everything else -- see `Go`.
 ---
----What it deliberately leaves out: heal-over-time management, rezzes, and any awareness of what
----other healers in the group are doing. Those need a band of their own, a debuff model, or the
----group coordination that does not exist yet.
+---**Rezzing rides here too**, and for the same reason curing does: a rez is a gem and a large piece
+---of the mana bar, so choosing to spend them on a corpse is choosing not to heal with them, and that
+---choice belongs where the healing is arbitrated. It is configured no more than a cure is -- which
+---rez to use has an exact answer in the spell data and who to rez has one in the group window, so
+---all that is left to set is whether to do it during a fight. `cabby.rezzing` owns the choosing;
+---this state is the hands. Where it sits in the pass is the arbitration: dead last, because
+---everybody alive comes first -- see `Go`.
+---
+---What it deliberately leaves out: heal-over-time management, and any awareness of what other
+---healers in the group are doing. Those need a debuff model, or the group coordination that does
+---not exist yet.
 ---@class HealState : BaseState
 local HealState = {
     key = "HealState",
@@ -104,7 +119,13 @@ local HealState = {
         healGroup = "healgroup",
         healPets = "healpets",
         healAction = "healaction",
-        curing = "curing"
+        curing = "curing",
+        -- `reznow` rather than `rez`, for the reason `healnow` is not `heal`: a registered phrase
+        -- also matches every longer line that starts with it, and a plain `rez` would fire on
+        -- `rezme` and `rezzing off` alike
+        rez = "reznow",
+        rezMe = "rezme",
+        rezzing = "rezzing"
     },
     _ = {
         isInit = false,
@@ -118,6 +139,10 @@ local HealState = {
         -- one thing that says which of the two jobs this state is in the middle of
         cureRequest = nil,
         lastCureResult = nil,
+        -- the corpse the cast in flight is being rezzed, nil while it is anything else. The other
+        -- half of the one field that says which of this state's three jobs it is in the middle of
+        rezPick = nil,
+        lastRezResult = nil,
         order = nil,        -- { id, name, expiresMs } from a `heal <id>` or `healme`
         settleUntil = {},   -- { [spawn id] = time we may consider healing them again }
         -- { [spawn id] = when a heal that did not land is worth trying on them again }. Kept apart
@@ -255,6 +280,9 @@ local function aimOf(subject)
     local targetType = subject:TargetType()
     if petTargetTypes[targetType] then return aims.pet end
     if targetType == "self" then return aims.self end
+    -- a rez, which is nobody's heal: it needs a target like a single-target heal does and would
+    -- otherwise be chosen for whoever is worst off and cast at a living person
+    if targetType == "corpse" then return aims.corpse end
     -- everything else that aims itself covers the group: Group v1/v2, and the point-blank and
     -- targeted AE heals that land on whoever is standing with us
     if not subject:NeedsTarget() then return aims.group end
@@ -280,6 +308,9 @@ end
 ---@param candidate HealCandidate
 ---@return boolean applies
 local function appliesTo(slot, aim, candidate)
+    -- nobody alive, whatever the slot says. The one place this has to be refused, since every walk
+    -- that picks a heal for a person goes through here
+    if aim == aims.corpse then return false end
     if aim == aims.self then return candidate.isSelf end
     if aim == aims.pet then return candidate.isPet end
 
@@ -697,6 +728,7 @@ function HealState.Reset()
     HealState._.healSlot = nil
     HealState._.healThreshold = nil
     HealState._.cureRequest = nil
+    HealState._.rezPick = nil
 end
 
 ---@return string description of what this state is doing, for /cheal and the menu
@@ -706,6 +738,10 @@ function HealState.Describe()
         if request ~= nil then
             return "curing " .. request.typeKey .. " on " .. request.name ..
                 " with " .. request.action:Name()
+        end
+        local rezPick = HealState._.rezPick
+        if rezPick ~= nil then
+            return "rezzing " .. rezPick.name .. " with " .. tostring(rezPick.spell)
         end
         if HealState._.healTarget ~= nil then
             return "healing " .. HealState._.healTarget.name .. " with " .. tostring(HealState._.healTarget.spell)
@@ -736,6 +772,11 @@ function HealState.GetLastCureResult()
     return HealState._.lastCureResult
 end
 
+---@return string|nil result how the last rez went
+function HealState.GetLastRezResult()
+    return HealState._.lastRezResult
+end
+
 ---@return table requests the cure requests outstanding, oldest first
 function HealState.GetCureRequests()
     return Curing.GetRequests()
@@ -759,6 +800,8 @@ local function scopesFor(aim)
     if aim == aims.pet then return { [HealStateConfig.scopes.Pet.value] = true } end
     -- a group heal lands on whoever is standing there; there is no choosing to be done
     if aim == aims.group then return {} end
+    -- and a rez is not scoped to anybody living at all
+    if aim == aims.corpse then return {} end
 
     local all = {}
     for _, known in pairs(HealStateConfig.scopes) do all[known.value] = true end
@@ -805,13 +848,22 @@ function HealState.DescribeSlot(slot)
         [aims.self] = "on me",
         [aims.pet] = "on my pet",
         [aims.group] = "on the group, in one cast",
-        [aims.single] = "one at a time"
+        [aims.single] = "one at a time",
+        [aims.corpse] = "on a corpse"
     })[facts.aim]
     facts.scopes = scopesFor(facts.aim)
     facts.isGroup = facts.aim == aims.group
 
     if facts.aim == aims.pet and not HealStateConfig.GetHealPets() then
         facts.problem = "'Heal my pet' is off, so this never fires"
+    end
+
+    -- said rather than silently ignored, because a rez in a heal slot is a reasonable thing to
+    -- have tried: it is a beneficial spell this character casts on group-mates, and the page is
+    -- where its heals go. It is refused because it lands on nobody alive -- rezzing chooses its own
+    -- spell off the same data the Rezzes tab shows, and its switch is the Rezzing setting above
+    if facts.aim == aims.corpse then
+        facts.problem = "this is a rez -- see the Rezzing setting, not a heal slot"
     end
 
     return facts
@@ -911,6 +963,127 @@ local function recordFinished(status, outcome, reason)
     HealState.Reset()
 end
 
+---------------- Rezzing --------------------
+
+---@class HealRezPick
+---@field corpseId number what the cast is aimed at
+---@field name string who the corpse belongs to, for status output
+---@field action CastAction
+---@field expPct number what this rez hands back
+---@field beatsEmergency boolean whether it is worth stepping in front of somebody in trouble
+
+---The corpse to rez this pass, and with what.
+---
+---Both halves come from `cabby.rezzing`: one rez is chosen for the pass (the most experience that
+---fits the time this moment allows), and the corpses are handed back in the order they are worth
+---doing -- whoever asked, then the tank, then whoever is nearest. All this adds is the question
+---only the casting service can answer, which is whether the rez can actually be fired at that
+---corpse from here: range and line of sight are measured against the corpse rather than against
+---whatever we happen to be looking at, so a corpse behind a wall is stepped over rather than
+---started and refused.
+---@param candidates table this pass's reading of who needs what
+---@return HealRezPick? pick
+local function chooseRez(candidates)
+    -- the cheap gate first: it is what keeps the spawn searches below off the frames of every
+    -- character that cannot rez, has it switched off, or is in a fight it stays out of
+    if Rezzing.ReasonNotRezzing() ~= nil then return nil end
+
+    local rez = Rezzing.ChooseRez()
+    if rez == nil then return nil end
+
+    for _, target in ipairs(Rezzing.GetTargets(rez, emergencyPending(candidates))) do
+        if rez.action:IsReady(HealState.CastRequest(target.id)) then
+            return {
+                corpseId = target.id,
+                name = target.name,
+                action = rez.action,
+                expPct = rez.expPct,
+                beatsEmergency = target.beatsEmergency
+            }
+        end
+    end
+
+    return nil
+end
+
+---Start the rez this pass decided on.
+---@param pick HealRezPick
+---@return boolean isBusy
+local function startRez(pick)
+    local castId, refused = Casting.Cast(pick.action:Subject(), HealState.CastRequest(pick.corpseId))
+
+    if castId == nil then
+        DebugLog("Rez of [" .. pick.name .. "] was refused: " .. tostring(refused))
+        -- recorded rather than only logged, and it is what stops a corpse the client will not take
+        -- a rez on from being asked again on the very next pass and every pass after it
+        Rezzing.NoteFailure(pick.corpseId, refused)
+        return false
+    end
+
+    DebugLog("Rezzing [" .. pick.name .. "] with [" .. pick.action:Name() .. "]")
+    HealState._.castId = castId
+    HealState._.rezPick = {
+        corpseId = pick.corpseId,
+        name = pick.name,
+        spell = pick.action:Name(),
+        expPct = pick.expPct,
+        beatsEmergency = pick.beatsEmergency
+    }
+    return true
+end
+
+---Is the rez in the air still worth finishing?
+---@param candidates table
+---@return string|nil reason to call it off, nil to let it finish
+local function reasonToAbandonRez(candidates)
+    local pick = HealState._.rezPick
+    if pick == nil then return nil end
+
+    -- the switch, and the fight: a rez started out of combat and set to stay out of them is exactly
+    -- the cast that has to go when something pulls, which is the pass this notices
+    local notRezzing = Rezzing.ReasonNotRezzing()
+    if notRezzing ~= nil then return notRezzing end
+
+    if not Rezzing.CorpseIsThere(pick.corpseId) then return "the corpse is gone" end
+
+    -- the same guard the pick was made under, asked again now that the cast is committed. The tank's
+    -- exemption is carried on the pick rather than recomputed, so a rez that was allowed to start in
+    -- front of an emergency is not thrown away by the next pass for the very reason it was allowed
+    if not pick.beatsEmergency and emergencyPending(candidates) then
+        return "somebody needs healing"
+    end
+
+    return nil
+end
+
+---@param status string
+---@param outcome string|nil
+---@param reason string|nil
+local function recordRezFinished(status, outcome, reason)
+    local pick = HealState._.rezPick or {}
+    local spell = pick.spell or "a rez"
+
+    if status == Casting.status.succeeded then
+        HealState._.lastRezResult = spell .. " on " .. tostring(pick.name) ..
+            (outcome ~= Casting.outcomes.succeeded and (" (" .. tostring(reason) .. ")") or "")
+        -- **the corpse is not finished with, it is answered.** A rez is an offer and nothing comes
+        -- back to say it was taken -- the corpse stays lying there either way -- so what is written
+        -- down is that one is outstanding. `cabby.rezzing` owns how long that stands for
+        Rezzing.NoteCast(pick.corpseId, pick.name)
+    else
+        if not HealState._.calledOff then
+            HealState._.lastRezResult = spell .. " on " .. tostring(pick.name) ..
+                " failed: " .. tostring(reason)
+        end
+        Rezzing.NoteFailure(pick.corpseId, HealState._.calledOff and "called off" or reason)
+    end
+
+    HealState._.calledOff = false
+
+    DebugLog("Rez finished: " .. tostring(HealState._.lastRezResult))
+    HealState.Reset()
+end
+
 ---------------- Orders --------------------
 
 ---@param id number
@@ -920,10 +1093,34 @@ local function orderHeal(id, name)
     DebugLog("Heal ordered for [" .. name .. "] (" .. tostring(id) .. ")")
 end
 
----Call off whatever is being healed right now, and forget any order waiting for a turn.
+---Stop what this state is doing: whatever cast is in the air, and any order waiting for a turn.
+---
+---All three jobs, not only the healing. It is what `healing off` and `/cheal off` mean, and the
+---cast in flight is the casting service's now -- leaving it would go on holding the whole chain
+---back for a job this character was just told to stop.
 function HealState.CallOff()
     HealState._.order = nil
+    Rezzing.CallOff()
     if HealState._.castId ~= nil then
+        Casting.StopFor(HealState.key)
+    end
+end
+
+---Call off the heal, and only the heal: the order waiting for a turn, and the cast in the air when
+---that is what it is. `healnow off` is about the heal it named, not about a cure or a rez that
+---happens to be going out.
+function HealState.CallOffHeal()
+    HealState._.order = nil
+    if HealState._.castId ~= nil and HealState._.healTarget ~= nil then
+        Casting.StopFor(HealState.key)
+    end
+end
+
+---Call off the rez, and only the rez: the standing order, and the cast in the air when that is what
+---it is. A heal or a cure going out is not what `reznow off` was about.
+function HealState.CallOffRez()
+    Rezzing.CallOff()
+    if HealState._.castId ~= nil and HealState._.rezPick ~= nil then
         Casting.StopFor(HealState.key)
     end
 end
@@ -961,7 +1158,7 @@ function HealState.Init()
         end
 
         if UserInput.IsFalse(args[1]:lower()) then
-            HealState.CallOff()
+            HealState.CallOffHeal()
             return
         end
 
@@ -1017,7 +1214,11 @@ function HealState.Init()
         key = HealState.key,
         phrase = HealState.eventIds.healing,
         summary = "Turns healing on or off for listener(s)",
-        about = { "Off calls off a heal in progress as well as stopping new ones." },
+        about = {
+            "This whole state, so it is the switch for curing and rezzing as well -- both of those",
+            "are the same character choosing what to spend a gem on.",
+            "Off calls off whatever is in progress as well as stopping new ones."
+        },
         get = HealStateConfig.IsEnabled,
         set = HealState.SetEnabled
     })
@@ -1117,6 +1318,172 @@ function HealState.Init()
             } end
         }))
 
+    ---The same three answers to one question the cure mode takes, in the same words, because they
+    ---are the same question: on means "yes, when it is safe to", and combat is the extra step.
+    local rezWords = {
+        ["off"] = HealStateConfig.rezModes.Off.value,
+        ["no"] = HealStateConfig.rezModes.Off.value,
+        ["none"] = HealStateConfig.rezModes.Off.value,
+        ["disabled"] = HealStateConfig.rezModes.Off.value,
+        ["on"] = HealStateConfig.rezModes.OutOfCombat.value,
+        ["yes"] = HealStateConfig.rezModes.OutOfCombat.value,
+        ["out"] = HealStateConfig.rezModes.OutOfCombat.value,
+        ["outofcombat"] = HealStateConfig.rezModes.OutOfCombat.value,
+        ["combat"] = HealStateConfig.rezModes.Always.value,
+        ["incombat"] = HealStateConfig.rezModes.Always.value,
+        ["battle"] = HealStateConfig.rezModes.Always.value,
+        ["always"] = HealStateConfig.rezModes.Always.value
+    }
+
+    local rezzingDocs = ChelpDocs.new(function() return {
+        "(" .. HealState.eventIds.rezzing .. " <off | on | combat>) Sets whether listener(s) rez" ..
+            " the corpses lying around them, and when",
+        " -- Usage: " .. HealState.eventIds.rezzing .. " off      -- leave corpses alone",
+        " -- Usage: " .. HealState.eventIds.rezzing .. " on       -- rez, but not while fighting",
+        " -- Usage: " .. HealState.eventIds.rezzing .. " combat   -- rez in fights too",
+        " -- Usage: " .. HealState.eventIds.rezzing .. "          -- report what it is set to now",
+        " -- Which rez is used is worked out unless the Heal State page names one: the most",
+        "    experience returned out of a fight, the shortest cast in one -- normally an instant AA.",
+        " -- Group members' corpses within " .. tostring(Rezzing.GetRadius()) .. " are rezzed on",
+        "    their own, in the class order on that page, with the main tank ahead of it. Every class",
+        "    is rezzed once the fighting stops; the list says which of them a fight is interrupted",
+        "    for. Anybody else asks: see /chelp " .. HealState.eventIds.rezMe,
+        " -- Rezzing is the last thing this state does, behind every heal and every cure. The one",
+        "    exception is the tank's corpse with a rez that has no cast bar at all.",
+        " -- This walks nobody anywhere: get back to the corpses first.",
+        " -- Currently: " .. HealStateConfig.GetRezModeDisplay(HealStateConfig.GetRezMode())
+    } end )
+    local function event_Rezzing(_, speaker, args)
+        if not Commands.GetCommandOwners(HealState.eventIds.rezzing):HasPermission(speaker) then
+            DebugLog("Ignoring rezzing speaker [" .. speaker .. "]")
+            return
+        end
+
+        args = StringUtils.Split(StringUtils.TrimFront(args or ""))
+        if #args < 1 then
+            print("Rezzing: " .. HealStateConfig.GetRezModeDisplay(HealStateConfig.GetRezMode()))
+            return
+        end
+
+        local mode = rezWords[args[1]:lower()]
+        if mode == nil then
+            print("(" .. HealState.eventIds.rezzing .. ") [" .. args[1] ..
+                "] is not a rezzing setting. Usage: " .. HealState.eventIds.rezzing ..
+                " <off | on | combat>")
+            return
+        end
+
+        HealStateConfig.SetRezMode(mode)
+        if not HealStateConfig.IsRezzing() then
+            -- switched off with one in the air: it is the casting service's now, and it would go on
+            -- holding the chain back for a job we were just told to stop
+            HealState.CallOffRez()
+        end
+    end
+    Commands.RegisterCommEvent(Command.new(HealState.eventIds.rezzing, event_Rezzing, rezzingDocs)
+        :WithArgs({
+            required = true,
+            hint = "off, on, or combat",
+            default = "on",
+            choices = function() return {
+                { label = "Do not rez", args = "off", name = "Rezzing off" },
+                { label = "Rez, but not while fighting", args = "on", name = "Rezzing on" },
+                { label = "Rez, fights included", args = "combat", name = "Rezzing in battle" }
+            } end
+        }))
+
+    local rezDocs = ChelpDocs.new(function() return {
+        "(" .. HealState.eventIds.rez .. " <who>) Tells listener(s) to rez that character's corpse",
+        " -- Usage: " .. HealState.eventIds.rez .. " <spawn id>   -- their corpse, or them",
+        " -- Usage: " .. HealState.eventIds.rez .. " <name>",
+        " -- Usage (call it off): " .. HealState.eventIds.rez .. " off",
+        " -- The *character* is what is remembered, not the corpse: the corpse is often not in",
+        "    reach yet when the order is given, so it is looked for every pass until it is.",
+        " -- An order reaches somebody who is not in the group, and puts them ahead of everybody",
+        "    who is. It does not override the Rezzing setting -- a character with rezzing off, or",
+        "    set to stay out of fights, says so rather than taking the order on.",
+        " -- Asking again clears whatever this character had already offered that corpse, which is",
+        "    the way back from a rez nobody was at the keyboard to accept.",
+        " -- An order nobody could act on within a minute is dropped."
+    } end )
+    local function event_Rez(line, speaker, args)
+        if not Commands.GetCommandOwners(HealState.eventIds.rez):HasPermission(speaker) then
+            DebugLog("Ignoring " .. HealState.eventIds.rez .. " speaker [" .. speaker .. "]")
+            return
+        end
+
+        args = StringUtils.Split(StringUtils.TrimFront(args or ""))
+        if #args < 1 then
+            print("(" .. HealState.eventIds.rez .. ") No one given. Usage: " ..
+                HealState.eventIds.rez .. " <spawn id or name>, or `" .. HealState.eventIds.rez ..
+                " off` to call it off.")
+            return
+        end
+
+        if UserInput.IsFalse(args[1]:lower()) then
+            HealState.CallOffRez()
+            return
+        end
+
+        -- a spawn id names a corpse or the person it belongs to, and either answers "who"; anything
+        -- else is the name itself, which is what a corpse carries and all this ever needs
+        local name = args[1]
+        local spawnId = tonumber(args[1])
+        if spawnId ~= nil then
+            name = Rezzing.NameForOrder(spawnId)
+            if name == nil then
+                Speak.Respond(line, speaker, "Nothing here with id " .. tostring(spawnId))
+                return
+            end
+        end
+
+        local refusal = Rezzing.TakeOrder(name)
+        if refusal ~= nil then
+            Speak.Respond(line, speaker, refusal)
+            return
+        end
+        print("(" .. HealState.eventIds.rez .. ") Rezzing " .. name .. ", asked by " .. speaker)
+    end
+    Commands.RegisterCommEvent(Command.new(HealState.eventIds.rez, event_Rez, rezDocs)
+        :WithArgs({
+            required = true,
+            hint = "a spawn id or a name, or off",
+            default = "${Target.ID}",
+            choices = function() return {
+                { label = "Whatever I have targeted", args = "${Target.ID}" },
+                { label = "Call off the rez", args = "off", name = "Stop rezzing" }
+            } end
+        }))
+
+    local rezMeDocs = ChelpDocs.new(function() return {
+        "(" .. HealState.eventIds.rezMe .. ") Tells listener(s) to rez whoever said it",
+        " -- The button to bind on a character that dies: it needs no spawn id, since the name is",
+        "    what a corpse carries and the rezzer works out who spoke. Say it while hovering or",
+        "    after running back -- either way it is the corpse on the ground that is rezzed.",
+        " -- Nothing to say to yourself, so the local channel will not take it.",
+        " -- Group members are rezzed without being asked; this is for everybody else, and for",
+        "    asking again when the first offer went unanswered."
+    } end )
+    local function event_RezMe(line, speaker)
+        if not Commands.GetCommandOwners(HealState.eventIds.rezMe):HasPermission(speaker) then
+            DebugLog("Ignoring " .. HealState.eventIds.rezMe .. " speaker [" .. speaker .. "]")
+            return
+        end
+
+        -- no spawn search, unlike `healme`: a rez is aimed at a corpse, and the one thing a corpse
+        -- is certain to carry is the name of the person who left it. Looking the speaker up would
+        -- fail on exactly the character this is for -- one who released and is standing at a bind
+        -- point in another zone while their corpse lies here
+        local refusal = Rezzing.TakeOrder(speaker)
+        if refusal ~= nil then
+            Speak.Respond(line, speaker, refusal)
+            return
+        end
+        print("(" .. HealState.eventIds.rezMe .. ") Rezzing " .. speaker)
+    end
+    Commands.RegisterCommEvent(Command.new(HealState.eventIds.rezMe, event_RezMe, rezMeDocs)
+        :ActsOnSpeaker())
+
     ActionCommand.Register({
         key = HealState.key,
         phrase = HealState.eventIds.healAction,
@@ -1128,7 +1495,10 @@ function HealState.Init()
     local chealDocs = ChelpDocs.new(function() return {
         "(/cheal) Report what the heal state is doing, and who it is watching",
         " -- Usage: /cheal",
-        " -- Usage (call off the heal in progress): /cheal off"
+        " -- Usage (call off what it is doing): /cheal off",
+        " -- Heals, cures and rezzes are all this one state, in that order of precedence, so this",
+        "    is the report for all three: what would be cast, what is waiting, and what is being",
+        "    held back and why"
     } end )
     local function Bind_CHeal(...)
         local args = {...} or {}
@@ -1160,6 +1530,42 @@ function HealState.Init()
             print(" -- asked for: " .. request.typeKey .. " for " .. request.name ..
                 " with " .. request.action:Name())
         end
+
+        -- The rez, and the reason there is none, are two different reports and both matter: a
+        -- character with rezzing on and nothing in its book, one holding off because it is in a
+        -- fight, and one standing over a corpse it already offered a rez to all look identical from
+        -- outside, and all three are answered here
+        local rez, notRezzing = Rezzing.ChooseRez()
+        print(" -- rezzing: " .. HealStateConfig.GetRezModeDisplay(HealStateConfig.GetRezMode()) ..
+            (notRezzing ~= nil and (" -- not rezzing right now: " .. notRezzing) or
+                (" -- would cast " .. Rezzes.Describe(rez))))
+
+        -- both, whichever is in force, because the one that is *not* in force is exactly what
+        -- somebody is checking when they wonder why the fight went the way it did
+        local outRez, outNamed, outMissing = Rezzing.RezFor(false)
+        local inRez, inNamed, inMissing = Rezzing.RezFor(true)
+        print("    out of a fight: " .. Rezzes.Describe(outRez) ..
+            (outNamed and " (set)" or "") ..
+            (outMissing ~= nil and (" -- [" .. outMissing .. "] is not in this character's book") or ""))
+        print("    in a fight: " .. Rezzes.Describe(inRez) ..
+            (inNamed and " (set)" or "") ..
+            (inMissing ~= nil and (" -- [" .. inMissing .. "] is not in this character's book") or ""))
+        local rezResult = HealState.GetLastRezResult()
+        if rezResult ~= nil then
+            print(" -- last rez: " .. rezResult)
+        end
+        local order = Rezzing.GetOrder()
+        if order ~= nil then
+            print(" -- asked to rez: " .. order.name)
+        end
+        for _, corpse in ipairs(Rezzing.GetCorpses()) do
+            local held = Rezzing.ReasonHeld(corpse)
+            print(" -- corpse: " .. corpse.name .. " (" .. tostring(corpse.class or "?") .. ", " ..
+                tostring(corpse.id) .. ") " .. tostring(math.floor(corpse.distance)) .. " away" ..
+                (corpse.isTank and " (tank)" or "") .. (corpse.isOrdered and " (asked for)" or "") ..
+                (held ~= nil and (" -- held: " .. held) or ""))
+        end
+
         for _, candidate in ipairs(getCandidates()) do
             print(" -- " .. candidate.name .. ": " .. tostring(math.floor(candidate.pct)) .. "%" ..
                 (candidate.isTank and " (tank)" or "") .. (candidate.isPet and " (pet)" or ""))
@@ -1187,13 +1593,25 @@ function HealState.Go()
     if castId ~= nil then
         local status, outcome, reason = Casting.GetResult(castId)
         local isCure = HealState._.cureRequest ~= nil
+        local isRez = HealState._.rezPick ~= nil
+        local job = isCure and "cure" or (isRez and "rez" or "heal")
 
         if status == nil then
-            local abandon = isCure and reasonToAbandonCure(candidates) or reasonToAbandon(candidates)
+            local abandon
+            if isCure then
+                abandon = reasonToAbandonCure(candidates)
+            elseif isRez then
+                abandon = reasonToAbandonRez(candidates)
+            else
+                abandon = reasonToAbandon(candidates)
+            end
+
             if abandon ~= nil then
-                DebugLog("Calling off the " .. (isCure and "cure" or "heal") .. ": " .. abandon)
+                DebugLog("Calling off the " .. job .. ": " .. abandon)
                 if isCure then
                     HealState._.lastCureResult = "called off: " .. abandon
+                elseif isRez then
+                    HealState._.lastRezResult = "called off: " .. abandon
                 else
                     HealState._.lastResult = "called off: " .. abandon
                 end
@@ -1205,6 +1623,8 @@ function HealState.Go()
 
         if isCure then
             recordCureFinished(status, outcome, reason)
+        elseif isRez then
+            recordRezFinished(status, outcome, reason)
         else
             recordFinished(status, outcome, reason)
         end
@@ -1233,9 +1653,24 @@ function HealState.Go()
     end
 
     local pick = choosePick(candidates)
-    if pick == nil then return false end
+    if pick ~= nil then return startHeal(pick) end
 
-    return startHeal(pick)
+    -- **A rez comes last, because everybody alive comes first.**
+    --
+    -- Below every heal and every cure without exception: somebody dead is not getting any worse,
+    -- and a corpse will still be lying there in three seconds. So this is the frame nothing else
+    -- in this state wanted -- which out of a fight is every frame, and in one is the gap between
+    -- two heals.
+    --
+    -- The one thing it is *not* below is the priority chain under this state, and that is the whole
+    -- reason rezzing lives here rather than in a band of its own: a rez is a gem and a large piece
+    -- of the mana bar, and choosing to spend them is choosing not to heal with them. Whether it
+    -- happens during a fight at all is the Heal State page's Rezzing setting, and `cabby.rezzing`
+    -- owns the rest of the judgment (see `chooseRez`).
+    local rezPick = chooseRez(candidates)
+    if rezPick ~= nil then return startRez(rezPick) end
+
+    return false
 end
 
 ---@return boolean isEnabled
