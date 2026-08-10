@@ -367,7 +367,7 @@ function GeneralConfig.BuildMenu()
         GeneralConfig.SetAcceptRez(acceptRez)
     end
     ImGui.SameLine()
-    CommonUI.HelpMarker("Take a rez the moment somebody offers one. Back on your feet, that is the client's rez box answered Yes. Still hovering over your corpse, there is no box: the offer is the Resurrect line on the respawn window, and picking it is what accepts it -- so the line is picked and Respawn clicked for you. Only a rez is ever answered: the box that asks to sacrifice you says \"Resurrection\" while it asks and is left alone, and the respawn window is never picked at unless the client has said a rez is actually waiting, because picking it with nothing behind it stops the respawn timer and leaves you hovering. Toggle from chat or a hotbar button with: acceptrez")
+    CommonUI.HelpMarker("Take a rez the moment somebody offers one. Back on your feet, that is the client's rez box answered Yes. Still hovering over your corpse, there is no box: the offer is the Resurrect line on the respawn window, and picking it is what accepts it -- so the line is picked and Respawn clicked for you. Only a rez is ever answered: the two boxes that say \"resurrection\" while asking something else -- a sacrifice, and a summon back to your corpse -- are left for you, and you are told when one is. The respawn window is never picked at unless the client has said a rez is actually waiting, because picking it with nothing behind it stops the respawn timer and leaves you hovering. Toggle from chat or a hotbar button with: acceptrez")
 
     ImGui.SeparatorText("Hotbars")
     ImGui.SameLine()

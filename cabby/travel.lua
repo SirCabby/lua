@@ -203,6 +203,26 @@ local function holdDistances()
     return distance, distance * (1 + holdBufferScale)
 end
 
+---Whether standing still needs sight of the follow target as well as nearness to them.
+---
+---The distance above is only half of being with somebody, and a fight is where the other half
+---shows. A follower parked round the corner from the fight it is there for kept every distance it
+---was asked to keep and can do none of its job: the heal, the cure and the spell aimed at what
+---they are fighting all need to see them, and a wall does not care how close it is being stood
+---behind. So while there is a fight on, being close enough stops being on its own a reason to
+---stand still -- the follow keeps replaying the route they walked, which is the thing that goes
+---round the corner, until they are in sight again (`Follow:ClosingForSight`, which is also where
+---it stops: their route run out is the end of what walking can fix).
+---
+---The same fight and the same run the distance reads, for the same reasons. This only ever reaches
+---a character with nothing to do in the fight -- anything with a job in it is busy above the follow
+---band -- and a group running for a zone line wants its followers at their heels rather than
+---manoeuvring for a view of the leader.
+---@return boolean requireSight
+local function holdNeedsSight()
+    return not Status.IsFleeing() and Combat.IsGroupFighting()
+end
+
 ---Say, once, that we are waiting on the follow target rather than every pass.
 ---@param message string
 local function ReportWaiting(message)
@@ -530,7 +550,7 @@ local function FollowPass()
     -- answer that changes with a follow already running, so a follow that is running is told --
     -- before anything reads what it makes of it, since IsParked below is exactly that reading.
     local distance, resumeDistance = holdDistances()
-    Movement.SetFollowHold(Travel.key, distance, resumeDistance)
+    Movement.SetFollowHold(Travel.key, distance, resumeDistance, holdNeedsSight())
 
     -- Close enough: the follow task parks itself, and so do we.
     --
@@ -538,7 +558,13 @@ local function FollowPass()
     -- buffer zone is hysteresis: whether 15 away is close enough depends on whether we were
     -- holding or closing a moment ago, and the task is what remembers which. Measuring the
     -- distance ourselves here would answer with the wrong threshold half the time and go back to
-    -- following to the inch.
+    -- following to the inch. Sight rides in the same answer, which is why it is asked of the task
+    -- too: a follow walking on round a corner for a view of them is not parked.
+    --
+    -- The branch below is the one moment sight has nothing to say. With no follow running there is
+    -- no route of theirs banked to walk, and starting one needs them in sight to begin with (see
+    -- followTargetInReachId) -- so a target we cannot see is not one this branch could go to
+    -- anyway, and calling it "not close enough" would only spend the pass saying so out loud.
     local closeEnough
     if Movement.IsFollowing(Travel._.followSpawnId) then
         closeEnough = Movement.IsParked()
@@ -570,12 +596,23 @@ local function FollowPass()
         Movement.Follow(followSpawnId, {
             distance = distance,
             resumeDistance = resumeDistance,
+            requireSight = holdNeedsSight(),
             owner = Travel.key
         })
         return true
     end
 
-    if CheckStuck() then
+    -- Walking the last few yards round a corner for a view of them counts as getting somewhere,
+    -- because it is: the whole move is shorter than the bubble the check measures staleness in, so
+    -- reading it as ground not covered would call it stuck every time -- and giving up here is the
+    -- one answer that cannot recover, since picking the follow back up needs them in sight
+    -- (followTargetInReachId) and not seeing them is the thing we were walking to fix. Wedged
+    -- mid-corner is still caught, by the follow task's own stuck detector, which watches the
+    -- walking rather than the distance to anybody.
+    if Movement.IsClosingForSight() then
+        UpdateLastLoc()
+        Travel._.stuck.checking = false
+    elseif CheckStuck() then
         Commands.GetCommandSpeak(Travel._.followCommand):speak(
             "I got stuck while following [" .. Travel._.followTarget .. "], waiting...")
         Movement.StopFor(Travel.key)

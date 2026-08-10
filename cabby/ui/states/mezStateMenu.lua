@@ -196,7 +196,7 @@ function MezStateMenu.BuildMenu(mezState)
             MezStateConfig.SetStopPct(stopPct)
         end
         ImGui.SameLine()
-        CommonUI.HelpMarker("A mob hurt past this is left alone. It reads backwards until you have watched it go wrong: a mob below the line is not too healthy to mez, it is too nearly dead. Somebody has been killing it, there is damage in the air aimed at it, and a mez landing takes it out of reach of all of that so the group starts again on a full-health add instead.")
+        CommonUI.HelpMarker("A mob hurt past this is not picked up. It reads backwards until you have watched it go wrong: a mob below the line is not too healthy to mez, it is too nearly dead. Somebody has been killing it, there is damage in the air aimed at it, and a mez landing takes it out of reach of all of that so the group starts again on a full-health add instead. It only decides whether to *start* holding a mob -- one already mezzed is refreshed however hurt it is, since getting hit is what breaks a mez in the first place.")
 
         ImGui.SameLine()
         ImGui.SetNextItemWidth(60)

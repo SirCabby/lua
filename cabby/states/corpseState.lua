@@ -48,6 +48,14 @@ local lootAckMs = 3000
 ---The same, for the Done button.
 local closeAckMs = 3000
 
+---The same, for `/autoinventory`: how long our hands have to empty before there is nowhere left to
+---put anything. Looting hands an item to the *cursor* when no slot is free for it -- a corpse run
+---is made with whatever bags we were wearing when we died, so running out of room part way through
+---one is the ordinary case rather than the odd one -- and `/autoinventory` has nothing to answer
+---with but the cursor clearing. Without this the cursor is the one thing here that could be waited
+---on forever: the corpse open, the hands full, and nothing said to anybody.
+local cursorAckMs = 3000
+
 ---Slots the loot window draws (`LW_LootSlot0`..`LW_LootSlot33` in EQUI_LootWnd.xml). `Corpse.Items`
 ---counts what is on the corpse rather than how far up the slots go, and a corpse being emptied has
 ---holes in it, so the slots are walked instead of counted.
@@ -75,13 +83,21 @@ local lootSlots = 34
 ---pass: `/mqtarget id`, `/corpse` to bring it to our feet, `/click right target` to open what is
 ---now standing on top of us.
 ---
----**Three actions and three answers.** Opening a corpse, looting an item, closing the window: each
----is fired once and then watched for its evidence, because the client refuses in chat and the
----refusals are not readable anywhere else. A corpse that will not open is left; an item that will
----not come off is left; a window that will not close ends the order. That is what stops a job at
----this band from wedging the chain below it, and none of it is a clock deciding to stop trying --
----the world is answering, and the answer is no. The pull is the one command with no answer of its
----own, and it needs none: it is allowed further than this order ever looks.
+---**Four actions and four answers.** Opening a corpse, putting away what is on the cursor, looting
+---an item, closing the window: each is fired and then watched for its evidence, because the client
+---refuses in chat and the refusals are not readable anywhere else. A corpse that will not open is
+---left; a cursor that will not clear has done with the corpse it was emptying, since nothing comes
+---off a corpse into hands that are already full; an item that will not come off is left; a window
+---that will not close ends the order. That is what stops a job at this band from wedging the chain
+---below it, and none of it is a clock deciding to stop trying -- the world is answering, and the
+---answer is no. The pull is the one command with no answer of its own, and it needs none: it is
+---allowed further than this order ever looks.
+---
+---**The click that opened a corpse is answered by the window, and stops being watched there.** A
+---window that then goes away is that corpse over -- our Done took, it poofed as it emptied, or
+---somebody shut it by hand -- and never a click that went unanswered: an open watch left running
+---under a corpse being emptied would come due mid-loot and write off a corpse we are standing in
+---the middle of looting.
 ---
 ---**A loot window on somebody else's corpse is somebody else's.** It is neither emptied nor
 ---closed, and ours waits behind it -- there is only ever one loot window, and taking it away from
@@ -109,8 +125,11 @@ local CorpseState = {
         corpseId = nil,
         ---the corpse already pulled to our feet, so `/corpse` goes out once per corpse
         draggedId = nil,
+        ---the open click we are waiting on a window for; nil once one is in front of us
         openFiredMs = nil,
         closeFiredMs = nil,
+        ---when our hands were first found full on the corpse being worked
+        cursorFiredMs = nil,
         ---the loot we last fired: which slot, and what was sitting in it when we fired
         pending = nil,
         ---slots on the corpse being worked that would not come off it
@@ -241,6 +260,7 @@ local function clearCorpse()
     CorpseState._.draggedId = nil
     CorpseState._.openFiredMs = nil
     CorpseState._.closeFiredMs = nil
+    CorpseState._.cursorFiredMs = nil
     CorpseState._.pending = nil
     CorpseState._.refused = {}
     CorpseState._.waitingOn = nil
@@ -396,15 +416,31 @@ local function workWindow(now)
         return false
     end
 
-    -- the client hands nothing over while something is on the cursor, so it goes away first
+    -- The client hands nothing over while something is on the cursor, so it goes away first --
+    -- and looting is itself how it got there, since an item with no slot free for it is handed to
+    -- the cursor rather than refused. `/autoinventory` is fired at it until it clears or until the
+    -- world has said there is nowhere to put it, and *that* answer is about the character and not
+    -- this corpse: hands that stay full empty no corpse, so this one is had done with and what is
+    -- still on it is reported as left behind, which is the truth and names the reason.
     if mq.TLO.Cursor.ID() ~= nil then
+        if CorpseState._.cursorFiredMs ~= nil
+            and now - CorpseState._.cursorFiredMs >= cursorAckMs then
+            DebugLog("[" .. tostring(mq.TLO.Cursor.Name() or "what is on my cursor") ..
+                "] would not go away -- there is nowhere left to put anything")
+            return closeCorpse(now)
+        end
+
         if now - CorpseState._.lastCommandMs < commandPaceMs then return true end
         CorpseState._.lastCommandMs = now
+        if CorpseState._.cursorFiredMs == nil then CorpseState._.cursorFiredMs = now end
         CorpseState._.standing = "putting away what is on the cursor"
-        DebugLog("Clearing the cursor before looting")
+        DebugLog("Clearing the cursor before looting: [" ..
+            tostring(mq.TLO.Cursor.Name() or "something") .. "]")
         mq.cmd("/autoinventory")
         return true
     end
+    -- empty hands, so the next thing that lands in them is watched from when it did
+    CorpseState._.cursorFiredMs = nil
 
     -- did the last thing we asked for come off the corpse?
     local pending = CorpseState._.pending
@@ -551,10 +587,23 @@ function CorpseState.Init()
             end
         end
 
+        -- Both halves of "is anything being looted", because they disagree in exactly the case
+        -- worth knowing about: a window the client is showing that `${Corpse}` says nothing about
+        -- is a window this state cannot see, and it would sit there watching for one that is
+        -- already in front of it.
+        print(" -- LootWnd: " .. tostring(mq.TLO.Window("LootWnd").Open()) ..
+            ", ${Corpse}: " .. tostring(mq.TLO.Corpse.Open()))
         if mq.TLO.Corpse.Open() == true then
             print(" -- a loot window is open on [" .. tostring(mq.TLO.Corpse.CleanName()) .. "] (" ..
                 tostring(mq.TLO.Corpse.ID()) .. "), " .. tostring(mq.TLO.Corpse.Items()) .. " item(s), " ..
                 (openCorpseIsOurs() and "mine" or "not mine"))
+        end
+
+        -- Nothing comes off a corpse into hands that are already full, so what is in them is the
+        -- other half of "the window is open and nothing is happening"
+        if mq.TLO.Cursor.ID() ~= nil then
+            print(" -- on the cursor: [" .. tostring(mq.TLO.Cursor.Name()) ..
+                "] -- nothing can be looted until it is put away")
         end
 
         -- A fresh look, and the *whole* look: every corpse in reach whoever it belongs to, with
@@ -650,11 +699,24 @@ function CorpseState.Go()
             clearCorpse()
             CorpseState._.corpseId = openId
         end
+        -- The window is the answer the open click was fired for, so the watch on it ends here.
+        -- Left running it would come due in the middle of emptying the corpse and write off, as
+        -- one that never opened, the corpse we are standing over with its window in front of us.
+        CorpseState._.openFiredMs = nil
         return workWindow(now)
     end
 
-    -- the window went away: either the Done button took, or a corpse we emptied has poofed
-    if CorpseState._.closeFiredMs ~= nil then
+    -- The window we were working has gone. Our Done took, the corpse poofed as it emptied, or
+    -- somebody shut it by hand -- there is no telling which apart and no need to: this corpse's
+    -- looting is over either way, and reopening one the player has just closed is the fight this
+    -- script does not pick. Whatever was still on it went uncounted, which the report says by
+    -- counting the corpse without saying it was emptied.
+    if CorpseState._.corpseId ~= nil and CorpseState._.openFiredMs == nil then
+        if CorpseState._.closeFiredMs == nil then
+            DebugLog("The loot window on [" .. tostring(CorpseState._.corpseId) .. "] went away on its own")
+            CorpseState._.done[CorpseState._.corpseId] = true
+            CorpseState._.corpseCount = CorpseState._.corpseCount + 1
+        end
         clearCorpse()
     end
 

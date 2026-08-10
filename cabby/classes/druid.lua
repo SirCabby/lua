@@ -1,7 +1,6 @@
 local BaseClass = require("cabby.classes.baseClass")
 local Priorities = require("cabby.classes.priorities")
 
-local BuffState = require("cabby.states.buffState")
 local HealState = require("cabby.states.healState")
 local SpellDpsState = require("cabby.states.spellDpsState")
 
@@ -16,8 +15,7 @@ local Druid = BaseClass.new({
     shortName = "DRU",
     states = {
         { state = SpellDpsState, priority = Priorities.dps - 1 },
-        { state = HealState, priority = Priorities.heal + 5 },
-        { state = BuffState, priority = Priorities.buff }
+        { state = HealState, priority = Priorities.heal + 5 }
     },
     unimplemented = {
         "snare, for pulls and for runners",

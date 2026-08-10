@@ -9,9 +9,9 @@ AdvLoot, Corpse, Rest and Flee states, over
 a shared engagement (`combat.lua`) that the group's main tank and main assist steer (`roles.lua`);
 all sixteen classes load as profiles over those (the nine melee
 classes melee, eleven cast damage, the three priests and three hybrids heal — as do MAG, NEC and
-SHD, whose heal lists are how a pet is kept up and how the empathy line is spent — the twelve with
-a spellbook buff, the six with a companion pet summon it, gear it and send it in, and everyone
-follows, rests, flees, minds the loot window and loots its own corpse when told to). The casting and giving services and all five action
+SHD, whose heal lists are how a pet is kept up and how the empathy line is spent — the six with a
+companion pet summon it, gear it and send it in, and everyone
+buffs, follows, rests, flees, minds the loot window and loots its own corpse when told to). The casting and giving services and all five action
 types exist (Phase 3), so an action list can hold a spell, clicky or AA, `/ccast` can fire
 anything by hand and `/cgive` can hand anything over. Everything else below.
 
@@ -83,7 +83,8 @@ In rough order (details in ARCHITECTURE.md "Target architecture"):
 3. Config `Section` helper (schema/defaults/migration; kills taint boilerplate + writing getters).
 4. Module contract + registrar (kills isInit/Menu.Register/Setup-order boilerplate).
 5. ~~Declarative class profiles~~ — **done** for the assembly half: `classes/priorities.lua`
-   holds the bands, `classes/baseClass.lua` merges the common states (Follow) with the
+   holds the bands, `classes/baseClass.lua` merges the common states (flee, melee, loot, corpse,
+   follow, buff and rest) with the
    profile's own, sorts and registers, and `classes/classes.lua` maps short name → module.
    All sixteen classes have a profile; each lists what it cannot do yet and says so at
    startup. Verified under LuaJIT and Lua 5.1 by a `scratchpad/test_classes.lua`-style harness
@@ -252,6 +253,19 @@ landed:
   would have been cast because three *people* were hurt.
 - ~~**Reconsidering a heal in the air**~~ — called off when the target dies or leaves, climbs back
   above the threshold that triggered it, or somebody else drops into an emergency.
+- ~~**A fight window per slot**~~ (2026-08-04, `heal_when`: any time / in a fight / out of a fight)
+  — the thing a threshold cannot say, because it is about the heal and not about the person: the
+  expensive fast one is what a fight is for and is a waste between pulls, the slow efficient one is
+  worth every second of the quiet and is interrupted or too late in a fight. It reads
+  `Combat.IsGroupFighting` rather than our own engagement, which is the whole of it working on a
+  healer — one has no target of its own and answers `IsEngaged` no for the length of a fight it is
+  standing in the middle of. It narrows only, an order is held to it the way it is held to scope,
+  and it chooses rather than cancels: a fight starting under a cast does not call the cast off,
+  unlike the cure and rez windows, whose edge switches a whole job off rather than picking between
+  heals. 23 headless checks (the config's defaults and round-trip, both narrowings in and out of a
+  fight, the not-engaged healer, a group heal on the same gate, an ordered heal, the cast left alone
+  on the edge, and a gated slot not counting as a reason to abandon somebody else's heal) pass under
+  LuaJIT and Lua 5.1. **In-game verification still pending** — see Verify.
 - ~~**Commands**~~ — `healnow <id | off>` and `healme` (which acts on whoever said it, the "patch me"
   of the old cleric macros) as orders; `healing`, `healgroup` and `healpets` as switches;
   `healaction` over the configured slots; `/cheal` for status. All of them are hotbar-bindable
@@ -350,8 +364,9 @@ landed:
   a clean one, so each (slot, spawn) pairing carries a retry window: the buff's duration less the
   rebuff window after one lands, seconds after one fails. Dropped wholesale by `/cbuff refresh` —
   and voided early by the world (2026-07-29): an observed death (scan or slain line) drops every
-  window held for that name, readable people (us, the pet) only ever get a short window before the
-  buff itself is consulted again, and everybody else is verified about once an idle minute by
+  window held for that name, readable people (us, the pet) carry no window at all — the bar is
+  asked every pass and answers `Stacks` immediately, so a buff of ours that goes away is back up on
+  the next pass — and everybody else is verified about once an idle minute by
   borrowing the target until `Target.BuffsPopulated` (a status per pass, never a held frame) and
   squaring their windows against the fresh cache.
 - ~~**Restraint**~~ — not during a fight (and a fight starting calls off the buff in the air), not
@@ -365,8 +380,11 @@ landed:
 - ~~**The page**~~ — status, the switches and a Check Everybody Now button, the slot list with its
   scope, class picker and per-slot rebuff dial, and what each slot amounts to (where it aims, how
   long it lasts, or why it will never fire).
-- ~~**Class profiles**~~ — the twelve classes with a spellbook at `Priorities.buff`, with the
-  matching `unimplemented` lines removed.
+- ~~**Class profiles**~~ — a common state at `Priorities.buff`, so all sixteen have it, with the
+  matching `unimplemented` lines removed. It started as the twelve classes with a spellbook
+  declaring it themselves; the four without one (WAR, MNK, ROG, BER) are the classes whose self
+  buffs are all clickies and AAs, which a buff slot holds as readily as a spell, so the capability
+  judgment was never a real one.
 - Verified off-client (85 checks: a buffed group left alone, list order deciding, scope and class
   filtering both ways, group/pet/self aims and what each refuses, the rebuff window at both ends,
   cached durations for other people, everything the stacking checks refuse, the retry window after
@@ -852,7 +870,12 @@ backstab positioning; nothing asks for it).
    `CachedBuff.Duration` is documented as ticks and is not); `Spell.MyDuration.TotalSeconds` reads
    through `tonumber`; `Stacks` is false for a buff we already hold at full duration and true for
    one that has faded; `Me.BlockedBuff` on a client that may have no blocked-buff window at all;
-   and a group v2 buff cast with nothing targeted. After that the behaviour: a cleric buffing a
+   and a group v2 buff cast with nothing targeted. **`Stacks` on ourselves is now the whole of the
+   upkeep check for our own bar and our pet's** (2026-08-03: the timed window they used to carry is
+   gone — the bar is asked every pass instead), so it is the one read to be sure of: click a self
+   buff off by hand and it should go back up within a second, and nothing should be cast twice.
+   `stillWants` is the backstop if it is not — a slot that reads as still-wanted with the cast over
+   holds off for five minutes and says so in the debug log. After that the behaviour: a cleric buffing a
    fresh group from nothing (does it work down the list, does it stop, does `/cbuff` read right),
    `buffme` from another window, `buffnow ${Target.ID}` on a stranger, and that a fight starting
    really does call off the buff in the air.
@@ -1402,3 +1425,49 @@ backstab positioning; nothing asks for it).
      but the checkbox appears to reach them (`/consent group` sends `OP_Consent`, not the
      `SpawnAppearance` those use), so it would mean a `/notify` on the options window at startup —
      which is fighting the player over their own client settings. Worth knowing before this grows.
+
+32. **Rounding the corner for a view of them, in game** (2026-08-03, `requireSight` in
+   `utils/Movement/Follow.lua`, `holdNeedsSight` in `travel.lua`). Twenty-two headless checks cover
+   the decision — near and blind keeps walking, sight parks it, their route run out parks it, an
+   unreadable client parks it, the retune every pass, and what `travel.lua` holds its stuck check
+   off — and none of them touch EverQuest. What the harness cannot answer is what a real corner
+   does to it.
+
+   - **The case it was built for.** Group fights round a corner in a dungeon hall, on a follower
+     with nothing to do in that fight (a caster out of mana, auto-engage off). It should walk the
+     leader's route until it can see them and then stand, *where it stands* — not carry on into the
+     melee ring. The Follow State page's Movement row says "closing on <name> for sight" while it
+     does, which is how it is told apart from the ordinary relax at a glance.
+   - **`LineOfSight` on a moving PC target.** The whole thing rests on the client answering this
+     honestly and steadily for a player spawn while a fight is going on. A reading that flaps
+     frame to frame would show up as a follower shuffling forward in fits while parked — worth one
+     look with `MQ_IMGUI_DEBUG` on the Movement row. If it flaps, the answer is a settle on the
+     *false* edge (blind for N frames before walking), not a timer on the walking.
+   - **The corner it cannot fix.** Both standing still with a pillar between, no route banked: it
+     parks, by design — there is no known-walkable ground left to try and beelining at a target we
+     cannot see is the one thing this module refuses to do. Confirm that reads as acceptable in
+     practice rather than as the follow ignoring the problem; if it does not, the next honest step
+     is a short sidestep off the leader's own trail, not a straight line at them.
+
+33. **A heal kept for a fight, in game** (2026-08-04, `heal_when` in `configs/healStateConfig.lua`,
+   `appliesNow` in `states/healState.lua`). Twenty-three headless checks cover the choosing — both
+   narrowings in and out of a fight, a group heal on the same gate, an order held to it, the cast
+   left alone when the fight ends under it, and a gated slot not counting as a reason to abandon
+   somebody else's heal — and none of them touch EverQuest, because off-client the fight is a
+   boolean somebody set. What the harness cannot answer is whether that boolean is *true when it
+   should be* on the character this is for.
+
+   - **The reading everything rests on.** `Combat.IsGroupFighting` on a cleric that never engages:
+     no target of its own, auto-engage off, standing behind a warrior who is being hit. It should
+     read on for the whole fight, off between pulls, and not blink in the beat between two mobs.
+     Both `/cheal` ("the fight, as the heal slots see it") and the top of the Heals tab report it,
+     so this is one look rather than a debug session. If it reads off mid-fight, the fix belongs in
+     `combat.lua` where the fact is published — **not** in a longer window or a settle here, which
+     is the same lesson the warrior sitting down mid-fight taught (see CLAUDE.md).
+   - **The case it was built for.** A big fast heal marked *In a fight* over a cheap slow one marked
+     *Out of a fight*: between pulls the cheap one should do the topping up and the big one should
+     not fire however hurt somebody is; on the pull it should swap over on the first pass. Watch for
+     the swap being *late* rather than wrong — that would be the reading above lagging, not the gate.
+   - **The edge.** A fight starting while the out-of-a-fight heal is in the air: the cast must stand,
+     not be called off. And a fight *ending* while the in-a-fight heal is going out, same. `/cheal`'s
+     last-heal line says "called off: ..." if either one is dropped, which is what to look for.

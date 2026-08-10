@@ -1,7 +1,6 @@
 local BaseClass = require("cabby.classes.baseClass")
 local Priorities = require("cabby.classes.priorities")
 
-local BuffState = require("cabby.states.buffState")
 local HealState = require("cabby.states.healState")
 local MeleeState = require("cabby.states.meleeState")
 local PetDpsState = require("cabby.states.petDpsState")
@@ -34,8 +33,7 @@ local ShadowKnight = BaseClass.new({
         { state = HealState, priority = Priorities.heal + 5 },
         { state = MeleeState, priority = Priorities.dps },
         { state = PetDpsState, priority = Priorities.dps - 2 },
-        { state = PetSetupState, priority = Priorities.buff - 1 },
-        { state = BuffState, priority = Priorities.buff }
+        { state = PetSetupState, priority = Priorities.buff - 1 }
     },
     unimplemented = {
         "tanking as its own state: aggro-loss detection driving the taunt and hate lists",

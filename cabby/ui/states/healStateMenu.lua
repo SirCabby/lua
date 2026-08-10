@@ -4,6 +4,7 @@ local Time = require("utils.Time.Time")
 local AAs = require("cabby.actions.aas")
 local ActionUI = require("cabby.ui.actions.actionUI")
 local AvailableActions = require("cabby.actions.availableActions")
+local Combat = require("cabby.combat")
 local CommonUI = require("cabby.ui.commonUI")
 local CureTypes = require("cabby.actions.cureTypes")
 local Curing = require("cabby.curing")
@@ -27,6 +28,12 @@ local scopeOrder = {
     HealStateConfig.scopes.Self,
     HealStateConfig.scopes.Others,
     HealStateConfig.scopes.Pet
+}
+
+local whenOrder = {
+    HealStateConfig.whens.Any,
+    HealStateConfig.whens.InCombat,
+    HealStateConfig.whens.OutOfCombat
 }
 
 local cureModeOrder = {
@@ -220,6 +227,24 @@ local function DrawHealFields(liveAction, shownAction, healState)
         if decided then ImGui.EndDisabled() end
     end
 
+    -- and when it is the right one, which is the half of that question a health cannot answer.
+    -- Offered for every slot, unlike the scope beside it: a spell can say who it lands on and
+    -- nothing about a spell says whether its owner keeps it for fights
+    ImGui.SameLine()
+    ImGui.SetNextItemWidth(125)
+    local when = HealStateConfig.GetWhen(liveAction)
+    if ImGui.BeginCombo("##when", HealStateConfig.GetWhenDisplay(when)) then
+        for _, known in ipairs(whenOrder) do
+            local _, pressed = ImGui.Selectable(known.display, when == known.value)
+            if pressed then
+                HealStateConfig.SetWhen(liveAction, known.value)
+            end
+        end
+        ImGui.EndCombo()
+    end
+    ImGui.SameLine()
+    CommonUI.HelpMarker("Whether this heal is one for a fight. Any time is what a slot does until it is told otherwise. In a fight keeps it for one -- the expensive fast heal that is what a fight is for and a waste on somebody standing about between pulls. Out of a fight is the other half: the slow efficient heal that is worth every second of the quiet and would be interrupted or land too late in a fight. It only ever narrows -- the slot still has to come up in the order, suit the person and clear the health above. A fight here means one going on around this character, not one it is personally swinging at, because a healer between casts is in the fight without being engaged in it. A heal already on its way is never called off by this: a pull landing mid-cast does not make it the wrong heal for whoever is hurt.")
+
     if facts.isGroup then
         ImGui.SameLine()
         ImGui.SetNextItemWidth(60)
@@ -230,8 +255,19 @@ local function DrawHealFields(liveAction, shownAction, healState)
         ImGui.SameLine()
         ImGui.Text("hurt")
         ImGui.SameLine()
-        CommonUI.HelpMarker("This heal covers the whole group, so it is cast when at least this many of the people being watched are at or below the health above. Group heals are considered before single heals, unless someone is already below the emergency point.")
+        CommonUI.HelpMarker("This heal covers the whole group, so it is cast when at least this many of the people being watched are at or below the health above. Only the people within its reach are counted -- a member who has wandered out of range is not somebody this cast would help, so they are not a reason to spend it. Group heals are considered before single heals, unless someone is already below the emergency point.")
     end
+
+    ImGui.SameLine()
+    ImGui.SetNextItemWidth(70)
+    local manaFloor, manaFloorChanged = ImGui.DragInt("##manafloor", HealStateConfig.GetManaFloor(liveAction), 1, 0, 99)
+    if manaFloorChanged then
+        HealStateConfig.SetManaFloor(liveAction, manaFloor)
+    end
+    ImGui.SameLine()
+    ImGui.Text("% mana")
+    ImGui.SameLine()
+    CommonUI.HelpMarker("Keep this heal off the table below this much mana. Not about whether the cast can be paid for -- it already refuses when it cannot -- but about whether it should be: a floor on the expensive heal hands the ordinary work down to the cheap one below it and keeps the big one for when it is worth its cost. Zero is no floor. Always waived for somebody below the emergency point, which is the moment the mana was being saved for.")
 
     ImGui.SameLine()
     if facts.problem ~= nil then
@@ -296,6 +332,15 @@ function HealStateMenu.BuildMenu(healState)
         ImGui.SameLine()
         CommonUI.HelpMarker("Off by default: a pet is cheaper to summon than the mana spent keeping it up. A pet class that means to keep its own pet up turns this on -- while it is off the pet is not watched at all, so even a heal that can only land on a pet has nothing to fire for.")
 
+        ImGui.SameLine()
+        local healXTarget, healXTargetClicked =
+            ImGui.Checkbox("Watch extended targets", HealStateConfig.GetHealXTarget())
+        if healXTargetClicked then
+            HealStateConfig.SetHealXTarget(healXTarget)
+        end
+        ImGui.SameLine()
+        CommonUI.HelpMarker("The people the group window cannot answer for: a raid-mate, a boxed character grouped elsewhere, somebody's second-account tank. Anything on the extended target window that reads as a player or a pet is watched and can be chosen for a heal; mobs fighting us are skipped, being nobody's heal. Off by default -- it widens who this character is responsible for, and the mana comes out of the same bar the group is drawing on.")
+
         ImGui.TableNextRow()
         ImGui.TableNextColumn()
 
@@ -308,7 +353,30 @@ function HealStateMenu.BuildMenu(healState)
             HealStateConfig.SetEmergencyPct(emergency)
         end
         ImGui.SameLine()
-        CommonUI.HelpMarker("Below this, someone is in trouble rather than merely hurt. It does not choose a heal -- the slots below do that -- it decides what is worth throwing away a heal in progress for, it holds back group heals while somebody is about to die, and it is what curing waits for.")
+        CommonUI.HelpMarker("Below this, someone is in trouble rather than merely hurt. It does not choose a heal -- the slots below do that -- it decides what is worth throwing away a heal in progress for, it holds back group heals while somebody is about to die, it waives every mana floor, and it is what curing waits for.")
+
+        ImGui.SameLine()
+        ImGui.SetNextItemWidth(60)
+        local headStart, headStartChanged = ImGui.DragInt("Head start for being hit %",
+            HealStateConfig.GetAggroHeadStart(), 1, 0, HealStateConfig.MaxHeadStart())
+        if headStartChanged then
+            HealStateConfig.SetAggroHeadStart(headStart)
+        end
+        ImGui.SameLine()
+        CommonUI.HelpMarker("Health says where somebody is, not where they are going. Whoever a mob is coming for is losing health that the person beside them is not, so at the same reading they are the one who will need the heal -- this is how much sooner they are treated as needing it. It moves them up the queue and lowers the bar a slot has to clear for them; it never moves their actual health, so it cannot make somebody count as being in real trouble when they are not. Zero turns it off. The Watching tab shows the judged reading beside the real one whenever the two differ.")
+
+        ImGui.TableNextRow()
+        ImGui.TableNextColumn()
+
+        ImGui.Dummy(0, 0)
+        ImGui.SameLine()
+
+        local healCalls, healCallsClicked = ImGui.Checkbox("Call my heals", HealStateConfig.GetHealCalls())
+        if healCallsClicked then
+            HealStateConfig.SetHealCalls(healCalls)
+        end
+        ImGui.SameLine()
+        CommonUI.HelpMarker("Two healers watching the same group see the same health and reach the same answer, so they cast the same heal at the same person and one of the two is wasted. Nothing in the world says somebody else has it; the only way to know is to be told. On, this character says who it has started on and stands off anybody another healer has called -- except below the emergency point, where two heals landing is the answer being right twice. Worth switching on for a group's healers together rather than for one of them.")
 
         ImGui.TableNextRow()
         ImGui.TableNextColumn()
@@ -358,7 +426,17 @@ function HealStateMenu.BuildMenu(healState)
         if ImGui.BeginTabItem("Heals") then
             ImGui.TextDisabled("Tried in order, top to bottom: the first heal that suits the most hurt person wins.")
             ImGui.SameLine()
-            CommonUI.HelpMarker("Each row is a heal, the health it is for, and who it is for. A big heal on the tank at 85% goes above a small heal on anyone at 60%; the state walks the list from the top for whoever is worst off. Only memorized spells are used, so keep the ones you rely on on the spell bar.")
+            CommonUI.HelpMarker("Each row is a heal, the health it is for, who it is for, and whether it is one for a fight. A big heal on the tank at 85% goes above a small heal on anyone at 60%; the state walks the list from the top for whoever is worst off. Only memorized spells are used, so keep the ones you rely on on the spell bar.")
+
+            -- what every row's fight dial is being read against right now, said once for the list
+            -- rather than per row: a slot kept for fights and not firing is otherwise silent, and
+            -- this is the one reading that explains it
+            ImGui.SameLine()
+            if Combat.IsGroupFighting() then
+                ImGui.TextColored(1, 0.8, 0.2, 1, "A fight is on.")
+            else
+                ImGui.TextDisabled("No fight right now.")
+            end
 
             local actions = HealStateConfig.GetActions()
             local availableActions = AvailableActions.new()
@@ -548,9 +626,10 @@ function HealStateMenu.BuildMenu(healState)
                 ImGui.TextDisabled("Nobody yet -- this fills in while the state is running")
             else
                 local watchFlags = bit32.bor(ImGuiTableFlags.RowBg, ImGuiTableFlags.BordersInner)
-                if ImGui.BeginTable("healWatching", 3, watchFlags) then
+                if ImGui.BeginTable("healWatching", 4, watchFlags) then
                     ImGui.TableSetupColumn("Who", ImGuiTableColumnFlags.WidthFixed, 160)
                     ImGui.TableSetupColumn("Health", ImGuiTableColumnFlags.WidthFixed, 70)
+                    ImGui.TableSetupColumn("Judged", ImGuiTableColumnFlags.WidthFixed, 70)
                     ImGui.TableSetupColumn("Role", ImGuiTableColumnFlags.WidthStretch)
                     ImGui.TableHeadersRow()
 
@@ -560,10 +639,29 @@ function HealStateMenu.BuildMenu(healState)
                         ImGui.Text(candidate.name)
                         ImGui.TableNextColumn()
                         ImGui.Text(tostring(math.floor(candidate.pct)) .. "%")
+
+                        -- **the whole of explaining a head start**: a healer that goes to the
+                        -- warrior first while the wizard shows a lower number is doing what it was
+                        -- told, and this column is the only place that can be seen. Dimmed when it
+                        -- agrees with the reading beside it, which is most of the time
+                        ImGui.TableNextColumn()
+                        local judged = math.floor(candidate.urgency)
+                        if judged == math.floor(candidate.pct) then
+                            ImGui.TextDisabled(tostring(judged) .. "%")
+                        else
+                            ImGui.TextColored(1, 0.8, 0.2, 1, tostring(judged) .. "%")
+                        end
+
                         ImGui.TableNextColumn()
                         local role = candidate.isSelf and "me" or ""
                         if candidate.isTank then role = "tank" end
                         if candidate.isPet then role = "pet" end
+                        if candidate.isXTarget then
+                            role = role == "" and "xtarget" or (role .. ", xtarget")
+                        end
+                        if candidate.isHolding then
+                            role = role == "" and "being hit" or (role .. ", being hit")
+                        end
                         ImGui.Text(role)
                     end
 
@@ -572,6 +670,9 @@ function HealStateMenu.BuildMenu(healState)
             end
 
             ImGui.Spacing()
+            ImGui.TextDisabled("Judged is the health a heal is chosen against, once the head start has had its say.")
+            ImGui.SameLine()
+            CommonUI.HelpMarker("One thing moves it: whoever a mob is coming for. Everything about *reality* -- whether somebody is in real trouble, whether a heal in the air has done its job, how much of the group a group heal would be worth -- is asked of the real health beside it, never of this one.")
             ImGui.TextDisabled("The tank is whoever holds that role in the group window.")
             local mainTank = Roles.GetMainTank()
             if mainTank == nil then

@@ -325,11 +325,26 @@ end
 ---@param owner string
 ---@param distance number how close the follow closes to its target
 ---@param resumeDistance number how far the target gets before it closes again
+---@param requireSight? boolean whether being in range is on its own a reason to stand still, or
+---whether a target out of sight keeps the follow walking (see Follow:WithinHold)
 ---@return boolean applied false when this owner has no follow running
-function Movement.SetFollowHold(owner, distance, resumeDistance)
+function Movement.SetFollowHold(owner, distance, resumeDistance, requireSight)
     if not Movement.IsFollowing() or not Movement.IsOwnedBy(owner) then return false end
-    Movement._.task:SetHold(distance, resumeDistance)
+    Movement._.task:SetHold(distance, resumeDistance, requireSight)
     return true
+end
+
+---Whether a running follow is walking only because it cannot see what it follows -- near enough
+---to have parked, going anyway for a view of them (see `Follow:IsClosingForSight`).
+---
+---Worth asking about because it is a short move on purpose, so a caller that judges movement by
+---ground covered has to know not to judge this one that way: `cabby.travel` holds its stuck check
+---off it. Tasks that cannot answer say so by not implementing it, the same way parking works.
+---@return boolean isClosingForSight false when there is no task, or the task never asked for sight
+function Movement.IsClosingForSight()
+    local task = Movement._.task
+    if task == nil or task.IsClosingForSight == nil then return false end
+    return task:IsClosingForSight() == true
 end
 
 ---@param spawnId? number when given, also require the task to be sticking to this spawn

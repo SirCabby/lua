@@ -1,7 +1,6 @@
 local BaseClass = require("cabby.classes.baseClass")
 local Priorities = require("cabby.classes.priorities")
 
-local BuffState = require("cabby.states.buffState")
 local MeleeState = require("cabby.states.meleeState")
 
 ---A bard melees while it sings, and the singing is the class. Nothing here twists yet, so what
@@ -15,8 +14,7 @@ local Bard = BaseClass.new({
     key = "Bard",
     shortName = "BRD",
     states = {
-        { state = MeleeState, priority = Priorities.dps },
-        { state = BuffState, priority = Priorities.buff }
+        { state = MeleeState, priority = Priorities.dps }
     },
     unimplemented = {
         "twisting: a rotation of songs kept up together. The buff state will keep one song going" ..

@@ -453,7 +453,14 @@ end
 
 ---The first pet slot worth casting right now. List order is the whole priority: which pet this
 ---character would rather have is the order the user already gave us.
+---
+---Which is why the walk stops at that slot rather than carrying on past it. A gem still
+---recovering, or a mana bar a hundred short, is a moment -- and carrying on past it would mean
+---summoning the second-choice pet for the rest of the camp because the first choice was a moment
+---away. Both of those come back on their own, so the answer is to come back next pass; the second
+---return is how the caller knows that is what happened.
 ---@return table|nil pick { action, slot }
+---@return boolean isNeeded a slot that would summon the pet we want is owed, pick or no pick
 local function chooseSummon()
     for _, slot in ipairs(PetSetupStateConfig.GetActions()) do
         if Action.IsEnabled(slot) and dueNow(slot) then
@@ -463,23 +470,33 @@ local function chooseSummon()
                 -- with nothing targeted, and targeting for one would drop whatever we were
                 -- looking at to no purpose
                 if action:IsReady(PetSetupState.CastRequest(nil)) then
-                    return { action = action, slot = slot }
+                    return { action = action, slot = slot }, true
                 end
+
+                return nil, true
             end
         end
     end
 
-    return nil
+    return nil, false
 end
 
 ---The first gear slot this pet is short of, and what to do about it: hand over one we are
 ---carrying, or conjure one first.
 ---
----A slot that is short but cannot be acted on right now -- nothing carried and the gem still
----recovering -- says nothing about the next slot down, so the walk carries on rather than
----stopping on it.
+---The walk stops on a slot the pet is short of and waits, rather than carrying on down the list,
+---whenever the only thing in the way is ours: the gem recovering from the conjure we just made,
+---or the mana for the next one. Both come back on their own in a moment, and going down the list
+---in the meantime is what turns a full spell bar into two conjures taking turns in one gem --
+---each memorized over the other, neither ever handed to the pet. One kind of gear, finished, then
+---the next.
+---
+---What does *not* stop the walk is a slot that has had everything out of it it will ever get: the
+---cap below is the end of that slot's work whether the pet is holding the items or lost them, and
+---nothing about waiting here brings one back.
 ---@param pet table
 ---@return table|nil job { slot, action, itemId, carried }
+---@return boolean isNeeded the pet is short of a slot that could still deliver, job or no job
 local function chooseGear(pet)
     for _, slot in ipairs(PetSetupStateConfig.GetGearActions()) do
         if Action.IsEnabled(slot) and dueNow(slot) then
@@ -492,22 +509,26 @@ local function chooseGear(pet)
 
                 if (pet.given[key] or 0) < wanted then
                     if carrying(itemId) then
-                        return { slot = slot, action = action, itemId = itemId, carried = true }
+                        return { slot = slot, action = action, itemId = itemId, carried = true }, true
                     end
 
                     -- never conjure more of a thing than this pet is owed. The cast succeeding
                     -- and the item not turning up is the one failure no retry can fix, and this
                     -- is what bounds it: the pet is owed two daggers, so two are ever summoned
                     -- for it, and the row says what happened to them
-                    if (pet.summoned[key] or 0) < wanted and action:IsReady(PetSetupState.CastRequest(nil)) then
-                        return { slot = slot, action = action, itemId = itemId, carried = false }
+                    if (pet.summoned[key] or 0) < wanted then
+                        if action:IsReady(PetSetupState.CastRequest(nil)) then
+                            return { slot = slot, action = action, itemId = itemId, carried = false }, true
+                        end
+
+                        return nil, true
                     end
                 end
             end
         end
     end
 
-    return nil
+    return nil, false
 end
 
 ---------------- Starting things --------------------
@@ -733,19 +754,23 @@ end
 ---was for is not there any more, which is a thing worth saying out loud rather than timing out
 ---over: a warder that died mid-favour is one nobody is waiting on.
 ---@return boolean isBusy
+---@return boolean isHolding nothing started, but the ask is one gem away from its next hand-off
 local function requestPass()
     local request = PetSetupState._.request
-    if request == nil then return false end
+    if request == nil then return false, false end
 
     local spawn = mq.TLO.Spawn("id " .. tostring(request.id))
     if spawn.ID() == nil or spawn.Dead() then
         print("(petgear) " .. request.speaker .. "'s pet is gone")
         PetSetupState._.request = nil
-        return false
+        return false, false
     end
 
-    local job = chooseGear(request)
-    if job == nil then return false end
+    local job, isNeeded = chooseGear(request)
+    -- an ask that is owed something and only waiting on our own gem keeps the pass: our own pet's
+    -- list is the thing below it, and letting that in is what would conjure over the gem this one
+    -- is coming back to
+    if job == nil then return false, isNeeded end
 
     local started
     if job.carried then
@@ -754,11 +779,11 @@ local function requestPass()
         started = startGearCast(job, request)
     end
 
-    if not started then return false end
+    if not started then return false, true end
 
     -- the ask stands for as long as it is still producing work
     request.expires = Time.current_time() + gearOrderIdleMs
-    return true
+    return true, false
 end
 
 ---------------- Orders --------------------
@@ -1303,7 +1328,11 @@ function PetSetupState.Go()
 
     -- somebody else's pet, ahead of our own: it is an ask from a person, and this character's own
     -- pet is a job that will still be there in a moment
-    if requestPass() then return true end
+    local requestBusy, requestHolding = requestPass()
+    if requestBusy then return true end
+    -- the ask is owed something and waiting on a gem: end the pass on it rather than stamping the
+    -- idle interval over a decision already made, and without letting the lists below it in
+    if requestHolding then return false end
 
     if pet == nil then
         local ordered = PetSetupState._.summonOrder ~= nil
@@ -1313,8 +1342,9 @@ function PetSetupState.Go()
             -- before replacing it. An order says the moment is not needed
             local goneSince = PetSetupState._.goneSinceMs or Time.current_time()
             if ordered or Time.current_time() - goneSince >= resummonGraceMs then
-                local pick = chooseSummon()
+                local pick, isNeeded = chooseSummon()
                 if pick ~= nil and startSummon(pick) then return true end
+                if isNeeded then return false end
             end
         end
 
@@ -1335,7 +1365,7 @@ function PetSetupState.Go()
 
     local ordered = PetSetupState._.gearOrder ~= nil
     if (PetSetupStateConfig.GetGearing() or ordered) and (pet.gearing or ordered) then
-        local job = chooseGear(pet)
+        local job, isNeeded = chooseGear(pet)
         if job ~= nil then
             local started
             if job.carried then
@@ -1350,6 +1380,10 @@ function PetSetupState.Go()
                 return true
             end
         end
+
+        -- the pet is short of something this list can still deliver, and the gem it takes is on
+        -- its way back: look again next pass rather than idling on it
+        if isNeeded then return false end
     end
 
     PetSetupState._.nextLookMs = Time.current_time() + idleLookIntervalMs

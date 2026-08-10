@@ -8,8 +8,9 @@ local Classes = require("cabby.classes.classes")
 ---What this character heals, and with what.
 ---
 ---The whole model is one ordered list of **heal slots**. A slot is an action (a spell, an AA or a
----clicky) plus the two things that decide when it is the right one: the health it is *for*
----(`hp_threshold` -- use it on someone at or below this), and who it is for (`heal_scope`).
+---clicky) plus the three things that decide when it is the right one: the health it is *for*
+---(`hp_threshold` -- use it on someone at or below this), who it is for (`heal_scope`), and
+---whether it is a heal for a fight (`heal_when`).
 ---Walking the list in order and taking the first slot that fits is how every heal macro since
 ---AFCleric has chosen a heal, and it is what lets one mechanism cover what those macros spelled
 ---out one setting at a time: a slot at 85% scoped to the tank is TankHealPoint, a slot at 50%
@@ -31,6 +32,24 @@ local HealStateConfig = {
         Tank = { value = "tank", display = "The tank" },
         Others = { value = "others", display = "Anyone else" },
         Pet = { value = "pet", display = "My pet" }
+    },
+    ---Whether a slot's heal belongs to a fight, to the quiet, or to both.
+    ---
+    ---**The one thing about a heal that a health cannot say.** A heal is not only an amount: the
+    ---expensive fast one is what a fight is for and is a waste on somebody standing about at 60%
+    ---between pulls, and the slow efficient one is the exact opposite -- worth every second of the
+    ---quiet and worth nothing at all with the tank being hit, where it will be interrupted or land
+    ---long after it mattered. Neither of those is a threshold and neither is a scope, and without
+    ---somewhere to say it the only way to say it was to reach for the slot's own switch as the pull
+    ---went out.
+    ---
+    ---Three answers to one question, in the shape the cure and rez modes have: a slot says nothing
+    ---about fights until it is asked to, and the two narrowings are one setting rather than a pair
+    ---of boxes with a fourth state between them that stands for nothing.
+    whens = {
+        Any = { value = "any", display = "Any time" },
+        InCombat = { value = "combat", display = "In a fight" },
+        OutOfCombat = { value = "outofcombat", display = "Out of a fight" }
     },
     ---Whether this character answers cure requests, and when.
     ---
@@ -59,6 +78,14 @@ local HealStateConfig = {
 
 local defaultThreshold = 70
 local defaultGroupMin = 3
+
+---How far the head start below is allowed to move a reading.
+---
+---Bounded on purpose, and not generously. It exists to break a tie between people who are about
+---equally hurt -- whoever is being hit goes first -- and not to *reorder* the list. The heal state
+---sorts anybody in real trouble ahead of everybody else regardless, so this is not what keeps a
+---preference off somebody who is dying; it is what keeps it recognisable as a preference.
+local maxHeadStart = 25
 
 ---What a rez setting holds when the user has not named a spell: work it out from what this
 ---character owns. The best experience out of a fight, the shortest cast in one.
@@ -118,8 +145,35 @@ local function initAndValidate()
         taint = true
     end
 
+    if configRoot.heal_xtarget == nil then
+        -- off by default, for the reason healing pets is: it widens who this character is
+        -- responsible for, and a healer that quietly starts spending mana on somebody outside the
+        -- group the first time a raid window fills up is a change nobody asked for
+        configRoot.heal_xtarget = false
+        taint = true
+    end
+
     if configRoot.emergency_pct == nil then
         configRoot.emergency_pct = 35
+        taint = true
+    end
+
+    if configRoot.aggro_head_start == nil then
+        -- Enough to settle the common argument and not enough to invent one. Whoever is being hit
+        -- is losing health that the person beside them is not, so at equal readings they are the
+        -- one to heal -- but a head start large enough to outrank *real* trouble would be a healer
+        -- that watches somebody at 20% while it tops up a tank at 70%, which is worse than the
+        -- problem it fixes. Fifteen is about one round of a hit that matters
+        configRoot.aggro_head_start = 15
+        taint = true
+    end
+
+    if configRoot.heal_calls == nil then
+        -- Off by default because it is a *group* protocol, not a local one: switched on for one
+        -- healer and not the others it is chat nobody acts on, and switched on for a lone healer
+        -- it is chat nobody hears. It costs nothing to turn on for the group that wants it and
+        -- would be noise for everyone else
+        configRoot.heal_calls = false
         taint = true
     end
 
@@ -233,6 +287,15 @@ local function initAndValidate()
 
     configRoot.rez_classes = rezClasses
 
+    -- a per-class head start lived here briefly and was removed at the user's direction: one
+    -- number per class is a second thing to keep in agreement with the slot list, and the slot
+    -- list can already say what it was for by scoping a heal. Dropped rather than left switched
+    -- off, so nothing carries a setting nothing reads.
+    if configRoot.heal_classes ~= nil then
+        configRoot.heal_classes = nil
+        taint = true
+    end
+
     if configRoot.actions == nil then
         configRoot.actions = {}
         taint = true
@@ -309,6 +372,24 @@ function HealStateConfig.SetHealPets(enable)
     print("HealState heals pets: [" .. tostring(enable) .. "]")
 end
 
+---Whether friendlies on the extended target window who are not in the group are watched.
+---
+---The answer to the one thing the group window cannot cover: a raid-mate, a boxed character
+---grouped elsewhere, somebody's second-account tank. They are chosen for a heal exactly as a
+---group member is, and count as "anyone else" to a scope -- the group is not what makes somebody
+---anyone else, being neither us nor our pet is.
+---@return boolean healXTarget
+function HealStateConfig.GetHealXTarget()
+    return getConfigSection().heal_xtarget == true
+end
+
+---@param enable boolean
+function HealStateConfig.SetHealXTarget(enable)
+    getConfigSection().heal_xtarget = enable == true
+    Global.configStore:SaveConfig()
+    print("HealState watches extended target friendlies: [" .. tostring(enable) .. "]")
+end
+
 ---The health at which someone is in trouble rather than merely hurt. It does not decide which
 ---heal to use -- the slots do that -- it decides what is worth throwing away a heal in progress
 ---for.
@@ -321,6 +402,46 @@ end
 function HealStateConfig.SetEmergencyPct(pct)
     getConfigSection().emergency_pct = math.max(math.min(math.floor(pct), 99), 1)
     Global.configStore:SaveConfig()
+end
+
+---How much of a head start whoever is being hit gets over everybody reading the same health.
+---
+---Health is a photograph and this is the closest thing to a direction of travel that can be had
+---without watching one: the person a mob is coming for is losing health that the person beside
+---them is not, so at equal readings they are the one who will need the heal. It moves them up the
+---order and it lowers the bar a slot has to clear for them; it does not make them *in trouble*,
+---which is a reading about reality and stays one.
+---@return number pct 0 turns it off
+function HealStateConfig.GetAggroHeadStart()
+    return tonumber(getConfigSection().aggro_head_start) or 0
+end
+
+---@param pct number
+function HealStateConfig.SetAggroHeadStart(pct)
+    getConfigSection().aggro_head_start = math.max(math.min(math.floor(pct), maxHeadStart), 0)
+    Global.configStore:SaveConfig()
+end
+
+---@return number pct the most either head start may move a reading
+function HealStateConfig.MaxHeadStart()
+    return maxHeadStart
+end
+
+---Whether this character says who it is healing, and listens when other healers do.
+---
+---One switch for both halves because half of it is nothing: a healer that listens without speaking
+---is taking a courtesy it does not extend, and one that speaks without listening is talking to
+---itself. A group turns it on for its healers together or leaves it off.
+---@return boolean healCalls
+function HealStateConfig.GetHealCalls()
+    return getConfigSection().heal_calls == true
+end
+
+---@param enable boolean
+function HealStateConfig.SetHealCalls(enable)
+    getConfigSection().heal_calls = enable == true
+    Global.configStore:SaveConfig()
+    print("HealState calls its heals: [" .. tostring(enable) .. "]")
 end
 
 ---Whether this character answers cure requests, and when.
@@ -573,6 +694,28 @@ function HealStateConfig.SetScope(action, scope)
     Global.configStore:SaveConfig()
 end
 
+---When this heal is one to be casting: any time, only during a fight, or only out of one.
+---
+---A narrowing like the scope beside it and never a widening -- the slot still has to come up in
+---the order, suit the person and clear its threshold. Anything unrecognised reads as "any time",
+---which is also what a slot that has never been told holds.
+---@param action Action
+---@return string when one of HealStateConfig.whens values
+function HealStateConfig.GetWhen(action)
+    local when = action.heal_when
+    for _, known in pairs(HealStateConfig.whens) do
+        if known.value == when then return when end
+    end
+    return HealStateConfig.whens.Any.value
+end
+
+---@param action Action
+---@param when string
+function HealStateConfig.SetWhen(action, when)
+    action.heal_when = when
+    Global.configStore:SaveConfig()
+end
+
 ---How many people have to be hurt before a group heal is worth casting. Only means anything for
 ---a slot holding a spell that heals the group rather than a target.
 ---@param action Action
@@ -588,6 +731,30 @@ function HealStateConfig.SetGroupMin(action, count)
     Global.configStore:SaveConfig()
 end
 
+---The mana this heal will not dip below -- pacing, in the one place pacing can be expressed.
+---
+---A slot already refuses to fire when its cast cannot be *paid* for; this is the different
+---question of whether it should be. The expensive heal at the top of the list is the one that
+---empties the bar, and a healer that spends it on every scratch has nothing left for the fight's
+---last minute -- so a floor on the big one hands the ordinary work down to the cheap one below it
+---and keeps the big one for when it is worth its cost.
+---
+---**Waived for somebody below the emergency mark.** A reserve is for pacing and pacing stops
+---mattering when a person is dying: the whole reason to have kept the mana is the moment that is
+---now happening. Held to at every other health, which is where the saving is actually made.
+---@param action Action
+---@return number pct 0 for no floor, which is what a slot that has never been told holds
+function HealStateConfig.GetManaFloor(action)
+    return tonumber(action.mana_floor) or 0
+end
+
+---@param action Action
+---@param pct number
+function HealStateConfig.SetManaFloor(action, pct)
+    action.mana_floor = math.max(math.min(math.floor(pct), 99), 0)
+    Global.configStore:SaveConfig()
+end
+
 ---@param scope string
 ---@return string display
 function HealStateConfig.GetScopeDisplay(scope)
@@ -595,6 +762,15 @@ function HealStateConfig.GetScopeDisplay(scope)
         if known.value == scope then return known.display end
     end
     return HealStateConfig.scopes.Any.display
+end
+
+---@param when string
+---@return string display
+function HealStateConfig.GetWhenDisplay(when)
+    for _, known in pairs(HealStateConfig.whens) do
+        if known.value == when then return known.display end
+    end
+    return HealStateConfig.whens.Any.display
 end
 
 ---@diagnostic disable-next-line: duplicate-set-field

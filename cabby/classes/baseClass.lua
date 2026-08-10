@@ -1,6 +1,7 @@
 local Debug = require("utils.Debug.Debug")
 
 local AdvLootState = require("cabby.states.advLootState")
+local BuffState = require("cabby.states.buffState")
 local CorpseState = require("cabby.states.corpseState")
 local FleeState = require("cabby.states.fleeState")
 local FollowState = require("cabby.states.followState")
@@ -30,7 +31,7 @@ local BaseClass = { key = "BaseClass" }
 
 ---The states every class registers, whatever it is.
 ---
----Six jobs have nothing to do with what the character can do, so no class should have to
+---Seven jobs have nothing to do with what the character can do, so no class should have to
 ---remember to ask for them. Following is the first -- a wizard follows the same way a warrior
 ---does; and FollowState is also the anchor and click-to-zone state, all three at the follow band
 ---because they are one state and one `Go()`. Resting is the second: sitting to get health, mana
@@ -68,6 +69,19 @@ local BaseClass = { key = "BaseClass" }
 ---nobody -- and above follow, so a character told to loot does that rather than trotting off after
 ---the group with its gear still on the floor.
 ---
+---Keeping buffs up is the seventh, and it is the one that used to be a capability judgment. It
+---read as a spellbook job, so the twelve classes with a book declared it and the four without
+---(WAR, MNK, ROG, BER) went without a Buff State page at all -- which was the wrong reading of
+---what a buff slot holds. A slot holds an *action*, and a clicky and an AA hold buffs exactly the
+---way the book does: the classes with no book are the ones whose self buffs are all clickies and
+---AAs, so they are the last classes that should have been left with nowhere to put them. Every
+---one of the sixteen has something worth keeping on itself, so buffing joins the list nobody has
+---to ask for, at `Priorities.buff` for all of them -- under follow, so it takes the frames follow
+---yields once it has caught up, and over rest, so a character buffs before it sits down.
+---
+---Registering it is not the same as doing it here either: the slot list starts empty and buffing
+---an empty list is nothing at all, so what a warrior gains is the page, not a new habit.
+---
 ---A class that wants one of these somewhere else in its chain declares it itself: a profile
 ---entry naming the same state wins over the common one, priority and all. That is exactly how the
 ---melee classes keep their melee at `dps`.
@@ -81,6 +95,7 @@ local function CommonStates()
         { state = AdvLootState, priority = Priorities.loot },
         { state = CorpseState, priority = Priorities.loot + 5 },
         { state = FollowState, priority = Priorities.follow },
+        { state = BuffState, priority = Priorities.buff },
         -- last of all, deliberately: resting is what a character does with the frames nothing
         -- else wants, and everything above it gets first refusal every pass
         { state = RestState, priority = Priorities.misc }

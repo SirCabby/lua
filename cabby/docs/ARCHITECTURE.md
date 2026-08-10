@@ -198,9 +198,11 @@ cabby/
                       one-every-two-seconds throttle; no order, no frames
   rez.lua             service: taking the resurrection somebody offers -- Yes to the client's rez
                       box on our feet, the Resurrect line on the respawn window while hovering.
-                      Reads every confirmation box before answering it (a sacrifice says
-                      "Resurrection" while it asks to kill us), and never picks at the respawn
-                      window without the client having said a rez is waiting
+                      Reads every confirmation box before answering it -- a box that says
+                      "resurrect" is taken as a rez unless it is one of the two that say it while
+                      asking something else (a sacrifice, a corpse summon), and one of those left
+                      alone is said out loud. Never picks at the respawn window without the client
+                      having said a rez is waiting
   rezzing.lua         reader: the giving end of the same event -- whose corpses are lying here
                       worth a rez (group members, ordered by the tank switch and the class list,
                       narrowed in a fight to whoever that list says is worth breaking off for, plus
@@ -268,9 +270,10 @@ local Warrior = BaseClass.new({
 `BaseClass` merges the profile's states with the **common** ones, sorts by priority, and then
 inits and registers each in that order. Rules it enforces:
 
-- **Every class flees, follows, rests, melees — and minds the loot window.** FleeState,
+- **Every class flees, follows, rests, melees, buffs — and minds the loot window and its own
+  corpse.** FleeState,
   FollowState (which is also anchor and click-to-zone — one state, one `Go()`), RestState,
-  MeleeState and AdvLootState are the five jobs that have
+  MeleeState, BuffState, AdvLootState and CorpseState are the seven jobs that have
   nothing to do with what the character is, so no profile has to remember to ask for them. Flee is
   there for a second reason as well: it is not a job at all but the absence of every job below it,
   so what it holds back is the same list whatever the character can do. It is also the only state
@@ -314,9 +317,15 @@ hold is pet heals (the Renewal, Mending and Companion lines) and the empathy lin
 a shadow knight spends its own health on, and the band puts them above the nukes for the same
 reason a paladin's heal is above its swing. A shadow knight has no *pet* heal — that line is
 MAG/NEC/BST — and an enchanter has no heal at all, which is why ENC is the one pet class left out:
-a page with nothing to put on it is not a capability. The twelve classes with a spellbook register **BuffState** at
-the buff band; the four with none (WAR, MNK, ROG, BER) do not, since a buff list holding nothing
-but clickies is not enough of a job to be a state. **PetSetupState** goes to the six classes that
+a page with nothing to put on it is not a capability. **BuffState** used to be the same kind of
+judgment and is no longer one: it went to the twelve classes with a spellbook, and the four with
+none (WAR, MNK, ROG, BER) were left without the page on the grounds that a buff list holding
+nothing but clickies was not enough of a job to be a state. That was the wrong reading of what a
+buff slot holds. A slot holds an *action*, and a clicky and an AA hold buffs exactly the way the
+book does — so the classes with no book are the ones whose self buffs are *all* clickies and AAs,
+and were the last that should have had nowhere to put them. All sixteen now pick it up from the
+common states at `Priorities.buff`, and it is the slot list, not the profile, that decides whether
+anything is cast. **PetSetupState** goes to the six classes that
 keep a pet as a companion — MAG, NEC, BST, ENC, SHD and SHM — at `Priorities.buff - 1`, one band
 above buffing so that a pet is here, and holding what it is owed, before any mana goes on buffing
 one; a pet buff cast on a pet about to be replaced is a wasted gem timer. Those same six register
@@ -551,6 +560,21 @@ Design rules that matter when adding a caller:
   base distance whatever the setting says, since the follower that spread out on the way to the zone
   line is the one that did not make it. The Follow State page shows the distance **in force**
   alongside the two settings, which is how the relax is seen doing anything.
+- **A fight also makes sight part of being close enough.** Distance is only half of being with
+  somebody, and the relaxed half above is where the other half shows: a follower parked round the
+  corner from the fight it is there for kept every distance it was asked to keep and can do none of
+  its job, because the heal, the cure and the spell aimed at what they are fighting all need to see
+  them. So while `Combat.IsGroupFighting` is true, `travel.lua` also tells the follow that being in
+  range is not on its own a reason to stand still (`Movement.SetFollowHold`'s `requireSight` →
+  `Follow:ClosingForSight`), and a target out of sight keeps it walking until they are back in view
+  — round the corner, which is where the group went. Two bounds keep that from becoming a shove:
+  what it walks is only ever the route they walked (sight is a reason to keep going along their
+  trail, never a reason to invent a line to them — see the trail bullet below), so **their route run
+  out ends it** and the follower parks rather than beelining at a target it cannot see; and an
+  unreadable `LineOfSight` is read as seen, the same lenient reading the mez state uses, so a
+  client declining to answer never marches anybody anywhere. Sight rides inside `WithinHold`, so
+  `IsParked` answers it too and the follow band is honestly busy while it walks. It reaches the same
+  character the relax does and no other, and it is off on a run for the same reason the relax is.
 - **Parking stops the walking, not the recording.** The target's route while we sit is precisely the
   part that is *not* history yet, so a parked follow keeps banking it and walks it when they move
   off. All that being parked retires is a warp seam — standing with them is proof that a jump in
@@ -647,7 +671,10 @@ Rules that matter when adding a caller:
   cabby's priorities, so the service takes the policy as an injected function and `cabby/casting.lua`
   supplies it from `StateMachine:GetPriority`. Bards are exempt for songs (they sing on the move,
   and the movement pause gate knows it), as is anything with a cast time under 100 ms, because
-  there is no cast bar to lose.
+  there is no cast bar to lose. Both exemptions live on the *subject*
+  (`CastSubject:RequiresStillness`) rather than on the task, so a caller can ask which of the
+  things it might cast movement would actually cost it — which is how the buff state keeps firing
+  instant clickies while the group runs.
 - **Requests never touch the client; only `Pulse()` does** — targeting, `/memspell`, `/cast`,
   `/stopcast`, all of it. Same rule as movement, same reason: a cast asked for from an ImGui
   button or a chat handler must not run EQ commands mid-frame. `Interrupt()`/`StopFor()` record
@@ -1393,16 +1420,16 @@ where offering them a second time with different meanings is how a root gets con
 cast neither time. All three jobs have an exact answer in the effect data, so nothing is left for a
 heading to get wrong.
 
-**Is it still under? Four readings, strongest first — and the third is the one every other mez
-script leaves out.**
+**Is it still under? Three tiers of reading, strongest first — and the middle one is what every
+other mez script leaves out.**
 
 1. **We just landed one.** For the couple of seconds it takes the server to tell the client, what
    we did is the only record there is. It answers "held" rather than "two seconds left": the
    window bridges a round trip, it is not the mez's duration, and reading it as one would make
    every mez read as nearly-out against the refresh margin and be cast twice.
-2. **The world said it woke up.** The awakened line (`%1 has been awakened by %2.`); the mob having
-   **moved or turned since the mez we put on it landed**; and the mob's animation showing it doing
-   something other than standing there.
+2. **The world contradicted it.** The awakened line (`%1 has been awakened by %2.`); the mob having
+   **moved or turned since the mez we put on it landed**; the mob having **been hit since the mez we
+   put on it landed**; and the mob's animation showing it doing something other than standing there.
 3. **The client's cached reading**, `Spawn[id].CachedBuff[^mezzed].Duration` — the same
    `SPA_ENTHRALL` search, filled in whenever the mob was last targeted (which for a mob we mez is
    every time we mez it) and ageing by itself from there, so a stale cache decays into "it needs
@@ -1412,26 +1439,41 @@ Reading 2 exists because **nothing tells a cached buff about a break.** A mez en
 sits in the cache counting down the two minutes it had left, and a state that trusted the cache
 alone would leave that add loose for two minutes. So the cache answers *how long has it got* and
 the break signals answer *is it still under*, and it is the second question a mez state exists for.
-Three signals carry it, and they are deliberately different in kind:
+Four signals carry it, and they are deliberately different in kind:
 
-- **Movement since the mez landed** is the strongest and needs no window and no threshold: the mez
-  landed at one instant, the mob moved at another, and which came second is the whole answer. A
-  mezzed mob is *perfectly* still — the same coordinates and the same heading, sample after sample
-  — so anything else is the mez not holding. Heading is half of it and the half position alone
+- **Movement since the mez landed** is the strongest and needs no window and no threshold. A mezzed
+  mob is *perfectly* still — the same coordinates and the same heading, sample after sample — so
+  anything else is the mez not holding. Heading is half of it and the half position alone
   misses: a mob handed back its own will faces whoever it is about to hit before it takes a step,
   and one that is rooted or snared may never take one. `mobs.lua` samples the pair every 250 ms
   (`Mobs.LastMovedMs`), which is where it belongs — a sample over time only means anything if
   somebody takes it at a steady cadence, and a state being starved by the fight above it cannot
   promise one. This is `MobMoved` from `macros/bots/enchanterBot.mac`, which is also where the
-  argument for heading comes from.
+  argument for heading comes from. **What is compared is the roster's sample, not the clock**: the
+  reading was once "it last moved later than our mez landed", which is wrong about the mob a mez is
+  most often aimed at — an add is still running when the mez takes it, and the 250 ms sample that
+  notices it has stopped is stamped after the mez landed, so every mez cast at something in motion
+  read as broken the instant its trust window closed and was thrown a second time at a mob that was
+  already held.
+- **Damage since the mez landed** is the only one that is evidence of the *cause* of a break rather
+  than of the mob's reaction to one, and the only one needing the mob neither to be looked at, nor
+  to move, nor to be spoken about. It covers what none of the others can: a mob mezzed in melee
+  range, already facing whoever it was hitting, breaks free and goes back to swinging without
+  changing a coordinate or a degree of heading — movement has nothing to see, the animation list has
+  it standing (which is what a mob between swings is doing), and a missed awakened line then leaves
+  the cached mez counting happily down through the break. That is the mob left chewing on the healer
+  while crowd control believes the camp is locked. Health falls only when something hit it, and being
+  hit is what a mez does not survive. Coarse for a spawn nobody is targeting — the client is sent a
+  percentage, so a hit worth less than one does not show — but never wrong in the direction that
+  matters.
 - **The awakened line** is the instant one: it arrives at the moment of the break, before the mob
   has physically done anything about it. See below.
 - **The passive animation list** is carried over from `macros/bots/mez.mac`, where it has been the
-  break test on this server for years. It is the weakest of the three — a lookup table that can be
+  break test on this server for years. It is the weakest of the four — a lookup table that can be
   incomplete, where "it is somewhere else now" cannot be — and worth noting that
   `enchanterBot.mac`'s equivalent check is commented out in its own source, so the two public
   macros disagree about it. It is kept because one of them is field evidence for *this* server, and
-  all three err the same way: any of them calling the mob active makes it active. Silence is read
+  all four err the same way: any of them calling the mob active makes it active. Silence is read
   as "standing there" rather than as "loose", since calling every mob we cannot see loose would
   mean re-mezzing the camp on the strength of not knowing.
 
@@ -1466,11 +1508,17 @@ cannot be mesmerized, which is the `immune` outcome the casting service already 
 remembered against the spawn until it dies. Not something above the mez's own level, read off the mesmerize
 effect's `Max` rather than off `Spell.MaxLevel` (which reads the first effect slot whatever is in
 it) — and an unreadable level is not a refusal, since the cast is the cheapest way to find out and
-the answer comes back as the immune line. And not something already hurt past `stop_pct`, which
-reads backwards until you have watched it go wrong: a mob *below* the line is not too healthy to
-mez, it is too nearly dead — somebody has been killing it, there is damage in the air aimed at it,
-and a mez landing takes it out of reach of all of that so the group starts again on a full-health
-add instead. **Range** is not asked here: a slot's `IsReady` is judged against the mob the cast
+the answer comes back as the immune line. And, **for a mob being picked up for the first time**, not
+something already hurt past `stop_pct`, which reads backwards until you have watched it go wrong: a
+mob *below* the line is not too healthy to mez, it is too nearly dead — somebody has been killing it,
+there is damage in the air aimed at it, and a mez landing takes it out of reach of all of that so the
+group starts again on a full-health add instead. That gate sits inside the already-chosen exemption
+with the other two picking rules, and leaving it outside was a bug with a fight-losing shape: health
+never climbs back, so applied to everything it is a one-way door — the moment anything hit a mob
+crowd control was holding, it fell under the line and could never be mezzed again, which is exactly
+the mob that most needs one, since being hit is what broke the mez. What the line proxies for —
+"there is damage in the air aimed at this one" — is already answered directly and better by the
+kill-target rule above it. **Range** is not asked here: a slot's `IsReady` is judged against the mob the cast
 would be aimed at, so the casting service answers it per slot, because a mob out of reach of one mez
 is in reach of another. **Line of sight is**, and the difference is worth the paragraph below.
 
@@ -1501,10 +1549,38 @@ goes on trying the mez, which is the only thing it has.
 what makes it an AE at all, and whether it needs a target is what says whether the blast is centred
 on the mob or on us. It waits for `ae_min` loose mobs — one is never worth it, since an AE wakes
 what it does not land on and a single-target mez covers one mob anyway — and it is aimed at
-whichever mob has the most loose neighbours inside the radius. Nothing is credited to a mob from an
-AE's immune or resist line, because those cannot be pinned on any one of the several it went off
-around; the mobs it failed on show up loose on the next pass, which costs a pass and is the honest
-answer.
+whichever loose mob has the most loose neighbours inside the radius. Nothing is credited to a mob
+from an AE's immune or resist line, because those cannot be pinned on any one of the several it went
+off around; the mobs it failed on show up loose on the next pass, which costs a pass and is the
+honest answer.
+
+**An area mez and a single-target mez are the same job at two different moments**, and telling them
+apart is most of what this state does well or badly. An enchanter's AE mez is short by design — a
+tick or two where the single-target mez holds for eight — because it is the *catch-up*: more mobs
+are loose at once than one cast at a time could work through before somebody dies, so one cast
+covers all of them. What holds a camp afterwards is the long single-target mez, several times the
+duration for the same cast. Two readings keep them in their lanes, and **both used to say the wrong
+thing in the same direction:**
+
+- **Only a mob that is genuinely loose counts toward an AE being worth its aggro** — not one merely
+  due for a top-up. Counting the ageing ones collapses the distinction: three mobs the blast mezzed
+  come up for refresh together, the AE sees "three to mez" and fires again, and the enchanter spends
+  the fight re-blasting a camp it already held. The blast still *catches* whatever it catches and
+  still writes all of it down as mezzed — the same split the confirmed-only rule already draws
+  between what makes a cast worth it and what the cast happens to land on.
+- **A mez that cannot outlast its own refresh margin is never asked whether it needs topping up.**
+  The margin is `cast time + refresh_lead`, and for a PBAE granting one tick against a six-second
+  lead the margin is longer than the entire mez — so asked the question, that slot answers "loose"
+  for every mob it holds, from the instant its cast lands until the mez expires, forever. It always
+  has work; the list is walked in order and the first slot with work wins; so **it starves every slot
+  below it**, which is where the long mez lives. Such a mez is re-applied once it has actually
+  lapsed rather than topped up early. Nothing is tuned to reach that conclusion — what the mez grants
+  and what the margin asks for are both read off the spell — and it is why `refresh_lead_ms` can be
+  set by what a single-target refresh needs without starving the AE slots.
+
+Together they produce the intended shape without a mode to be stuck in: a camp of loose adds draws
+one blast, and the passes after it go to single-target mezzes quietly upgrading each mob from a tick
+of area mez to a full one, until the camp is locked and the state falls silent.
 
 **Two things this deliberately does not do.** It never runs a game command of its own — targeting
 is the casting service's, so a mez aimed at an add borrows the client's target for exactly as long
@@ -1684,13 +1760,86 @@ the result — and neither does holding the rest of the chain back, which the pr
 for it.
 
 **One ordered list of heal slots decides everything.** A slot is an action (a spell, an AA or a
-clicky) plus the health it is *for* (`hp_threshold` — use it on someone at or below this) and who
-it is for (`heal_scope`: anyone, the tank, myself, anyone else, my pet). Walking that list in order
-and taking the first slot that fits is how every heal macro since AFCleric has chosen a heal; what
-is different is that one mechanism covers what those macros spelled out one setting at a time. A
-slot at 85% scoped to the tank is TankHealPoint. A slot at 50% scoped to yourself is SelfHealPoint.
-A group heal at 60% is DivArbPoint. There is no separate setting for any of them, and a class the
-author never thought about needs no new setting either.
+clicky) plus the health it is *for* (`hp_threshold` — use it on someone at or below this), who it
+is for (`heal_scope`: anyone, the tank, myself, anyone else, my pet), whether it belongs to a fight
+(`heal_when`: any time, in a fight, out of a fight), and the mana it will not dip below
+(`mana_floor`, zero for no floor). Walking that list in order and taking the first slot that
+fits is how every heal macro since AFCleric has chosen a heal; what is different is that one
+mechanism covers what those macros spelled out one setting at a time. A slot at 85% scoped to the
+tank is TankHealPoint. A slot at 50% scoped to yourself is SelfHealPoint. A group heal at 60% is
+DivArbPoint. There is no separate setting for any of them, and a class the author never thought
+about needs no new setting either.
+
+**The mana floor is pacing, and it is the one thing a threshold cannot express.** A slot already
+refuses to fire when its cast cannot be *paid* for — that is the casting service's own check. The
+floor is the different question of whether it should be: the expensive heal at the top of the list
+is the one that empties the bar, and a healer that spends it on every scratch has nothing left for
+the fight's last minute, so a floor on the big one hands the ordinary work down to the cheap one
+below it. Waived without exception for anybody below the emergency point, because a reserve is for
+pacing and pacing stops mattering when the moment it was being kept for is the one now happening.
+
+**The fight window is the other thing a threshold cannot express**, and alone among a slot's
+settings it is a fact about the moment rather than about a person. A heal is not only an amount: the
+expensive fast one is what a fight is *for* and is a waste on somebody standing about at 60% between
+pulls, and the slow efficient one is the exact opposite — worth every second of the quiet, and in a
+fight either interrupted or landing long after it mattered. Both are one slot being right at one
+moment and wrong at another, which no health and no scope can say; without somewhere to say it the
+only way to say it was to reach for the slot's own switch as the pull went out. Three answers to the
+one question in the shape the cure and rez modes have, rather than a pair of boxes with a fourth
+state between them that stands for nothing.
+
+It reads `Combat.IsGroupFighting` and **not this character's own engagement**, which is the whole of
+it working: a healer has no target of its own and usually has auto-engage off, so it stands in the
+middle of a fight answering no to `IsEngaged` for the length of one — read that way, "in a fight"
+would be false all fight on exactly the class the setting exists for and the slot would simply never
+fire. Curing and rezzing read the narrower fact on purpose, because those two are asking whether
+*we* are busy fighting; the difference is worth keeping straight before anybody makes the three
+agree. Like scope it only ever narrows — the slot still has to come up in the order, suit the person
+and clear its threshold — and it **chooses rather than cancels**: a heal already in the air is not
+called off when a fight starts or ends under it, since whoever it is aimed at is exactly as hurt
+either way and dropping it spends the mana and the seconds for nothing. That is the same rule as "no
+longer the best one is still a good one" below. The cure and the rez *do* call themselves off on
+that edge, and the difference is that theirs is a whole job being switched off underneath them
+rather than a choice between heals.
+
+**Health is not the whole of who needs a heal**, and what it leaves out is read rather than
+configured per slot. Every watched person carries two numbers: `pct`, which is the truth, and
+`urgency`, which is what a slot's threshold is actually compared against and what the list is
+sorted by. One head start moves the second away from the first: **whoever a mob is coming for**
+(`aggro_head_start`) is losing health that the person beside them is not, so at the same reading
+they are the one who will need the heal. Health is a photograph; this is the closest thing to a
+direction of travel that can be had without watching one over time. Three sources, none complete
+and all free, because the complete one does not exist: us, from the same `PctAggro` reading
+`IsUnderAttack` is built on; whoever our own target is coming for, when what we have targeted is a
+mob — usually nothing, but right when it answers, and the only way a *non*-tank who pulled aggro is
+ever noticed; and the main tank while there is a fight on, which is not a reading at all but the
+standing answer to the question.
+
+(A head start *per class* was built here and removed at the user's direction. It is the thing every
+hand-written heal macro grows — a warrior at 70% and a wizard at 70% are not in the same amount of
+trouble — but it is a second table to keep in agreement with the slot list, and a slot scoped to
+the tank already says most of it. Worth knowing it was tried, so it is not rebuilt by accident.)
+
+The split is the load-bearing part: **urgency orders the queue and moves thresholds, and is used
+for nothing else.** Whether somebody is in real trouble, whether a heal in the air has done its job,
+how much of the group a group heal would be worth — all of those are asked of `pct`. The Watching
+tab prints the judged reading beside the real one whenever the two differ, because a healer going to
+the warrior first while the wizard shows a lower number is otherwise a bug with no way in.
+
+**Anybody below the emergency point sorts ahead of everybody above it, ordered among themselves by
+real health, and no preference can reach in front of them.** This is a rule in the sort rather than
+a consequence of the caps, and the difference matters: capping a head start under the emergency
+point does *not* buy the guarantee, because the numbers being compared are the adjusted ones — a
+healthy warrior carrying +25 judges as 60 and would sort ahead of somebody genuinely at 34. A
+preference is about who to help first among people who are merely hurt; it has nothing to say about
+who is closest to dead. The harness case is `a head start cannot outrank real trouble`.
+
+One consequence worth naming, because it is the kind of thing that rots quietly: **position in the
+candidate list no longer implies anything about real health beyond that first band.** The two places
+that used to read it that way — the group-heal gate and the emergency guard curing and rezzing are
+held to — ask every candidate instead. Both would be correct today if they stopped early; they do
+not, because that is an agreement between two distant pieces of code and the sort is the piece that
+will move.
 
 **Where a heal can be aimed is read off the spell, not configured** — the same `aims` model the
 buff state uses, and the reason one list serves a cleric keeping six people up and a magician
@@ -1717,14 +1866,18 @@ The order things are decided in, every pulse:
    low number), so a rezzed group-mate parked at 15% cannot block curing forever.
 2. **An order** (`healnow <id>`, `healme`). Someone asking outranks the state's own judgment —
    that is the point of being able to ask — so the slots are read only for *which* heal suits
-   them: scope still applies, the health the slot was written for does not. A target already at
-   full health is refused out loud rather than healed, and an order that cannot be acted on within
-   ten seconds is dropped rather than landing long after it mattered.
+   them: scope and the fight window still apply, the health the slot was written for does not. A
+   target already at full health is refused out loud rather than healed, and an order that cannot be
+   acted on within ten seconds is dropped rather than landing long after it mattered.
 3. **A group heal**, when enough of the group is at or below the slot's threshold (`group_min`).
    Whether a slot *is* a group heal is the spell's aim, not a setting — a group heal is what it is,
    and asking the user to say so is one more thing to get wrong. Skipped entirely while anyone is
    below the emergency point: three people at 60% is what a group heal is for, and one person at
-   15% is not, however many others are scuffed.
+   15% is not, however many others are scuffed. The count is taken **within the heal's own reach**
+   and against **real health**: a group heal lands on whoever is standing with us, so the member who
+   ran off after a caster is not somebody it would help, and counting them is how two people at the
+   camp become "enough" on the strength of a third who is not there. `Range` already answers with
+   `AERange` for a spell that carries its reach there, which every group heal does.
 4. **Whoever is worst off**, with the first slot whose aim, scope and threshold fit them.
 5. **A rez** (see Rezzing below). Dead last, because everybody alive comes first: somebody dead is
    not getting any worse, and the corpse will still be lying there in three seconds. So this is the
@@ -1737,31 +1890,75 @@ elsewhere at exactly the trigger point does not make us throw ours away), or whe
 drops below the emergency point. Calling off costs the mana already spent and saves the seconds
 that matter; MQ2Cast's own docs pitch this as the reason a cast returns control immediately.
 
-Two smaller rules worth knowing:
+Some smaller rules worth knowing:
 
 - **A heal that lands is not immediately cast again.** The client can take a moment to report the
   new health, and without a settle window the next pulse reads the old number and casts the same
   heal at someone who no longer needs it. Anyone below the emergency point is exempt — chain
   healing a tank at 20% is the entire job.
+- **And *that* heal is left alone on *that* person for a little longer still** — scaled by how long
+  its cast took, which is the only thing said anywhere about how big it was. A six second heal is
+  the one worth not re-firing into its own arrival; an instant clicky is barely worth holding at
+  all. Kept per slot rather than per person, which is what turns a list that was only ever a
+  priority order into something that also *degrades*: the big heal goes on its own clock and the
+  small one underneath carries on covering them. Waived below the emergency point for the same
+  reason the settle window is.
+- **A heal over time that is still ticking is not re-applied.** Not waived for an emergency, unlike
+  everything else here — a second one would not land any faster, so there is nothing to waive it
+  for. Ourselves and our own pet the client answers directly. For everybody else there are **two
+  sources and neither is sufficient alone**, which is worth understanding before touching it:
+  `Spawn.CachedBuff` holds another player's buffs from when they were last targeted and each entry
+  ages by itself, so it reports what is left *now* — and it is the only thing that can see a heal
+  over time this character did not cast, which is the whole game once a second healer is in the
+  group. But the cache is filled by the client's *complete* buff message and the partial ones are
+  discarded, so (as the buff state found the hard way) **a buff landing on somebody already
+  targeted is never seen** — the snapshot held for the person we just healed predates the cast that
+  healed them. Trusting the cache alone would read "nothing on them" for the entire duration and
+  re-apply every pass. So whichever source says more time is left wins: both are evidence something
+  is running, neither one's silence is evidence that nothing is. It also makes the open question
+  about `CachedBuff.Duration`'s units (see Roadmap) harmless here — if it under-reads, the record
+  still covers what this character put up itself.
 - **A heal that is not on the spell bar is memorized first**, like every other action slot (see
   Action system) — into an empty gem where there is one. It costs seconds the first time that heal
   is wanted and nothing afterwards, which is the trade that was worth making: the alternative was
   a configured heal that silently never went out.
 
-**Who is watched is what the two switches decide**, and it is worth saying plainly because the
+**Heal calls (`onheal`, off by default) are the one thing about healing no client can work out for
+itself.** Two healers watching the same group see the same health and reach the same answer, so
+they cast the same heal at the same person and one of the two is wasted — every time, not
+occasionally. Nothing in the world says "somebody else has this"; the only way for it to be known
+is for it to be said. So a healer with calls on says who it has just started on, as the cast goes
+out rather than when it finishes (the whole value is that it arrives inside the window another
+healer would spend starting the same heal), and stands off anybody another healer has named for
+about the length of one cast. Machine-to-machine traffic in the shape of the tank's `defend`
+report, falling back to `bc` for the same reason: one listener, not something the group reads.
+**Never applied to somebody below the emergency point** — two heals landing on a person who is
+dying is the answer being right twice, and standing back from them on somebody else's word is how a
+group loses a tank politely. One switch for both halves, because a healer that listens without
+speaking is taking a courtesy it does not extend, and it is worth switching on for a group's
+healers together rather than for one of them.
+
+**Who is watched is what the watch switches decide**, and it is worth saying plainly because the
 names invite the other reading: `healgroup` is whether group members are somebody this character
 heals *at all*, not whether group heal *spells* are used. A heal is only ever chosen for somebody
 being watched, so switching it off leaves this character and its pet and hands a group-mate at 10%
 to whoever else is healing — and a group heal, which is cast because enough of the people being
 watched are hurt, is then judged against a much smaller count rather than taken out of the list.
-The Watching tab is the honest answer to what either switch is currently doing.
+The Watching tab is the honest answer to what any of them is currently doing.
 
-Who is watched: this character, the group (`healgroup`), and this character's pet (`healpets`, off
+Who is watched: this character, the group (`healgroup`), this character's pet (`healpets`, off
 by default — a pet is cheaper to summon than the mana spent keeping it up; a pet class keeping its
 own pet up turns it on, and the page says so in the row of any pet heal while it is off, which is
-otherwise a slot that never fires for no visible reason). Members who are out of
-zone or offline are skipped rather than counted as healthy, since a missing member counted as a
-full one is a quiet way to get the group-heal count wrong. The tank is whoever `roles.lua` says
+otherwise a slot that never fires for no visible reason), and friendlies on the extended target
+window (`healxtarget`, also off by default). That last one is the only answer to the people the
+group window cannot cover — a raid-mate, a boxed character grouped elsewhere, somebody's
+second-account tank. Anything on the window that reads as a player or a pet is watched; `Auto
+Hater` slots are skipped, being the client's word for "this is fighting you" and so nobody's heal.
+It is off to start with because it widens who this character is responsible for and the mana comes
+out of the same bar the group is drawing on. They count as "anyone else" to a scope, since what
+makes somebody anyone else is being neither us nor our pet rather than being in the group. Members
+who are out of zone or offline are skipped rather than counted as healthy, since a missing member
+counted as a full one is a quiet way to get the group-heal count wrong. The tank is whoever `roles.lua` says
 holds the role, which is also how a hybrid holding it is tank-scoped to *itself* — reading the flag
 per group member could never say so, since we are not one of our own group members. A group with no
 Main Tank set has no tank-scoped heals firing, and the Heal State page says so.
@@ -2065,16 +2262,22 @@ page says so on the row.
 3. **How long is that answer good for?** This is the part buffing has and healing does not.
    Another player's buffs are visible only once the client has cached them, which happens when
    they are *targeted*, and an empty cache is indistinguishable from a clean one —
-   `StacksSpawn` says yes to a spawn it knows nothing about. So the fact that we cast something is
-   sometimes the only record there is, and each (slot, spawn) pairing carries a time before it is
-   worth asking about again: the buff's own duration less the rebuff window after one lands, a few
-   seconds after one fails. It is not a give-up timer, and a record is dropped the moment the
+   `StacksSpawn` says yes to a spawn it knows nothing about. So for them the fact that we cast
+   something is the only record there is, and each such (slot, spawn) pairing carries a time before
+   it is worth asking about again: the buff's own duration less the rebuff window after one lands, a
+   few seconds after one fails. It is not a give-up timer, and a record is dropped the moment the
    world contradicts it rather than waited out. Dying strips every buff at once, so an observed
    death — the scan seeing a member down, `Me.State` reading DEAD/HOVER, or the world's slain
    line arriving mid-fight, when the scan cannot look — voids every window held for that name,
-   and they are rebuffed the moment they are back on their feet. Ourselves and our pet, who can
-   be read back, only ever get a short window (the hand-removal grace), after which the buff
-   itself is consulted again. And everybody else is *verified* about once a minute while there is
+   and they are rebuffed the moment they are back on their feet. **Ourselves and our pet get no
+   window at all**: their bars answer at any moment and cost nothing to ask, so the reading is the
+   record, and a buff of ours clicked off, dispelled or stripped is missing from the very next pass
+   and goes straight back up instead of being trusted for as long as a window said to trust it.
+   The one exception is a cast the reading cannot close the loop on — where the bar, asked once the
+   cast is over, *still* says the buff is wanted. That is either a buff that lands somewhere the bar
+   does not show (an aura) or one that lasts less than the slot's rebuff dial, and neither is fixed
+   by casting again, so those pairings fall back to the same five-minute window the invisible-landing
+   backstop uses (`stillWants`). And everybody else is *verified* about once a minute while there is
    nothing to cast: the state borrows the target long enough for the server to send what is
    actually on them (a status re-checked each pass — never a held frame, called off by a fight,
    timing out inconclusive after a second), squares every window against the answer, and puts the
@@ -2116,10 +2319,16 @@ The order things are decided in, every pass that looks:
 
 1. **Reasons to hold.** Not during a fight (`in_combat`, off by default — buffing mid-fight spends
    the mana the healing wants and holds the target away from what is being fought; a fight starting
-   also calls off the buff in the air), and not while running. The second is a choice rather than a
-   necessity: the casting service would happily wait to stand still, but it would wait holding a
-   target and a gem, and a state at the bottom of the chain can afford to ask again later. Bards
-   are exempt, since they sing on the move and the casting service knows it.
+   also calls off the buff in the air). That is the only one that stops the pass. **Running narrows
+   it instead of stopping it**: what movement costs is a cast bar, so it is asked of the cast rather
+   than of the state (`CastSubject:RequiresStillness` — false for a bard's songs and for anything
+   instant, which is most clickies and AAs). A buff with a bar to lose is passed over while we are
+   moving, because the casting service would wait to stand still holding a target and a gem and a
+   state at the bottom of the chain can afford to ask again later; an instant clicky is over in the
+   frame it started, so there was never anything for movement to cost and it goes off on the run.
+   Two things wait for the group to stop anyway: the target-borrowing re-read, whose answer could
+   only lead to a cast that is held back regardless, and an order's idle clock, since an order ends
+   when there is nothing left to *give* rather than when there is nothing we are allowed to cast.
 2. **Anything somebody asked for by name** — see Requests below.
 3. **The first slot somebody is missing.** List order is the whole priority — unlike healing there
    is nobody to rank, since everyone standing here is equally unbuffed, so the ordering that
@@ -2593,14 +2802,27 @@ where we are standing without remaking the entity, so the spawn id survives), an
 far as this state ever looks. Nothing of ours in reach can be refused the pull, and if one somehow
 does not move, the open below is fired and watched the way it always was.
 
-**Three actions, three answers.** Opening a corpse (`/click right target` on it), looting an item
-(`/itemnotify loot<slot> rightmouseup`) and closing the window (`/notify LootWnd LW_DoneButton
-leftmouseup`) are each fired once and then watched for their evidence, because **the client refuses
-in chat and nowhere else**: too far to reach it, bags full, a lore item already carried, a corpse
-somebody else is looting. A window that never opens leaves that corpse; an item that never leaves
-its slot is left on it; a window that will not close ends the order. Those are evidence windows on
-actions we fired — the world answering no — and not give-up timers; what they buy is a job at this
-band that cannot wedge the chain underneath it.
+**Four actions, four answers.** Opening a corpse (`/click right target` on it), putting away what is
+on the cursor (`/autoinventory`), looting an item (`/itemnotify loot<slot> rightmouseup`) and closing
+the window (`/notify LootWnd LW_DoneButton leftmouseup`) are each fired and then watched for their
+evidence, because **the client refuses in chat and nowhere else**: too far to reach it, bags full, a
+lore item already carried, a corpse somebody else is looting. A window that never opens leaves that
+corpse; a cursor that never clears has done with the corpse it was emptying, since a corpse hands
+nothing to hands that are already full; an item that never leaves its slot is left on it; a window
+that will not close ends the order. Those are evidence windows on actions we fired — the world
+answering no — and not give-up timers; what they buy is a job at this band that cannot wedge the
+chain underneath it.
+
+The cursor is the one of the four that this state *causes*: an item with no free slot waiting for it
+is handed to the cursor rather than refused, so a corpse run made in whatever bags we happened to die
+in fills the hands part way through and stops — which, before it was watched, was the one way an
+order could sit forever with the corpse open and say nothing about it.
+
+**The open click is answered by the window, and stops being watched there.** A window that then goes
+away is that corpse over — the Done took, it poofed as it emptied, or the player shut it by hand,
+which are not worth telling apart and none of which is reopened — and never a click that went
+unanswered. A watch left running under a corpse being emptied comes due mid-loot and writes off, as
+one that never opened, the corpse we are standing over with its window in front of us.
 
 **What it keeps is progress, not decisions**: which corpse is being worked, that a click is out and
 waiting on a window, which slot was last asked for and what was in it. None of that is re-readable

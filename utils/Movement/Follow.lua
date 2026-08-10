@@ -24,6 +24,11 @@ local Unsticker = require("utils.Movement.Unsticker")
 ---close to `distance` and then stand still until they are `resumeDistance` away, so they get
 ---a buffer to move around in instead of being shadowed step for step (see `WithinHold`).
 ---
+---A caller may also say that nearness alone is not a reason to stand still (`requireSight`): while
+---the target cannot be seen, the follow keeps walking their route rather than parking behind
+---whatever is in the way. That is the one thing sight is allowed to decide here -- whether to
+---keep going -- and never *where* to go, which stays the trail's answer for the reason above.
+---
 ---Trail bookkeeping worth knowing about:
 --- - waypoints are recorded once the spawn has moved `sampleDistance` from the last one
 --- - a jump in the spawn's position too big to be walking becomes a **warp seam** in the
@@ -94,6 +99,8 @@ end
 ---@param options? table
 --- - distance: how close we close to the spawn, default 10
 --- - resumeDistance: how far the spawn gets before we close it again, default distance
+--- - requireSight: keep walking their trail while they are out of sight, however near they
+---   are, default false (see WithinHold)
 --- - sampleDistance: how far the spawn moves before a new waypoint, default 3
 --- - waypointGap: how close counts as reaching a waypoint, default 3
 --- - maxWaypoints: trail cap, oldest dropped first, default 250
@@ -122,6 +129,11 @@ function Follow.new(spawnId, options)
     self._.resumeDistance = math.max(options.resumeDistance or self._.distance, self._.distance)
     -- which of the two thresholds is in force right now (see WithinHold)
     self._.holding = false
+    -- whether being close enough is on its own a reason to stand still (see WithinHold)
+    self._.requireSight = options.requireSight == true
+    -- close enough by the numbers and walking anyway because we cannot see them, cached for
+    -- Describe, which is read every rendered frame and may not go looking for a spawn
+    self._.sightClosing = false
     -- standing at a warp seam waiting for the world to change, cached for IsParked/Describe
     self._.warpWaiting = false
     -- the gap last pulse, and how fast it is closing, which is what we aim the stop with
@@ -174,10 +186,56 @@ end
 ---we take: correct to the inch, and unpleasant to be followed by. So there are two -- we close to
 ---`distance` and then hold until they are `resumeDistance` away -- and the gap between them is the
 ---room they get to move around in before we come after them again.
+---
+---Near enough is the whole answer only while nobody needs to *do* anything with the target. A
+---caller that does says so with `requireSight`, and then a target we cannot see keeps the follow
+---walking however near they are -- see `ClosingForSight`.
 ---@param distance number how far away the spawn is now
+---@param spawn? spawn the target, when the caller has it resolved already
 ---@return boolean withinHold
-function Follow:WithinHold(distance)
-    return distance <= (self._.holding and self._.resumeDistance or self._.distance)
+function Follow:WithinHold(distance, spawn)
+    if distance > self:HoldThreshold() then
+        self._.sightClosing = false
+        return false
+    end
+
+    self._.sightClosing = self:ClosingForSight(spawn)
+    return not self._.sightClosing
+end
+
+---Which of the two ranges is the one to beat right now: the hysteresis, read out.
+---@return number threshold
+function Follow:HoldThreshold()
+    return self._.holding and self._.resumeDistance or self._.distance
+end
+
+---Whether we are near enough to stand still and walking anyway, because we cannot see them.
+---
+---Range is not the whole of being with somebody. A follower parked round the corner from the
+---fight it is there to help with kept every distance it was asked to keep and can still do none
+---of its job: a heal, a cure and a spell aimed at what they are fighting all need to see them,
+---and a wall does not care how close it is being stood behind. So a caller that needs the
+---character to be able to *act* on the target -- `cabby.travel` while there is a fight on --
+---asks for sight as well as nearness, and until it has both the follow keeps going.
+---
+---What it keeps walking is the only thing this task ever walks: the route they took, which is
+---the thing that goes round the corner. Sight is a reason to keep going along their trail, never
+---a reason to invent a line to them -- the leader visible across a chasm railing is exactly the
+---shot this module refuses to take (see the notes at the top), and being unable to see them is
+---no time to start taking it. Their route run out is therefore where this ends: we have walked
+---every step of known-walkable ground they left us, and if they are still out of sight, walking
+---is not the thing that fixes it.
+---@param spawn? spawn the target, when the caller has it resolved already
+---@return boolean closing
+function Follow:ClosingForSight(spawn)
+    if not self._.requireSight then return false end
+    if self:TrailSize() < 1 then return false end
+
+    spawn = spawn or mq.TLO.Spawn("id " .. tostring(self._.spawnId))
+    -- Unreadable is read as visible: `LineOfSight` answering nothing is the client declining to
+    -- say rather than saying no, and a follower that walked on every silence would be one that
+    -- never stood still.
+    return spawn.LineOfSight() == false
 end
 
 ---Change how close this follow holds station, for a caller whose answer to that has changed since
@@ -194,11 +252,16 @@ end
 ---has the gap to close.
 ---@param distance number how close we close to the spawn
 ---@param resumeDistance number how far the spawn gets before we close it again
-function Follow:SetHold(distance, resumeDistance)
+---@param requireSight? boolean whether nearness alone parks us (see WithinHold); left as it was
+---when omitted, the same way everything else this does not mention is
+function Follow:SetHold(distance, resumeDistance, requireSight)
     self._.distance = distance
     -- never inside distance, for the same reason it is clamped in `new`: closing and holding
     -- would each undo the other
     self._.resumeDistance = math.max(resumeDistance or distance, distance)
+    if requireSight ~= nil then
+        self._.requireSight = requireSight == true
+    end
 end
 
 ---@return number count waypoints still on the trail
@@ -528,7 +591,7 @@ function Follow:Pulse()
         self._.lastDistance = distance
         self._.closing = closing
 
-        local holding = distance ~= nil and self:WithinHold(distance - closing * Locomotion.leadPulses)
+        local holding = distance ~= nil and self:WithinHold(distance - closing * Locomotion.leadPulses, spawn)
         self._.holding = holding
         if holding then
             -- Standing with them retires a warp seam, and only a warp seam. Whatever jump their
@@ -560,6 +623,8 @@ function Follow:Pulse()
         -- walking a trail out to where they no longer are is not holding station on them, so the
         -- buffer is spent: whenever they turn up again we close on them properly
         self._.holding = false
+        -- and nothing we do out here is being done for a view of somebody who is not there
+        self._.sightClosing = false
         self._.lastDistance = nil
         self._.closing = 0
     end
@@ -656,7 +721,7 @@ function Follow:IsParked()
 
     local distance = spawn.Distance3D()
     if distance == nil then return false end
-    if self:WithinHold(distance) then return true end
+    if self:WithinHold(distance, spawn) then return true end
 
     if distance > warpWaitDistance then
         local head = self._.trail[self._.first]
@@ -670,6 +735,31 @@ function Follow:IsParked()
     end
 
     return false
+end
+
+---Whether the only thing still walking us is wanting to see them: near enough to have stood still,
+---going anyway (see `WithinHold`).
+---
+---Published because it changes what a *short* move means to whoever asked for the follow. Progress
+---is normally ground covered -- a follower that has not got anywhere in five seconds of walking at
+---somebody far away is a follower wedged on something -- and this move is a few yards round a
+---corner by design, so a caller measuring it that way would call it stuck every time and give up on
+---the one thing that would fix it. Being genuinely wedged mid-corner is still caught, by the task's
+---own stuck detector and unsticker, which measure the walking rather than the distance to anybody.
+---
+---Re-derived on every ask rather than answered from the last pulse, for the reason `IsParked` gives:
+---a caller may ask between pulses, and a remembered answer would be about a world that has moved.
+---@return boolean closing
+function Follow:IsClosingForSight()
+    if not self._.requireSight then return false end
+
+    local spawn = mq.TLO.Spawn("id " .. tostring(self._.spawnId))
+    if (spawn.ID() or 0) < 1 then return false end
+
+    local distance = spawn.Distance3D()
+    if distance == nil or distance > self:HoldThreshold() then return false end
+
+    return self:ClosingForSight(spawn)
 end
 
 ---Called when the movement service will not let us move this frame
@@ -705,6 +795,11 @@ function Follow:Describe()
 
     if self._.warpWaiting then
         return "waiting out " .. self._.name .. "'s warp (" .. tostring(self:TrailSize()) .. " waypoints, " .. gap .. ")"
+    end
+    -- worth saying apart from trailing: near enough to be standing still and walking anyway is
+    -- the one thing on this page that otherwise looks like the hold distance being ignored
+    if self._.sightClosing then
+        return "closing on " .. self._.name .. " for sight (" .. tostring(self:TrailSize()) .. " waypoints, " .. gap .. ")"
     end
     return "trailing " .. self._.name .. " (" .. tostring(self:TrailSize()) .. " waypoints, " .. gap .. ")"
 end

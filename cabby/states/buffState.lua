@@ -35,16 +35,35 @@ local scanIntervalMs = 500
 ---than one a second.
 local idleLookIntervalMs = 1000
 
----How long before a pairing is reconsidered after a cast that did not land. Refusals cost
----nothing, so this is only here to stop the same hopeless cast being asked for every pass.
+---How long to leave it before asking for the same buff again after a cast that did not land.
+---
+---A pause, not a place in the queue. **A cast that failed did not put the buff on anybody**, so
+---the pairing is still owed and still at the top of the list -- what a failure buys is a beat
+---before the next go, because the commonest one is a fizzle and a fizzle leaves the gem on its
+---recast. Giving the pairing's *place* away instead is what this used to do, and on a full spell
+---bar it was the whole bug: the slot below took the pass, memorized over the gem this one was
+---using, failed in its turn, and the two of them handed the gem back and forth while nobody got
+---buffed.
 local retryAfterFailureMs = 5000
 
----The floor under the "it landed, leave it alone" window -- and the *whole* of that window for
----anybody whose buffs can be read back (ourselves, our pet). Past it the buff itself is consulted
----rather than the memory of having cast it, which is what notices one stripped early -- a death,
----a dispel -- inside this long rather than trusted for its full duration. What is left of the
----window doubles as the grace that keeps a buff the player clicked off by hand from being slapped
----straight back on.
+---How many times one pairing is cast at, and fails, before the list moves on without it.
+---
+---The counterweight to keeping its place. A buff that can never land on somebody -- the wrong
+---kind of target, a component we do not carry, something the client refuses for a reason nothing
+---here can read -- would otherwise hold the whole list up for as long as they stood there. Four
+---is the same budget a typed request gets and for the same reason: generous against a fizzle rate
+---of a few percent, and bounded against everything else. What happens then is `doubtIntervalMs`
+---of leaving that one pairing alone, said out loud, which is the one outcome nobody should have
+---to guess at.
+local maxCastAttempts = 4
+
+---The floor under the "it landed, leave it alone" window, which is only ever held for the people
+---whose buffs cannot be read back. There the fact that we cast is the only record there is, so a
+---buff seen with almost nothing left of it would be due again the moment it was written down --
+---this is how short that memory is allowed to get.
+---
+---Nothing of the kind is held for ourselves or our pet. Both bars answer at any moment, so the
+---reading *is* the record and there is nothing worth writing down; see `recordFinished`.
 local minimumRecheckMs = 30000
 
 ---How long an order waits with nothing left to cast before it is treated as finished. A buff
@@ -123,13 +142,16 @@ local petTargetTypes = { ["pet"] = true, ["pet2"] = true }
 ---window below is. It is not a give-up timer: it is how long an answer is good for -- and an
 ---answer can be voided early. Dying strips every buff at once, so an observed death (the scan
 ---seeing them down, or the world's slain line arriving mid-fight) drops every window held for
----that name, and they are looked at afresh the moment they are back on their feet. Windows on
----the people we *can* read back -- ourselves, our pet -- are kept short instead, so the buff
----itself is re-read and a strip noticed even when no death was seen. And everybody else gets
----the same honesty a minute at a time: when there is nothing to cast, the state borrows the
----target long enough for the server to send what is actually on somebody -- a swap, then a
----status re-checked every pass until the packet lands or a second runs out, never a held frame
------ squares every window it holds for them against the answer, and puts the target back.
+---that name, and they are looked at afresh the moment they are back on their feet. **No window is
+---held at all for the people we *can* read back** -- ourselves, our pet. Their bar is there to be
+---asked every pass and costs nothing to ask, and what it says is worth more than anything we
+---could write down about a cast: a buff of ours clicked off, dispelled or stripped is missing on
+---the very next pass and goes straight back up, rather than waiting out a window that was only
+---ever a guess. And everybody else gets the same honesty a minute at a time: when there is
+---nothing to cast, the state borrows the target long enough for the server to send what is
+---actually on somebody -- a swap, then a status re-checked every pass until the packet lands or
+---a second runs out, never a held frame -- squares every window it holds for them against the
+---answer, and puts the target back.
 ---
 ---Alongside the upkeep there is the other kind of buffing, which is somebody asking for one:
 ---`buffnow`/`buffme` hand over everything the configured list covers, and `buff <type>` hands over
@@ -181,13 +203,13 @@ local BuffState = {
         order = nil,        -- { id, name, idleUntilMs } from a `buffnow <id>` or `buffme`
         requests = {},      -- outstanding `buff <type>` orders, oldest first
         tryAgainAt = {},    -- { ["<slot>@<name>"] = when that pairing is worth looking at again }
+        attempts = {},      -- { ["<slot>@<name>"] = casts that failed in a row on that pairing }
         doubted = {},       -- { ["<slot>@<name>"] = when a sighting last contradicted a cast }
         verify = nil,       -- { id, name, startedMs, restoreId } a target-swap re-read in flight
         verifiedAt = {},    -- { [name] = when another player's buffs were last actually seen }
         calledOff = false,
         lastResult = nil,
-        holdReason = nil,
-        isBard = false      -- read once at Init; a class does not change mid-session
+        holdReason = nil
     }
 }
 
@@ -347,6 +369,11 @@ function buffsWereStripped(name)
     for key in pairs(BuffState._.tryAgainAt) do
         if key:sub(-#suffix) == suffix then
             BuffState._.tryAgainAt[key] = nil
+        end
+    end
+    for key in pairs(BuffState._.attempts) do
+        if key:sub(-#suffix) == suffix then
+            BuffState._.attempts[key] = nil
         end
     end
 end
@@ -525,7 +552,57 @@ local function needsBuff(slot, spell, lastsMs, candidate)
     return spell.StacksSpawn(candidate.id)() == true
 end
 
+---Would the picker still say this person needs this buff, now that the cast is over?
+---
+---The one thing worth asking about a bar we can read once we have cast at it, and it is asked of
+---the world rather than of the cast. A **no** is the ordinary answer and means there is nothing to
+---remember: the buff is up, the bar says so, and the bar will say so again next pass.
+---
+---A **yes** is the answer that needs a window, because it means casting again would be the very
+---same cast. Two real things read that way and neither is fixed by casting:
+---
+---- the buff landed somewhere the bar does not show it -- an aura, say -- so no reading will ever
+---  find it and the cast is the only record there is;
+---- the buff lasts less than the slot's rebuff dial, so it is nearly gone the instant it lands and
+---  every cast is immediately due again.
+---
+---Safe to ask the moment a cast is recorded: the casting service does not call a cast landed until
+---its own evidence window has run, which is longer than the client takes to draw a buff it has
+---been sent, so a bar with nothing on it here is not one that is merely behind.
+---@param slot Action
+---@param candidate BuffCandidate a stub is enough -- only `id`, `isSelf` and `isPet` are read
+---@return boolean stillWants
+local function stillWants(slot, candidate)
+    local action = Action.GetActionType(slot)
+    if action == nil or action.Subject == nil then return false end
+
+    local spell = action:Subject():Spelldata()
+    if spell == nil then return false end
+
+    local lastsMs = durationMs(spell)
+    if lastsMs <= 0 then return false end
+
+    return needsBuff(slot, spell, lastsMs, candidate)
+end
+
 ---------------- Choosing a buff --------------------
+
+---Can this be cast the way we are standing right now?
+---
+---The one question movement asks, and it is asked of what is being cast rather than of the state:
+---whether the character is pinned down by a cast is a property of the spell, the item or the
+---ability, and the casting service is where that fact lives. A bard's songs and anything instant
+----- most clickies and AAs -- are cast on the run; everything with a bar to lose is not.
+---
+---Asked here, while choosing, rather than left to the casting service: a slot that could not get
+---off the ground should be passed over for one that can, not sent down to sit holding a target and
+---a gem until the group stops.
+---@param subject CastSubject
+---@return boolean canStart
+local function castableNow(subject)
+    if not mq.TLO.Me.Moving() then return true end
+    return not subject:RequiresStillness()
+end
 
 ---@param subject CastSubject
 ---@return string aim one of `aims`
@@ -595,28 +672,43 @@ function BuffState.CastRequest(targetId)
 end
 
 ---The first person this slot is worth casting on right now.
+---
+---The second return is whether anybody **we can reach** is still short of this slot, which is a
+---different question from whether a cast could start this instant. A gem recovering says "not
+---now" about a slot that is still owed; somebody round a corner or off at the pull says nothing
+---about the slot at all, because no amount of waiting here puts them in front of us. So they are
+---not counted, and the slot they were the last name in falls through to the buffs below. They
+---come back into it the moment they come back. That is the question `choosePick` walks the list
+---on; see there.
 ---@param slot Action
 ---@param candidates table
 ---@return BuffPick? pick
+---@return boolean isNeeded whether anybody in reach is still short of this slot, pick or no pick
 local function choosePickFor(slot, candidates)
-    if not Action.IsEnabled(slot) then return nil end
+    if not Action.IsEnabled(slot) then return nil, false end
 
     local action = Action.GetActionType(slot)
     -- casts only: this state polls the cast it started, which a skill or a discipline has no
     -- equivalent of. Only casts are offered on the page; this is for a config edited by hand.
-    if action == nil or action.Subject == nil then return nil end
+    if action == nil or action.Subject == nil then return nil, false end
 
     local subject = action:Subject()
     local spell = subject:Spelldata()
-    if spell == nil then return nil end
+    if spell == nil then return nil, false end
 
     local lastsMs = durationMs(spell)
-    if lastsMs <= 0 then return nil end
+    if lastsMs <= 0 then return nil, false end
 
-    if not Action.GetLuaResult(slot) then return nil end
+    -- before the walk below rather than after it: a slot that cannot be cast the way we are
+    -- standing is the cheapest kind of slot to drop, and while the group is running this is what
+    -- keeps the pass down to the handful of slots that could actually go off
+    if not castableNow(subject) then return nil, false end
+
+    if not Action.GetLuaResult(slot) then return nil, false end
 
     local aim = aimOf(subject)
     local needsTarget = subject:NeedsTarget()
+    local isNeeded = false
 
     for _, candidate in ipairs(candidates) do
         if appliesTo(slot, aim, candidate) and dueNow(slot, candidate.name) and needsBuff(slot, spell, lastsMs, candidate) then
@@ -626,27 +718,32 @@ local function choosePickFor(slot, candidates)
             local targetId = needsTarget and candidate.id or nil
             local isGroupCast = aim == aims.group
 
-            if action:IsReady(BuffState.CastRequest(targetId)) then
-                return {
-                    action = action,
-                    slot = slot,
-                    targetId = targetId,
-                    name = isGroupCast and "the group" or candidate.name,
-                    -- one person short of it is enough to cast a group buff, and the rest of the
-                    -- group gets it whether they were short of it or not
-                    coverNames = isGroupCast and groupCoverage(candidates) or { candidate.name },
-                    lastsMs = lastsMs
-                }
-            end
+            -- somebody out of range or out of sight is not somebody this slot is waiting on, so
+            -- they are passed over here rather than counted: they say nothing about the next
+            -- person on the list, and nothing about whether the slots below deserve the pass
+            if action:CanReach(targetId) then
+                isNeeded = true
 
-            -- one cast, whoever it was chosen for: there is no other candidate to try
-            if isGroupCast then return nil end
-            -- otherwise "not castable at *them*" -- out of range, out of sight -- says nothing
-            -- about the next person on the list, so keep looking rather than dropping the slot
+                if action:IsReady(BuffState.CastRequest(targetId)) then
+                    return {
+                        action = action,
+                        slot = slot,
+                        targetId = targetId,
+                        name = isGroupCast and "the group" or candidate.name,
+                        -- one person short of it is enough to cast a group buff, and the rest of
+                        -- the group gets it whether they were short of it or not
+                        coverNames = isGroupCast and groupCoverage(candidates) or { candidate.name },
+                        lastsMs = lastsMs
+                    }, true
+                end
+
+                -- one cast, whoever it was chosen for: there is no other candidate to try
+                if isGroupCast then return nil, true end
+            end
         end
     end
 
-    return nil
+    return nil, isNeeded
 end
 
 ---What to cast, and on whom, right now.
@@ -655,17 +752,38 @@ end
 ---why the page says to put what matters at the top. Unlike healing there is nobody to rank --
 ---everyone standing here is equally unbuffed -- so the ordering that matters is the one the user
 ---already gave us.
+---
+---And what wins is the *slot*, not one cast out of it: the first slot anybody in reach is still
+---short of keeps the pass until nobody in reach is short of it. One buff, handed to everybody
+---standing here who needs it, and only then the next one down.
+---
+---Which means a slot that cannot go off this instant is waited a beat for rather than walked
+---past, and that is the part that matters. Every cast leaves the gem it used recovering, so the
+---pass straight after one finds its own slot unready -- and walking past it lands on a slot that
+---has to be **memorized**, which on a full bar can only take the fallback gem: the very gem
+---holding the spell we were half way through handing out. It goes back over on the next pass, and
+---the two of them spend the session casting each other off the bar while nobody gets buffed.
+---
+---Waiting is only ever for something that is coming back on its own -- a gem, a cast in the air,
+---the mana for it. Somebody who has gone off to pull is not that, so the people the slot cannot
+---reach are not counted in the first place (see `choosePickFor`) and the buffs below them get the
+---pass. Nothing is remembered about that: the puller walks back in and the slot is at the top of
+---the list again, with the rest of it already handed out.
+---
+---What comes back when the winning slot cannot go yet is "nothing, but ask again next pass".
 ---@param candidates table
 ---@return BuffPick? pick
+---@return boolean isHolding nothing to start this instant, and the slot at the top is not finished
 local function choosePick(candidates)
-    if #candidates < 1 then return nil end
+    if #candidates < 1 then return nil, false end
 
     for _, slot in ipairs(BuffStateConfig.GetActions()) do
-        local pick = choosePickFor(slot, candidates)
-        if pick ~= nil then return pick end
+        local pick, isNeeded = choosePickFor(slot, candidates)
+        if pick ~= nil then return pick, false end
+        if isNeeded then return nil, true end
     end
 
-    return nil
+    return nil, false
 end
 
 ---------------- Re-reading the watch list --------------------
@@ -887,11 +1005,17 @@ function BuffState.Reset()
     BuffState._.verify = nil
 end
 
----Reasons to hold everything, in the order they are worth reporting.
+---What the way we are standing says about this pass, in the order it is worth reporting.
 ---
----`fighting` also means "and stop what you are already doing": a buff landing two seconds before
----the mob dies is mana the healer wanted, and the cast holds the target away from what is being
----fought while it runs.
+---`fighting` stops the pass outright, and also means "and stop what you are already doing": a buff
+---landing two seconds before the mob dies is mana the healer wanted, and the cast holds the target
+---away from what is being fought while it runs.
+---
+---`moving` does not stop it. It **narrows** it -- see `castableNow` -- because only some casts
+---care: a buff with a bar to lose sits holding a target and a gem until the group stops, and this
+---is a state that can afford to ask again later, but an instant clicky or AA is over in the frame
+---it started and a bard's songs never needed standing still at all. Holding those back too was
+---refusing casts that movement was never going to cost anything.
 ---@return string|nil code
 ---@return string|nil reason in words
 local function holdReason()
@@ -899,11 +1023,8 @@ local function holdReason()
         return "fighting", "not while we are fighting"
     end
 
-    -- bards sing on the move, which the casting service already knows; for everyone else a buff
-    -- asked for while running is a cast that sits holding a target and a gem until the group
-    -- stops, and this is a state that can afford to ask again later instead
-    if not BuffState._.isBard and mq.TLO.Me.Moving() then
-        return "moving", "waiting until we stop moving"
+    if mq.TLO.Me.Moving() then
+        return "moving", "anything that needs standing still, until we stop"
     end
 
     return nil, nil
@@ -1300,28 +1421,58 @@ local function recordFinished(status, outcome, reason, observedRemainingMs)
     local slot = BuffState._.buffSlot
     local names = BuffState._.buffCoverNames or {}
     local request = BuffState._.buffRequest
+    ---how long to leave it before the next pass, when a failure means going again at the same
+    ---pairing rather than moving on from it
+    local failurePauseMs = 0
 
     if status == Casting.status.succeeded then
         BuffState._.lastResult = tostring(target.spell) .. " on " .. tostring(target.name) ..
             (outcome ~= Casting.outcomes.succeeded and (" (" .. tostring(reason) .. ")") or "")
         if slot ~= nil then
-            -- do not ask about this pairing again until the buff is nearly gone. This is what
-            -- covers the people whose buffs we cannot read: the client will not tell us it landed
-            -- on them, so the fact that we cast it is the only record there is. Ourselves and our
-            -- pet we *can* read back, so their record only has to outlast a hand-removal grace --
-            -- past that the buff itself is consulted, which is what notices one stripped early
-            -- What was really left on it when the bar was read, where it was read, rather than
-            -- what the spell says it lasts: observation replaces inference here for the same
-            -- reason it does in the re-read, and a buff seen with ten minutes to go is not one
-            -- that has just been cast.
+            -- What is worth remembering about a cast that landed, which is a different question
+            -- for the two kinds of person it can land on -- and for one of them the answer is
+            -- "nothing at all". Both halves are below.
             local lastsMs = BuffState._.buffLastsMs
             local landedMs = math.max((observedRemainingMs or lastsMs) - rebuffAtMs(slot, lastsMs), minimumRecheckMs)
+            local myId = tonumber(mq.TLO.Me.ID())
             local myName = mq.TLO.Me.CleanName()
+            local petId = tonumber(mq.TLO.Me.Pet.ID())
             local petName = mq.TLO.Me.Pet.CleanName()
             for _, name in ipairs(names) do
-                local isReadable = name == myName or (petName ~= nil and name == petName)
-                holdOff(slot, { name }, isReadable and minimumRecheckMs or landedMs)
-                if not isReadable then
+                local isPet = petName ~= nil and name == petName
+                local isSelf = not isPet and name == myName
+
+                if isSelf or isPet then
+                    -- Nothing is written down about our own bar or our pet's. Both answer at any
+                    -- moment, so the reading is the record, and it is a better one than a cast we
+                    -- remember making: a buff clicked off, dispelled or stripped is missing from
+                    -- the very next pass and goes back up then, instead of being trusted for as
+                    -- long as a window said to trust it. The stacking check is the whole of the
+                    -- question -- if it says the buff would land, it is not on us.
+                    --
+                    -- Unless the bar, asked now, still says they need it. That is the one shape of
+                    -- cast a reading cannot close the loop on, so it gets a window rather than
+                    -- being cast again the moment the gem is back -- see `stillWants`, which is
+                    -- also where the two ways it happens are set out.
+                    local key = pairKey(slot, name)
+                    BuffState._.attempts[key] = nil
+                    if stillWants(slot, { id = isPet and petId or myId, isSelf = isSelf, isPet = isPet }) then
+                        DebugLog("[" .. tostring(target.spell) .. "] is still wanted on [" .. name ..
+                            "] with the cast over; leaving it alone for a while")
+                        BuffState._.tryAgainAt[key] = Time.current_time() + doubtIntervalMs
+                    else
+                        BuffState._.tryAgainAt[key] = nil
+                    end
+                else
+                    -- Do not ask about this pairing again until the buff is nearly gone. This is
+                    -- what covers the people whose buffs we cannot read: the client will not tell
+                    -- us it landed on them, so the fact that we cast it is the only record there
+                    -- is. What was really left on it when the bar was read, where it was read,
+                    -- rather than what the spell says it lasts: observation replaces inference
+                    -- here for the same reason it does in the re-read, and a buff seen with ten
+                    -- minutes to go is not one that has just been cast.
+                    holdOff(slot, { name }, landedMs)
+                    BuffState._.attempts[pairKey(slot, name)] = nil
                     -- a landed cast is as good as a look at their bar: verification is for what
                     -- changes between casts, and this starts that clock over
                     BuffState._.verifiedAt[name] = Time.current_time()
@@ -1334,8 +1485,31 @@ local function recordFinished(status, outcome, reason, observedRemainingMs)
             BuffState._.lastResult = tostring(target.spell) .. " on " .. tostring(target.name) ..
                 " failed: " .. tostring(reason)
         end
-        if slot ~= nil then
-            holdOff(slot, names, retryAfterFailureMs)
+        -- A failed cast leaves the buff exactly where it was: not on them. So the pairing keeps
+        -- its place -- no window is written, and the next pass finds the same slot at the top of
+        -- the list still owed -- and all the failure costs is the pause below before the next go.
+        -- Handing the place to the slot underneath instead is how a cheap refusal turned into two
+        -- spells memorizing over each other in the one gem neither of them ever got to cast from.
+        --
+        -- Bounded, because a pairing that will never take must not hold the list up forever. Past
+        -- the budget it is left alone for a while and the reason is said out loud, which is the
+        -- same bargain a typed request makes with a name it cannot reach.
+        if slot ~= nil and not BuffState._.calledOff then
+            failurePauseMs = retryAfterFailureMs
+
+            for _, name in ipairs(names) do
+                local key = pairKey(slot, name)
+                local tries = (BuffState._.attempts[key] or 0) + 1
+                BuffState._.attempts[key] = tries
+
+                if tries >= maxCastAttempts then
+                    print("(buff) " .. tostring(target.spell) .. " will not land on " .. name ..
+                        " (" .. tostring(reason) .. ") after " .. tostring(tries) ..
+                        " tries; leaving it for a while")
+                    BuffState._.attempts[key] = nil
+                    BuffState._.tryAgainAt[key] = Time.current_time() + doubtIntervalMs
+                end
+            end
         end
     end
 
@@ -1400,7 +1574,7 @@ local function recordFinished(status, outcome, reason, observedRemainingMs)
     DebugLog("Buff finished: " .. tostring(BuffState._.lastResult))
     -- something changed, so the next pass is worth taking rather than waiting out the idle window
     -- -- unless it is a retry, which waits for the gem the failed cast just put on its recast
-    BuffState._.nextLookMs = Time.current_time() + retryDelayMs
+    BuffState._.nextLookMs = Time.current_time() + math.max(retryDelayMs, failurePauseMs)
     BuffState.Reset()
 end
 
@@ -1560,6 +1734,12 @@ local function chooseRequestPick()
     while #BuffState._.requests > 0 do
         local request = BuffState._.requests[1]
 
+        -- One that needs standing still keeps its place at the head of the queue until we stop:
+        -- the order is still owed, and nothing behind it is worth reordering it for. The upkeep
+        -- list gets the pass instead, which is not the queue being jumped -- a request that cannot
+        -- be cast at all right now is not being held up by an instant buff that can.
+        if not castableNow(request.action:Subject()) then return nil end
+
         if request.isGroupCast then
             if not request.groupCastDone then
                 return { request = request, targetId = nil, name = "the group" }
@@ -1668,6 +1848,7 @@ end
 ---after changing a slot or after somebody's buffs were stripped.
 function BuffState.Recheck()
     BuffState._.tryAgainAt = {}
+    BuffState._.attempts = {}
     BuffState._.verifiedAt = {}
     BuffState._.doubted = {}
     BuffState._.lastScanMs = 0
@@ -1692,8 +1873,6 @@ function BuffState.Init()
 
     -- our own config, so a class that does not register this state has no buff slots written
     BuffStateConfig.Init()
-
-    BuffState._.isBard = mq.TLO.Me.Class.ShortName() == "BRD"
 
     Menu.RegisterState(BuffState)
 
@@ -2108,12 +2287,18 @@ function BuffState.Go()
         return false
     end
 
-    if hold ~= nil then return false end
+    -- only a fight stops the pass. Moving narrows what may be picked (`castableNow`) rather than
+    -- putting the whole state down, so the casts that never needed standing still still go off
+    if code == "fighting" then return false end
 
     if Time.current_time() < BuffState._.nextLookMs then return false end
 
     prune()
-    expireOrder()
+
+    -- An order goes quiet while we are running because there is nothing it is *allowed* to cast,
+    -- which is not the same as there being nothing left to give -- and it is the second one that
+    -- ends an order. So it ages only on the passes that could have answered it.
+    if code == nil then expireOrder() end
 
     -- an order somebody typed comes before a rebuff that is not due for another twenty minutes
     local requestPick = chooseRequestPick()
@@ -2122,9 +2307,18 @@ function BuffState.Go()
     end
 
     local candidates = getCandidates()
-    local pick = choosePick(candidates)
+    local pick, isHolding = choosePick(candidates)
     if pick == nil then
-        local watch = chooseVerify(candidates)
+        -- A buff still owed, waiting on a gem or on somebody to come back round the corner: the
+        -- decision is already made, so this pass ends without either of the things an empty-handed
+        -- one does. No idle interval, which would sit on that decision, and no re-read, which
+        -- would borrow the very target the cast behind it wants
+        if isHolding then return false end
+
+        -- The re-read borrows the player's target, and doing that to somebody who is running
+        -- somewhere buys nothing: what it turns up is a recast, and while we are moving the only
+        -- recasts on offer are the instant ones, whose own reading is already free every pass
+        local watch = code == nil and chooseVerify(candidates) or nil
         if watch ~= nil then
             startVerify(watch)
         else

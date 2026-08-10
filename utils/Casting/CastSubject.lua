@@ -178,6 +178,39 @@ function CastSubject:IsMemorized()
     return self:Gem() ~= nil
 end
 
+---How long the client says this spell's gem still has to go, in milliseconds.
+---
+---The number behind a greyed gem. A gem is not castable for a few seconds after a spell is
+---memorized into it -- longer than it takes to notice, and longer than any grace worth guessing
+---at -- and this is the client counting those seconds down. Zero for a gem that is ready, for a
+---spell that is not on the bar, and for items and AAs, which have no gem to wait on.
+---@return number ms
+function CastSubject:GemCooldownMs()
+    if self._.kind ~= CastSubject.kinds.spell then return 0 end
+    return tonumber(mq.TLO.Me.GemTimer(self._.name)()) or 0
+end
+
+---Is what is stopping this cast a countdown rather than a refusal?
+---
+---`IsReady` says no for two quite different reasons and cannot tell them apart, which matters
+---enormously to a caller: one of them ends on its own in a second or two and the other does not.
+---Both of the ending kind are published by the client, so neither has to be guessed at:
+---
+---- **this gem is coming back** -- from the memorize we just made into it, or from its own
+---  recast: `GemCooldownMs` is the countdown;
+---- **the bar is recovering** -- the short pause after any cast, during which every gem is
+---  greyed at once: `Me.SpellInCooldown`, which is a fact and not a timer of ours.
+---
+---Anything else -- an item timer, an AA timer, a spell that is simply on a long cooldown -- is a
+---real no. A caller in the middle of a cast waits on this the way it waits to stand still: it is
+---a wait for something that will change.
+---@return boolean isComingBack false for items and AAs, whose timers are answers rather than waits
+function CastSubject:IsRecovering()
+    if self._.kind ~= CastSubject.kinds.spell then return false end
+    if mq.TLO.Me.SpellInCooldown() == true then return true end
+    return self:GemCooldownMs() > 0
+end
+
 ---Whether the client will let us use it *right now*: gem off cooldown, item timer up, AA timer
 ---up. False for an unmemorized spell, which is why callers check `IsMemorized` first and
 ---memorize rather than reporting it as not ready.
@@ -208,6 +241,55 @@ function CastSubject:CastTimeMs()
     local castTime = asNumber(spell.MyCastTime(), 0)
     if castTime <= 0 then castTime = asNumber(spell.CastTime(), 0) end
     return castTime
+end
+
+---Cast times at or below this are instant: no bar is drawn, so there is nothing to interrupt and
+---nothing riding on standing still. Not a plain zero, because the client reports some clickies as
+---a few tens of milliseconds and a bar that short cannot be walked out of.
+local instantCastMs = 100
+
+---Whether this goes off in the frame it is fired, with no bar drawn at all. Most clickies and AAs.
+---@return boolean isInstant
+function CastSubject:IsInstant()
+    return self:CastTimeMs() <= instantCastMs
+end
+
+---Whether this cast pins the character down while it runs.
+---
+---Two things get to move while they cast, and neither has a bar at stake: a bard's song, which is
+---what a bard is, and anything instant, which is over in the frame it started. Everything else
+---loses the cast the moment the character moves.
+---
+---A property of the *subject*, not of a cast in flight, because it is asked before there is a cast
+---to ask about: a caller choosing between a slow spell and an instant clicky while the group is
+---running wants to know which of the two it could actually get off.
+---@return boolean requiresStillness
+function CastSubject:RequiresStillness()
+    -- the class rather than the spell: what makes a song a song is who is singing it. A song still
+    -- draws a bar, which is why this is the wider question of the two
+    if self:IsSpell() and mq.TLO.Me.Class.ShortName() == "BRD" then return false end
+    return not self:IsInstant()
+end
+
+---How long what this lands *stays* landed, in milliseconds. Zero for anything that does its whole
+---job the moment it lands, which is what separates a direct heal from a heal over time and is the
+---only reading either of them offers about which one it is.
+---
+---Read off the spell rather than off a category, for the reason the aim is: what a spell does is
+---what it is, and the client files heals under half a dozen headings that do not agree with each
+---other. A duration is unambiguous.
+---@return number durationMs
+function CastSubject:DurationMs()
+    local spell = self:Spelldata()
+    if spell == nil then return 0 end
+
+    -- MyDuration carries this character's extension focus effects; Duration is the unmodified
+    -- value and the fallback when the client has not resolved the adjusted one. Both are tick
+    -- counts, which is a datatype rather than a number -- `TotalSeconds` is the member that
+    -- answers in something worth multiplying
+    local duration = asNumber(spell.MyDuration.TotalSeconds(), 0)
+    if duration <= 0 then duration = asNumber(spell.Duration.TotalSeconds(), 0) end
+    return math.max(duration, 0) * 1000
 end
 
 ---@return number manaCost 0 for items and AAs, whose costs are not mana

@@ -10,6 +10,10 @@ local MeleeState = require("cabby.states.meleeState")
 ---State page, run by the `tanking` switch -- so there is no separate entry at the tank band.
 ---When tanking splits out into its own state, it lands here at `Priorities.tank` and the melee
 ---state stays where it is.
+---
+---It keeps its own buffs up like everything else does, from the common states: a warrior's are
+---clickies and AAs rather than spells, and a buff slot holds either as readily as it holds a
+---spell.
 ---@type BaseClass
 local Warrior = BaseClass.new({
     key = "Warrior",

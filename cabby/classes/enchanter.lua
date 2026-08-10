@@ -1,7 +1,6 @@
 local BaseClass = require("cabby.classes.baseClass")
 local Priorities = require("cabby.classes.priorities")
 
-local BuffState = require("cabby.states.buffState")
 local MezState = require("cabby.states.mezState")
 local PetDpsState = require("cabby.states.petDpsState")
 local PetSetupState = require("cabby.states.petSetupState")
@@ -36,8 +35,7 @@ local Enchanter = BaseClass.new({
         { state = MezState, priority = Priorities.mez },
         { state = SpellDpsState, priority = Priorities.dps - 1 },
         { state = PetDpsState, priority = Priorities.dps - 2 },
-        { state = PetSetupState, priority = Priorities.buff - 1 },
-        { state = BuffState, priority = Priorities.buff }
+        { state = PetSetupState, priority = Priorities.buff - 1 }
     },
     unimplemented = {
         "casting charm: the pet states handle a charmed pet, but nothing lands one, notices the break, or re-charms",

@@ -366,7 +366,7 @@ function FollowState.BuildMenu()
             TravelConfig.SetFollowDistance(distance)
         end
         ImGui.SameLine()
-        CommonUI.HelpMarker("How close to get to whoever this character is following before standing still. They get about three quarters of it again to move around in before the gap is closed once more, which is the room that keeps a follow from being a shadow.")
+        CommonUI.HelpMarker("How close to get to whoever this character is following before standing still. They get about three quarters of it again to move around in before the gap is closed once more, which is the room that keeps a follow from being a shadow.\n\nWhile there is a fight on, standing still also takes being able to see them: parked round a corner from the fight is close enough for the tape measure and no use for a heal, so the follow keeps walking the way they went until they are back in view.")
 
         ImGui.TableNextRow()
         ImGui.TableNextColumn()

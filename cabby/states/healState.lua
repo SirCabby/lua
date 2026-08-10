@@ -58,6 +58,39 @@ local orderTimeoutMs = 10000
 ---rather than a give-up -- the target is reconsidered the moment it runs out.
 local retryAfterFailureMs = 3000
 
+---How long *this heal* is left alone on the person it just landed on, over and above the settle
+---window above.
+---
+---The settle window is about the client catching up and is the same for every heal. This is the
+---different question of whether casting the same heal again is the right move at all: a heal that
+---took six seconds to arrive has not stopped being the answer six seconds later, and re-firing it
+---into its own arrival is how a healer empties a mana bar with nothing to show for it. Derived
+---from the cast rather than configured, because the cast is what says how big the heal was --
+---and kept per slot, so the *other* slots stay free to fire on the same person in the meantime,
+---which is the whole point of having an ordered list of them.
+local slotReuseMs = 1500
+
+---How far ahead of a heal over time running out it is worth putting the next one up.
+---
+---A gap between the two is a tick of healing nobody gets, and the alternative -- refreshing on a
+---timer of our own -- is casting a heal over a heal that is still working. This is the overlap
+---that costs one cast and closes the gap.
+local hotRefreshMarginMs = 3000
+
+---How long another healer's call holds us off the person they named.
+---
+---Long enough to cover the cast they are about to make and no longer: a call is a statement about
+---what somebody is doing now, and one that outlived the cast would leave a target nobody is
+---covering because everybody thinks somebody else is.
+local healCallHoldMs = 3000
+
+---How far away a friendly on the extended target window is still worth watching.
+---
+---Nothing is healed at this range -- every cast is measured against the spell's own reach when it
+---is started -- but the sweep has to stop somewhere, and somebody across the zone is not this
+---character's problem however low they are.
+local xtargetReach = 250
+
 ---Where a slot's heal can be aimed, read off the spell rather than configured -- the same model
 ---the buff state uses, and for the same reason: what a spell can land on is what it is, and
 ---asking the user to say so is one more thing to get wrong.
@@ -77,10 +110,10 @@ local petTargetTypes = { ["pet"] = true, ["pet2"] = true }
 ---Keeping a group alive.
 ---
 ---One ordered list of heal slots decides everything (see `HealStateConfig`): who a slot is for,
----and how hurt they have to be for it to be the right one. This state's job is the choosing --
----who is worst off, which slot fits them, and whether the heal already in the air is still the
----right heal -- because the casting service does the casting and the priority chain does the
----holding-everything-else-back.
+---how hurt they have to be for it to be the right one, and whether it is a heal for a fight.
+---This state's job is the choosing -- who is worst off, which slot fits them, and whether the heal
+---already in the air is still the right heal -- because the casting service does the casting and
+---the priority chain does the holding-everything-else-back.
 ---
 ---What a slot can be aimed at is not part of that configuration: the group heal, the self heal
 ---and the pet heal are read off the spell (`aims` below), which is what lets one list serve a
@@ -103,9 +136,25 @@ local petTargetTypes = { ["pet"] = true, ["pet2"] = true }
 ---this state is the hands. Where it sits in the pass is the arbitration: dead last, because
 ---everybody alive comes first -- see `Go`.
 ---
----What it deliberately leaves out: heal-over-time management, and any awareness of what other
----healers in the group are doing. Those need a debuff model, or the group coordination that does
----not exist yet.
+---**Health is not the whole of who needs a heal**, and the two things it leaves out are both
+---read here rather than configured per slot. Whoever a mob is coming for is losing health that the
+---person beside them is not, and a warrior at 70% is not in the trouble a wizard at 70% is -- so
+---both move the reading a slot is judged against (`urgency` below), and neither moves the reading
+---itself. What is *real* about somebody -- whether they are in trouble, whether a heal in the air
+---has done its job, how much of the group a group heal would be worth -- is always asked of their
+---actual health.
+---
+---**What is already on somebody is read where it can be and remembered where it cannot.** The
+---client caches another player's buffs while they are targeted -- which a healer's target usually
+---is -- so a heal over time is asked about directly (`hotRemainingMs`), and that is the only way to
+---see one another healer put up. It is *also* remembered from our own cast, because the cache is
+---blind to a buff that landed while the target was already selected, which is exactly the case
+---after we heal somebody. Neither source alone is enough; the pair is.
+---
+---A debuff that wants curing is still asked for out loud (see `cabby.curing`) rather than
+---discovered the same way, and the difference is not readability but *who is looking*: a healer
+---would have to target its way around the group every few seconds to find one, where a heal over
+---time is only ever asked about for somebody it is already considering.
 ---@class HealState : BaseState
 local HealState = {
     key = "HealState",
@@ -118,6 +167,7 @@ local HealState = {
         healing = "healing",
         healGroup = "healgroup",
         healPets = "healpets",
+        healXTarget = "healxtarget",
         healAction = "healaction",
         curing = "curing",
         -- `reznow` rather than `rez`, for the reason `healnow` is not `heal`: a registered phrase
@@ -125,7 +175,11 @@ local HealState = {
         -- `rezme` and `rezzing off` alike
         rez = "reznow",
         rezMe = "rezme",
-        rezzing = "rezzing"
+        rezzing = "rezzing",
+        -- `onheal` rather than `heal` or `healing`, both of which are taken above -- and it reads
+        -- as what it is: a statement about who this healer is on, not an instruction to anybody
+        healCall = "onheal",
+        healCalls = "healcalls"
     },
     _ = {
         isInit = false,
@@ -148,6 +202,16 @@ local HealState = {
         -- { [spawn id] = when a heal that did not land is worth trying on them again }. Kept apart
         -- from settleUntil because the two are waived under different conditions: see isHeldOff
         tryAgainAt = {},
+        -- { ["spawn id/heal name"] = when this *particular* heal is worth casting on them again }.
+        -- One heal being held is not the person being held: the slots below it stay free, which is
+        -- how the ordered list keeps working while the big one is on its own clock
+        slotHeldUntil = {},
+        -- { ["spawn id/heal name"] = when the heal over time we put on them runs out }. The only
+        -- thing knowable about what is on another player, because it is the record of what *we*
+        -- did rather than a reading of them
+        hotUntil = {},
+        -- { [spawn id] = when another healer's call on them stops standing }
+        calledBy = {},
         calledOff = false,
         lastResult = nil
     }
@@ -163,10 +227,39 @@ end
 ---@class HealCandidate
 ---@field id number
 ---@field name string
----@field pct number current health, as a percentage
+---@field pct number current health, as a percentage. **The truth**, and what every question about
+---reality is asked of
+---@field urgency number the health this person is *judged* at, once the head start below has had
+---their say. **A preference, not a reading**: it orders the list and it is what a slot's threshold
+---is compared against, and it is used for nothing else
 ---@field isSelf boolean
 ---@field isTank boolean the group's main tank, by the role assigned in the group window
 ---@field isPet boolean
+---@field isHolding boolean something is coming for this one, as far as this client can tell
+---@field isXTarget boolean watched off the extended target window rather than the group
+---@field class string|nil short name, nil for a pet and for anyone the client will not say.
+---Reported by `/cheal` and the page and read by nothing that decides anything
+---@field distance number how far away, which is what a group heal's reach is measured against
+
+---What somebody is judged at, as against what they are actually reading.
+---
+---One head start, and it answers the standing complaint about healing off a bare percentage.
+---Health is a photograph: it says where somebody is and nothing about where they are going.
+---Whoever a mob is coming for is about to be at a lower number than the person beside them reading
+---the same one, and that is the closest thing to a direction of travel that can be had without
+---watching one over time. One number for the whole group, because it is a fact about the fight
+---rather than about the person.
+---
+---Bounded by `HealStateConfig` (see `maxHeadStart`), though that is not what keeps it off somebody
+---who is dying -- the sort does that, by putting the emergency band first outright. The bound is
+---what keeps this recognisable as a preference rather than a second threshold.
+---@param pct number
+---@param flags table
+---@return number urgency clamped to a real percentage, so nothing downstream has to wonder
+local function urgencyOf(pct, flags)
+    if flags.isHolding ~= true then return pct end
+    return math.max(math.min(pct - HealStateConfig.GetAggroHeadStart(), 100), 0)
+end
 
 ---@param candidates table
 ---@param id number|nil
@@ -188,10 +281,101 @@ local function addCandidate(candidates, id, name, pct, flags)
         id = id,
         name = name or tostring(id),
         pct = pct,
+        urgency = urgencyOf(pct, flags),
         isSelf = flags.isSelf == true,
         isTank = flags.isTank == true,
-        isPet = flags.isPet == true
+        isPet = flags.isPet == true,
+        isHolding = flags.isHolding == true,
+        isXTarget = flags.isXTarget == true,
+        class = flags.class,
+        distance = tonumber(flags.distance) or 0
     }
+end
+
+---Who something is actually coming for, as far as this client can tell.
+---
+---Three answers, none of them complete and all of them free, because the complete one does not
+---exist: the extended target window lists what hates *us* and a group member's does not carry
+---across, so there is no reading anywhere of who a mob standing in front of somebody else is
+---swinging at. What there is:
+---
+---- **Us**, from the same `PctAggro` reading `cabby.combat` builds `IsUnderAttack` on -- the one
+---  case this client knows exactly.
+---- **Whoever our target is coming for**, when what we have targeted is a mob. A healer usually
+---  has a friendly targeted and this usually answers nothing, but when it answers it is right, and
+---  it is the only way a *non*-tank who has pulled aggro is ever noticed.
+---- **The main tank**, while there is a fight on. Not a reading at all -- it is the standing answer
+---  to the question, and being wrong about it costs the tank a head start it very nearly always
+---  deserves. Held to a fight so that a tank standing about between pulls is nobody special.
+---@return table holding set of spawn ids
+local function holdersOfAggro()
+    local holding = {}
+
+    if Combat.IsUnderAttack() then
+        local meId = tonumber(mq.TLO.Me.ID())
+        if meId ~= nil then holding[meId] = true end
+    end
+
+    if mq.TLO.Target.Type() == "NPC" then
+        local onId = tonumber(mq.TLO.Me.TargetOfTarget.ID())
+        if onId ~= nil and onId > 0 then holding[onId] = true end
+    end
+
+    if Combat.IsGroupFighting() then
+        local mainTank = Roles.GetMainTank()
+        local tankId = tonumber(mainTank ~= nil and mainTank.id or nil)
+        if tankId ~= nil and tankId > 0 then holding[tankId] = true end
+    end
+
+    return holding
+end
+
+---Friendlies on the extended target window who are not already being watched.
+---
+---The one thing the group window cannot answer: a raid-mate, a boxed character grouped elsewhere,
+---somebody's second-account tank. `Auto Hater` is skipped because that is the client's word for
+---"this is fighting you" and a mob is nobody's heal; everything left that reads as a player or a
+---pet is somebody this character can see and could keep alive.
+---
+---Off by default, and worth saying why it has to be asked for: it widens who this character is
+---responsible for, and the mana comes out of the same bar the group is drawing on.
+---@param candidates table what has already been collected, which is what stops a group member
+---sitting on the window being watched twice
+---@param holding table the aggro reading this scan already took, handed down rather than taken
+---again: it is twenty window reads and it cannot have changed since the line above
+local function addXTargets(candidates, holding)
+    if not HealStateConfig.GetHealXTarget() then return end
+
+    local seen = {}
+    for _, candidate in ipairs(candidates) do seen[candidate.id] = true end
+
+    for slot = 1, (tonumber(mq.TLO.Me.XTargetSlots()) or 0) do
+        local xtarget = mq.TLO.Me.XTarget(slot)
+        local kind = xtarget.TargetType()
+
+        -- what the window says this entry *is to us*: a mob fighting us is not a heal target, and
+        -- it is the one entry type that is never a friendly
+        if kind ~= "Auto Hater" then
+            local id = tonumber(xtarget.ID())
+            local spawnType = xtarget.Type()
+
+            if id ~= nil and id > 0 and not seen[id] and (spawnType == "PC" or spawnType == "Pet") then
+                local spawn = mq.TLO.Spawn("id " .. tostring(id))
+                local distance = tonumber(spawn.Distance3D()) or tonumber(spawn.Distance())
+
+                if spawn.ID() ~= nil and not spawn.Dead() and distance ~= nil and distance <= xtargetReach then
+                    seen[id] = true
+                    addCandidate(candidates, id, spawn.CleanName(), Status.HealthPct(spawn), {
+                        isXTarget = true,
+                        isPet = spawnType == "Pet",
+                        isHolding = holding[id] == true,
+                        class = spawnType == "PC" and spawn.Class.ShortName() or nil,
+                        distance = distance
+                    })
+                end
+            end
+        end
+    end
 end
 
 ---Everyone worth watching, and how they are doing.
@@ -208,9 +392,16 @@ local function scanCandidates()
     -- the role is who a tank-scoped slot is for, and reading the flag per group member could never
     -- say so, since we are not one of our own group members.
     local mainTank = Roles.GetMainTank()
+    local holding = holdersOfAggro()
 
-    addCandidate(candidates, mq.TLO.Me.ID(), mq.TLO.Me.CleanName(), mq.TLO.Me.PctHPs(),
-        { isSelf = true, isTank = Roles.IsMainTank() })
+    local meId = tonumber(mq.TLO.Me.ID())
+    addCandidate(candidates, meId, mq.TLO.Me.CleanName(), mq.TLO.Me.PctHPs(), {
+        isSelf = true,
+        isTank = Roles.IsMainTank(),
+        isHolding = meId ~= nil and holding[meId] == true,
+        class = mq.TLO.Me.Class.ShortName(),
+        distance = 0
+    })
 
     if HealStateConfig.GetHealGroup() then
         for index = 1, (tonumber(mq.TLO.Group.Members()) or 0) do
@@ -218,8 +409,15 @@ local function scanCandidates()
             if not member.OtherZone() and not member.Offline() then
                 local spawn = member.Spawn
                 if not spawn.Dead() then
-                    addCandidate(candidates, spawn.ID(), spawn.CleanName(), Status.HealthPct(spawn),
-                        { isTank = Roles.Matches(mainTank, spawn.ID(), spawn.CleanName()) })
+                    local id = tonumber(spawn.ID())
+                    addCandidate(candidates, id, spawn.CleanName(), Status.HealthPct(spawn), {
+                        isTank = Roles.Matches(mainTank, spawn.ID(), spawn.CleanName()),
+                        isHolding = id ~= nil and holding[id] == true,
+                        class = spawn.Class.ShortName(),
+                        -- 3D, because a group heal's reach is a sphere and the member standing at
+                        -- the bottom of the ramp is further away than the floor plan says
+                        distance = tonumber(spawn.Distance3D()) or tonumber(spawn.Distance()) or 0
+                    })
                 end
             end
         end
@@ -228,12 +426,36 @@ local function scanCandidates()
     if HealStateConfig.GetHealPets() then
         local pet = mq.TLO.Me.Pet
         if pet.ID() ~= nil and not pet.Dead() then
-            addCandidate(candidates, pet.ID(), pet.CleanName(), Status.HealthPct(pet), { isPet = true })
+            addCandidate(candidates, pet.ID(), pet.CleanName(), Status.HealthPct(pet), {
+                isPet = true,
+                isHolding = holding[tonumber(pet.ID()) or 0] == true,
+                distance = tonumber(pet.Distance3D()) or tonumber(pet.Distance()) or 0
+            })
         end
     end
 
-    -- worst off first: the order every decision below is made in
-    table.sort(candidates, function(a, b) return a.pct < b.pct end)
+    addXTargets(candidates, holding)
+
+    -- **Anybody in real trouble comes first, and no preference can reach in front of them.**
+    --
+    -- This is the guarantee the head start is bounded *for*, and bounding it was not enough to
+    -- give it: capping an adjustment under the emergency mark still lets a healthy warrior carrying
+    -- one sort ahead of somebody genuinely dying, because the two numbers being compared are the
+    -- adjusted ones. So the band is the first thing sorted on and real health orders it -- a
+    -- preference is about who to help first among people who are merely hurt, and it has nothing to
+    -- say about who is closest to dead.
+    --
+    -- Everybody else is ordered by the judged reading, with real health breaking a tie so that two
+    -- people a head start has levelled are still handled in a sensible order rather than in
+    -- whatever order they were scanned.
+    local emergency = HealStateConfig.GetEmergencyPct()
+    table.sort(candidates, function(a, b)
+        local aTrouble, bTrouble = a.pct <= emergency, b.pct <= emergency
+        if aTrouble ~= bTrouble then return aTrouble end
+        if aTrouble then return a.pct < b.pct end
+        if a.urgency ~= b.urgency then return a.urgency < b.urgency end
+        return a.pct < b.pct
+    end)
     return candidates
 end
 
@@ -256,12 +478,27 @@ local function findCandidate(id)
     return nil
 end
 
+---How many of the people we watch a group heal would actually be worth casting for.
+---
+---**Real health, not the judged reading.** The head start is about who to heal *first* and this
+---is not that question: a group heal is cast because enough healing is genuinely needed to be
+---worth one cast covering everybody, and counting a warrior at 85% as though he were at 70% would
+---fire it for damage nobody has taken.
+---
+---**Within the heal's own reach**, which is the whole reason this takes a distance at all. A group
+---heal lands on whoever is standing with us, so the member who ran off after a caster is not
+---somebody it is going to help -- counting them is how three people at the camp become "enough"
+---on the strength of one who is not there, and the cast goes out to heal two.
 ---@param pct number
----@return number count how many of the people we watch are at or below this health
-local function countAtOrBelow(pct)
+---@param reach number|nil how far the heal carries; nil counts everybody, which is what a reading
+---the client would not give us has to fall back to
+---@return number count
+local function countAtOrBelow(pct, reach)
     local count = 0
     for _, candidate in ipairs(getCandidates()) do
-        if candidate.pct <= pct then count = count + 1 end
+        if candidate.pct <= pct and (reach == nil or reach <= 0 or candidate.distance <= reach) then
+            count = count + 1
+        end
     end
     return count
 end
@@ -326,6 +563,31 @@ local function appliesTo(slot, aim, candidate)
     return true
 end
 
+---Is this slot's heal one for the moment we are in?
+---
+---The other half of what a slot narrows by, and the half a threshold has no way to express: the
+---expensive fast heal is what a fight is for and is a waste on somebody standing about at 60%
+---between pulls, and the slow efficient one is worth every second of the quiet and worth nothing
+---at all while the tank is being hit. Both are one slot being right at one moment and wrong at
+---another, which is a fact about the fight and not about anybody's health -- so it is asked here,
+---beside the scope, rather than being pushed into a number.
+---
+---**Read off `IsGroupFighting` rather than off our own engagement, and that is the whole of this
+---working.** A healer is not *engaged*: it has no target of its own and usually has auto-engage
+---off, so it stands in the middle of a fight answering "no" to `IsEngaged` for the entire length
+---of one. Reading the engagement here would leave "in a fight" false all fight on exactly the
+---class this setting exists for, and a slot carrying it would simply never fire. Combat publishes
+---the wider fact for readers like this one -- see `Combat.IsGroupFighting`, which cures and rezzes
+---deliberately do *not* use, because those two are asking whether **we** are busy fighting.
+---@param slot Action
+---@return boolean applies
+local function appliesNow(slot)
+    local when = HealStateConfig.GetWhen(slot)
+    if when == HealStateConfig.whens.Any.value then return true end
+    if when == HealStateConfig.whens.InCombat.value then return Combat.IsGroupFighting() end
+    return not Combat.IsGroupFighting()
+end
+
 ---@param candidate HealCandidate
 ---@return boolean isSettling true while we are waiting for a heal we already cast to show up
 local function isSettling(candidate)
@@ -341,31 +603,218 @@ local function isHeldOff(candidate)
     return at ~= nil and Time.current_time() < at
 end
 
+---One person and one heal, which is what both of the per-slot windows below are keyed by. Named
+---rather than spelled out at each site so the two can never drift apart on the way in and out.
+---@param id number|nil
+---@param action ActionType
+---@return string|nil key nil for a heal that is for nobody in particular, which has nothing to
+---remember about anybody
+local function slotKey(id, action)
+    if id == nil then return nil end
+    return tostring(id) .. "/" .. tostring(action:Name())
+end
+
+---The same, for the one heal that is for nobody in particular.
+---
+---A group heal has no spawn id to be remembered against, which is exactly why `slotKey` refuses
+---it -- but it still has to be left alone for a moment when the client will not take it, for the
+---reason any other heal does. Keyed by the heal itself and kept in the same table, so one prune
+---covers both and neither can outlive the other.
+---@param action ActionType
+---@return string key
+local function groupSlotKey(action)
+    return "group/" .. tostring(action:Name())
+end
+
+---Is another healer already on this one?
+---
+---Only ever a *preference*: somebody below the emergency mark is exempt, because two heals landing
+---on a person who is dying is the answer being right twice, and standing back from them on the
+---strength of somebody else's word is how a group loses a tank politely.
+---@param candidate HealCandidate
+---@return boolean isCalled
+local function isCalledByAnother(candidate)
+    if candidate.pct <= HealStateConfig.GetEmergencyPct() then return false end
+    local until_ = HealState._.calledBy[candidate.id]
+    return until_ ~= nil and Time.current_time() < until_
+end
+
+---Is anybody in real trouble at all, whether or not there is a heal for them?
+---
+---The blunter half of the question `emergencyPending` asks, and the one a group heal is held to:
+---three people at 60% is what a group heal is for and one person at 15% is not, and that stays true
+---whether or not this character happens to have something scoped to the person who is dying.
+---
+---Asked of everybody rather than stopped at the first person above the mark. The sort does put the
+---band first, so stopping early would answer correctly today -- and that is exactly the kind of
+---agreement between two distant pieces of code that is quietly broken by a later change to either.
+---It is a group; asking all of it costs nothing worth counting.
+---@param candidates table
+---@return boolean anyone
+local function anyoneInTrouble(candidates)
+    local emergency = HealStateConfig.GetEmergencyPct()
+
+    for _, candidate in ipairs(candidates) do
+        if candidate.pct <= emergency then return true end
+    end
+
+    return false
+end
+
+---How long is left on this heal over time, as far as anything here can tell.
+---
+---Ourselves and our own pet the client answers directly. **For everybody else there are two
+---sources and neither one is sufficient**, which is the whole shape of this:
+---
+---- **The client's cache** (`Spawn.CachedBuff`, the same reading the buff state works off) holds
+---  another player's buffs from when they were last targeted, and each entry ages by itself -- what
+---  it reports is what is left *now*. It is the only thing that can see a heal over time this
+---  character did not cast, which matters the moment a second healer is in the group.
+---- **Our own record of the cast** is what the cache is blind to. The cache is filled by the
+---  client's *complete* buff message and the partial ones are discarded, so -- as the buff state
+---  found the hard way -- **a buff landing on somebody already targeted is never seen**. The
+---  snapshot we hold for the person we just healed predates the cast that healed them. Trusting the
+---  cache alone would read "nothing on them" for the whole duration and re-apply every pass.
+---
+---So whichever says more time is left wins. Both are evidence that something is still running;
+---neither one's silence is evidence that nothing is. That also makes the open question about
+---`CachedBuff.Duration`'s units (ticks or milliseconds -- see the roadmap) harmless here: if it
+---under-reads, the record still covers what we put there ourselves.
+---@param candidate HealCandidate
+---@param action ActionType
+---@return number|nil remainingMs nil for "nothing running, as far as can be told"
+local function hotRemainingMs(candidate, action)
+    local name = action:Name()
+    if name == nil then return nil end
+
+    if candidate.isSelf then
+        local buff = mq.TLO.Me.Buff(name)
+        if buff.ID() ~= nil then return tonumber(buff.Duration()) or 0 end
+        -- a short buff sits in the song window instead, and is no less on us for it. Heals over
+        -- time land there often enough that asking only about buffs would answer "no" for most of
+        -- them and refresh every pass
+        local song = mq.TLO.Me.Song(name)
+        if song.ID() ~= nil then return tonumber(song.Duration()) or 0 end
+        return nil
+    end
+
+    if candidate.isPet and mq.TLO.Me.Pet.ID() == candidate.id then
+        return tonumber(mq.TLO.Me.Pet.BuffDuration(name)())
+    end
+
+    local remaining = nil
+
+    local cached = mq.TLO.Spawn("id " .. tostring(candidate.id)).CachedBuff(name)
+    if cached.SpellID() ~= nil then remaining = tonumber(cached.Duration()) or 0 end
+
+    local key = slotKey(candidate.id, action)
+    local until_ = key ~= nil and HealState._.hotUntil[key] or nil
+    if until_ ~= nil then
+        local recorded = until_ - Time.current_time()
+        if remaining == nil or recorded > remaining then remaining = recorded end
+    end
+
+    return remaining
+end
+
+---Is this heal over time already on them, with time left worth putting up against?
+---
+---The refresh margin is applied here rather than when the cast is written down, so that the one
+---number covers both sources: a gap between two of these is a tick of healing nobody gets, and
+---overlapping them costs one cast.
+---@param candidate HealCandidate
+---@param action ActionType
+---@param durationMs number what this heal would put up; zero for one that is over when it lands
+---@return boolean isRunning
+local function hotIsRunning(candidate, action, durationMs)
+    if durationMs <= 0 then return false end
+
+    local remaining = hotRemainingMs(candidate, action)
+    return remaining ~= nil and remaining > hotRefreshMarginMs
+end
+
+---Everything `chooseFor` would refuse this slot for that a moment will not answer differently.
+---
+---Range, line of sight, the mana this costs, the reserve being held to, a heal over time already
+---ticking: each of those reads the same on this pass, the next one, and the one after. A heal held
+---off by any of them is not a heal that is *about* to be cast, so answering yes on its strength is
+---the same mistake as answering yes for somebody no slot is scoped to -- it is just harder to see.
+---
+---The momentary refusals are left out, and one of them would be a trap. This is asked with our own
+---heal in the air, and `IsReady` refuses while the casting service is busy with somebody of equal
+---rank -- so asking it here would answer no for every slot and quietly end this state's ability to
+---break off for an emergency at all. The gem timer and the request cooldown are left out for the
+---plainer reason: they come back within the second, whatever anybody does.
+---@param slot Action
+---@param action ActionType
+---@param candidate HealCandidate
+---@param targetId number|nil what the cast would target; nil for a heal that aims itself
+---@return boolean couldCast
+local function couldCast(slot, action, candidate, targetId)
+    -- a heal slot has to be something castable, exactly as `readySlotAction` requires
+    if action.Subject == nil then return false end
+    local subject = action:Subject()
+    if not subject:IsAvailable() then return false end
+
+    -- the reserve, held to at every health but the one it was being kept for
+    if candidate.pct > HealStateConfig.GetEmergencyPct() then
+        local floor = HealStateConfig.GetManaFloor(slot)
+        if floor > 0 and (tonumber(mq.TLO.Me.PctMana()) or 100) < floor then return false end
+    end
+
+    local manaCost = subject:ManaCost()
+    if manaCost > 0 and (tonumber(mq.TLO.Me.CurrentMana()) or 0) < manaCost then return false end
+
+    -- judged against *them*, the way `IsReady` judges it for a heal chosen for somebody who is not
+    -- targeted yet. A heal that aims itself has no target to be out of reach of
+    if targetId ~= nil and subject:NeedsTarget() then
+        local spawn = mq.TLO.Spawn("id " .. tostring(targetId))
+        local spawnId = tonumber(spawn.ID())
+        if spawnId == nil or spawnId < 1 then return false end
+
+        local range = subject:Range()
+        local distance = tonumber(spawn.Distance())
+        if range > 0 and distance ~= nil and distance > range then return false end
+
+        if spawn.LineOfSight() == false then return false end
+    end
+
+    return not hotIsRunning(candidate, action, subject:DurationMs())
+end
+
 ---Would this pass pick this person, if it were picking?
 ---
----The question `reasonToAbandon` has to ask before it throws a heal away for somebody. Cancelling
----a heal in the air is only ever right when there is a better one to cast instead, and "somebody
----is worse off" is not the same claim: they may be settling, they may be held off after a refusal,
----or no configured slot may be scoped to them at all. Abandoning for someone this state has
----already decided not to heal ends the cast and then re-picks the same target on the next pass,
----which is a cast and a cancellation per frame for as long as they stay in that condition -- and
----below the emergency mark is exactly where people *stay*, because that is where a rez leaves
----them.
+---The question `reasonToAbandon` has to ask before it throws a heal away for somebody, and the one
+---`emergencyPending` asks before it holds curing and rezzing back. Both are about somebody this
+---state would *actually cast at*: cancelling a heal in the air is only right when there is a better
+---one to cast instead, and "somebody is worse off" is not the same claim. They may be settling,
+---held off after a refusal, scoped to no configured slot, stood outside the heal's reach, behind a
+---wall, or already carrying the only heal that applies to them. Answering yes for any of those ends
+---the cast and then re-picks the same target on the next pass -- a cast and a cancellation per frame
+---for as long as they stay in that condition -- and below the emergency mark is exactly where people
+---*stay*, because that is where a rez leaves them. Somebody unreachable at 20% is the case that
+---closes the loop: no cast for them can ever start, so nothing ever changes the answer.
 ---
----Readiness is deliberately left out. A gem still recovering is a reason to wait a moment, not a
----reason to keep casting the wrong heal at the wrong person, and asking about it here would mean
----a real emergency could not preempt anything in the second after a cast.
+---So every question that outlives the pass is asked (see `couldCast`) and none of the ones that do
+---not are. A gem still recovering is a reason to wait a moment, not a reason to keep casting the
+---wrong heal at the wrong person.
+---
+---A slot's fight window (`appliesNow`) is *in*, and the difference from readiness is the one worth
+---keeping straight: a gem comes back in a second whatever anybody does, where a slot kept for
+---fights is not going to become castable out of one.
 ---@param candidate HealCandidate
 ---@return boolean wouldChoose
 local function wouldChoose(candidate)
     if isHeldOff(candidate) or isSettling(candidate) then return false end
 
     for _, slot in ipairs(HealStateConfig.GetActions()) do
-        if candidate.pct <= HealStateConfig.GetThreshold(slot) then
-            local aim = aimOfAction(Action.GetActionType(slot))
+        if candidate.urgency <= HealStateConfig.GetThreshold(slot) then
+            local action = Action.GetActionType(slot)
+            local aim = aimOfAction(action)
             -- a group heal is chosen for the group, so it is not a reason to drop somebody's heal
             if aim ~= nil and aim ~= aims.group and appliesTo(slot, aim, candidate)
-                and Action.IsEnabled(slot) and Action.GetLuaResult(slot) then
+                and appliesNow(slot) and Action.IsEnabled(slot) and Action.GetLuaResult(slot)
+                and couldCast(slot, action, candidate, aim == aims.single and candidate.id or nil) then
                 return true
             end
         end
@@ -383,6 +832,15 @@ local function prune()
     end
     for id, at in pairs(HealState._.tryAgainAt) do
         if now >= at then HealState._.tryAgainAt[id] = nil end
+    end
+    for id, at in pairs(HealState._.calledBy) do
+        if now >= at then HealState._.calledBy[id] = nil end
+    end
+    for key, at in pairs(HealState._.slotHeldUntil) do
+        if now >= at then HealState._.slotHeldUntil[key] = nil end
+    end
+    for key, at in pairs(HealState._.hotUntil) do
+        if now >= at then HealState._.hotUntil[key] = nil end
     end
 end
 
@@ -410,9 +868,15 @@ end
 
 ---@param slot Action
 ---@param request table
+---@param sparing? boolean whether the mana floor is being held to. False for somebody below the
+---emergency mark, which is the moment the reserve was being kept *for*
 ---@return ActionType? action the slot's action, when it is usable right now
-local function readySlotAction(slot, request)
+local function readySlotAction(slot, request, sparing)
     if not Action.IsEnabled(slot) then return nil end
+    -- the slot's own answer to whether this is a heal for right now, asked here so that every walk
+    -- which picks a slot is held to it, and asked early because it is one table read where
+    -- everything below is the spellbook and the world
+    if not appliesNow(slot) then return nil end
 
     local action = Action.GetActionType(slot)
     if action == nil then return nil end
@@ -420,6 +884,16 @@ local function readySlotAction(slot, request)
     -- skill or a discipline has no equivalent of. Only casts are offered on the page; this is
     -- for a config that was edited by hand.
     if action.Subject == nil then return nil end
+
+    -- Pacing, asked before readiness because it is cheaper and because it is the more common
+    -- answer: `IsReady` walks the spellbook and the world, and a slot under its floor is not going
+    -- to be cast whatever either of them says. The cast still has to be *payable* -- that is the
+    -- casting service's own check and a different question -- this one is whether it should be.
+    if sparing ~= false then
+        local floor = HealStateConfig.GetManaFloor(slot)
+        if floor > 0 and (tonumber(mq.TLO.Me.PctMana()) or 100) < floor then return nil end
+    end
+
     if not action:IsReady(request) then return nil end
     if not Action.GetLuaResult(slot) then return nil end
 
@@ -435,13 +909,25 @@ local function chooseGroupHeal()
     for _, slot in ipairs(HealStateConfig.GetActions()) do
         local action = Action.GetActionType(slot)
         if aimOfAction(action) == aims.group then
-            local threshold = HealStateConfig.GetThreshold(slot)
-            if countAtOrBelow(threshold) >= HealStateConfig.GetGroupMin(slot) then
-                if readySlotAction(slot, HealState.CastRequest()) ~= nil then
-                    return {
-                        action = action, slot = slot, targetId = nil, forId = nil,
-                        name = "the group", threshold = threshold
-                    }
+            -- left alone for a moment after the client refused it, which is the same debounce every
+            -- other heal gets and matters more here: this is checked before the list of people
+            -- below, so a group heal that is asked for and refused every pass is a group heal that
+            -- nobody underneath it ever gets past
+            local heldUntil = HealState._.slotHeldUntil[groupSlotKey(action)]
+            if heldUntil == nil or Time.current_time() >= heldUntil then
+                local threshold = HealStateConfig.GetThreshold(slot)
+                -- counted within the heal's own reach: a group heal lands on whoever is standing
+                -- with us, so the member who wandered off is not somebody this cast is going to help
+                -- and is not a reason to spend it. `Range` already answers with AERange for a spell
+                -- that carries its reach there, which every group heal does
+                local reach = action:Subject():Range()
+                if countAtOrBelow(threshold, reach) >= HealStateConfig.GetGroupMin(slot) then
+                    if readySlotAction(slot, HealState.CastRequest()) ~= nil then
+                        return {
+                            action = action, slot = slot, targetId = nil, forId = nil,
+                            name = "the group", threshold = threshold
+                        }
+                    end
                 end
             end
         end
@@ -454,9 +940,14 @@ end
 ---@param ignoreThreshold? boolean for an ordered heal, which is about doing as it is told
 ---@return HealPick? pick
 local function chooseFor(candidate, ignoreThreshold)
+    -- the reserve is held to at every health but the one it was being kept for
+    local sparing = candidate.pct > HealStateConfig.GetEmergencyPct()
+
     for _, slot in ipairs(HealStateConfig.GetActions()) do
         local threshold = HealStateConfig.GetThreshold(slot)
-        local covers = ignoreThreshold or candidate.pct <= threshold
+        -- judged rather than read: the head start is exactly the claim that this person needs a
+        -- heal sooner than their number says, and a threshold is where that claim has to land
+        local covers = ignoreThreshold or candidate.urgency <= threshold
 
         -- the health first, and the action only for a slot that passes it: resolving one is a walk
         -- through the spellbook, and this runs per slot per person every pass
@@ -471,19 +962,54 @@ local function chooseFor(candidate, ignoreThreshold)
                 -- whatever we were looking at to no purpose
                 local targetId = aim == aims.single and candidate.id or nil
 
-                if readySlotAction(slot, HealState.CastRequest(targetId)) ~= nil then
-                    return {
-                        action = action,
-                        slot = slot,
-                        targetId = targetId,
-                        forId = candidate.id,
-                        name = candidate.name,
-                        -- what "they no longer need this" means for this heal. Normally the health
-                        -- the slot was written for; for an order, the health they were at when it
-                        -- was given, since the slot's threshold was not what chose it and would
-                        -- call the heal off before it left the ground.
-                        threshold = ignoreThreshold and math.max(threshold, candidate.pct) or threshold
-                    }
+                -- **this heal, on this person, recently enough that casting it again is not the
+                -- move** -- and only this one. The slots under it are untouched, which is what
+                -- turns a list that was only ever a priority order into something that also
+                -- degrades: the big heal goes on its own clock and the small one carries on.
+                --
+                -- Waived for somebody in real trouble, exactly as the settle window is and for
+                -- the same reason: chain healing a tank at 20% with the one heal big enough to
+                -- matter is the point of a healer, and a gap held for pacing is the last thing
+                -- that should be standing between them and it.
+                local key = slotKey(candidate.id, action)
+                local heldUntil = key ~= nil and HealState._.slotHeldUntil[key] or nil
+                local held = sparing and heldUntil ~= nil and Time.current_time() < heldUntil
+
+                if not held and readySlotAction(slot, HealState.CastRequest(targetId), sparing) ~= nil then
+                    -- A heal over time that is still ticking is not a heal that needs casting: the
+                    -- healing it is worth is already on its way, and putting a second one up would
+                    -- overwrite the first with itself and pay for it twice. **Not** waived for an
+                    -- emergency, unlike everything else here -- a second one would not land any
+                    -- faster, so there is nothing to waive it *for*.
+                    --
+                    -- Asked last because it is the one question that costs a walk of the spellbook,
+                    -- and by here the slot has already answered every cheaper one.
+                    if not hotIsRunning(candidate, action, action:Subject():DurationMs()) then
+                        return {
+                            action = action,
+                            slot = slot,
+                            targetId = targetId,
+                            forId = candidate.id,
+                            name = candidate.name,
+                            -- **what "they no longer need this" means for this heal, and it has to
+                            -- be a bar this heal could actually be chosen against.** The slot's
+                            -- threshold on its own is not: a heal is chosen on *judged* health, and
+                            -- a tank holding aggro is judged a head start below what they are
+                            -- reading, so a 70% slot picks them at 82% and then `reasonToAbandon`
+                            -- reads the same 82% back against 70 plus the abort margin and calls it
+                            -- off -- and the next pass, reading exactly the same world, picks it
+                            -- again. A cast and a cancellation per frame for as long as they hold
+                            -- aggro in that band, which starves the cure and the rez under it and
+                            -- is the loop this line exists to close.
+                            --
+                            -- So the health they were actually at when this was chosen, whenever
+                            -- that is the higher number. It is what an order has always recorded,
+                            -- for a version of the same reason: what chose the heal is what "back
+                            -- up again" has to be measured from, whether that was somebody asking
+                            -- or the head start.
+                            threshold = math.max(threshold, candidate.pct)
+                        }
+                    end
                 end
             end
         end
@@ -511,11 +1037,19 @@ local function choosePick(candidates)
                 -- if they are here, since we were asked to
                 local spawn = mq.TLO.Spawn("id " .. tostring(order.id))
                 if spawn.ID() ~= nil and not spawn.Dead() then
+                    local pct = Status.HealthPct(spawn) or 100
                     candidate = {
                         id = order.id,
                         name = spawn.CleanName() or order.name,
-                        pct = Status.HealthPct(spawn) or 100,
-                        isSelf = false, isTank = false, isPet = false
+                        pct = pct,
+                        -- the reading, unjudged. An order has already settled who needs a heal, so
+                        -- there is nothing left for a head start to argue about -- and carrying one
+                        -- in here would only be able to make the heal chosen for them wrong
+                        urgency = pct,
+                        isSelf = false, isTank = false, isPet = false,
+                        isHolding = false, isXTarget = false,
+                        class = spawn.Class.ShortName(),
+                        distance = tonumber(spawn.Distance3D()) or tonumber(spawn.Distance()) or 0
                     }
                 end
             end
@@ -533,7 +1067,9 @@ local function choosePick(candidates)
                 else
                     -- thresholds are how this state decides *for itself* who needs healing. An
                     -- order has already decided that, so the slots are read only for which heal
-                    -- suits them -- scope still applies, the health it was written for does not.
+                    -- suits them -- scope and the fight window still apply, since those say which
+                    -- heal is the right one rather than whether anybody needs one; the health the
+                    -- slot was written for does not.
                     local pick = chooseFor(candidate, true)
                     if pick ~= nil then
                         HealState._.order = nil
@@ -548,14 +1084,16 @@ local function choosePick(candidates)
         end
     end
 
-    local worst = candidates[1]
-    if worst.pct > HealStateConfig.GetEmergencyPct() then
+    -- asked of the whole group rather than of whoever sorts first: the order is by the judged
+    -- reading now, so the person at the top of the list is not necessarily the one on the lowest
+    -- health, and "is anybody dying" has to be asked of everybody to be answered
+    if not anyoneInTrouble(candidates) then
         local groupPick = chooseGroupHeal()
         if groupPick ~= nil then return groupPick end
     end
 
     for _, candidate in ipairs(candidates) do
-        if not isHeldOff(candidate) and not isSettling(candidate) then
+        if not isHeldOff(candidate) and not isSettling(candidate) and not isCalledByAnother(candidate) then
             local pick = chooseFor(candidate)
             if pick ~= nil then return pick end
         end
@@ -599,15 +1137,16 @@ end
 ---alone: they may be settling, held off after a refusal, or scoped to no configured slot at all --
 ---and below the emergency mark is exactly where people *stay*, because that is where a rez leaves
 ---them. Curing would then be blocked forever by somebody nothing was ever going to be cast at.
----@param candidates table this pass's reading of who needs what, worst off first
+---**Every candidate is asked**, for the reason `anyoneInTrouble` above asks all of them: the sort
+---puts the emergency band first, so a walk that stopped at the first person above the mark would be
+---right today and silently wrong the day the ordering is touched again. Cheap enough not to trade.
+---@param candidates table this pass's reading of who needs what
 ---@return boolean isPending
 local function emergencyPending(candidates)
     local emergency = HealStateConfig.GetEmergencyPct()
 
     for _, candidate in ipairs(candidates) do
-        -- sorted worst-first, so the first one above the mark ends the walk
-        if candidate.pct > emergency then return false end
-        if wouldChoose(candidate) then return true end
+        if candidate.pct <= emergency and wouldChoose(candidate) then return true end
     end
 
     return false
@@ -869,6 +1408,58 @@ function HealState.DescribeSlot(slot)
     return facts
 end
 
+---------------- Heal calls --------------------
+
+---Where a heal call goes when nothing has been configured to speak on.
+---
+---The same shape the tank's defend report has, and for the same reason: this is machine-to-machine
+---traffic between healers, not something the group reads. bc reaches every connected character
+---without scrolling anybody's group chat; `/speak onheal <channel>` sends it somewhere else.
+local fallbackHealCallSpeak = Speak.new({ Speak.channelTypes.bc.name })
+
+---@return Speak speak where a heal call goes
+local function healCallSpeak()
+    local speak = Commands.GetCommandSpeak(HealState.eventIds.healCall)
+    if #speak:GetActiveSpeakChannels() > 0 then return speak end
+    ---@diagnostic disable-next-line: return-type-mismatch
+    return fallbackHealCallSpeak
+end
+
+---Say who this healer has just started on.
+---
+---**The one thing about healing that no client can work out for itself.** Two healers watching the
+---same group see the same health and reach the same answer, so they cast the same heal at the same
+---person and one of the two is wasted -- every time, not occasionally. Nothing in the world says
+---"somebody else has this"; the only way for it to be known is for it to be said.
+---
+---Silent for a group heal, which is for everybody and displaces nobody, and silent unless the
+---group has switched calls on -- see `HealStateConfig.GetHealCalls`.
+---@param id number|nil who the heal is for; nil for a heal that is for the group
+---@param name string for the log
+local function callHeal(id, name)
+    if id == nil or not HealStateConfig.GetHealCalls() then return end
+
+    DebugLog("Calling the heal on [" .. name .. "] (" .. tostring(id) .. ")")
+    healCallSpeak():speak(HealState.eventIds.healCall .. " " .. tostring(id))
+end
+
+---Leave this pick alone for a moment, because the client would not take it.
+---
+---Keyed by whoever the heal was for, so it is one person being held and not the list: the slots
+---under it stay free, and everybody else is considered on the very next pass. A group heal is held
+---by the heal instead, having nobody in particular to be held against.
+---@param pick HealPick
+local function noteRefusal(pick)
+    local until_ = Time.current_time() + retryAfterFailureMs
+
+    if pick.forId ~= nil then
+        HealState._.tryAgainAt[pick.forId] = until_
+        return
+    end
+
+    HealState._.slotHeldUntil[groupSlotKey(pick.action)] = until_
+end
+
 ---Start the heal this pass decided on.
 ---@param pick HealPick
 ---@return boolean isBusy
@@ -877,16 +1468,47 @@ local function startHeal(pick)
 
     if castId == nil then
         DebugLog("Heal of [" .. pick.name .. "] was refused: " .. tostring(refused))
+        -- **Written down, not only logged** -- the same thing a refused rez does a few hundred
+        -- lines below, and the same debounce `recordFinished` writes for a cast that started and
+        -- then failed. A refusal costs nothing to make, so without this the very next pass reads
+        -- the same world, makes the same pick, and is refused again, at whatever rate the loop
+        -- runs.
+        --
+        -- What makes that worse than a wasted frame is that the pass is *over*: `Go` returns
+        -- whatever this says, so nobody sorted below this pick is reached at all. One person the
+        -- client will not take a heal on -- out of range for the spell actually chosen, round a
+        -- corner, a gem that went grey between the check and the cast -- is therefore enough to
+        -- starve the entire group, and it looks from outside exactly like a healer that has
+        -- stopped: several people hurt, nothing being cast, and nothing said about why.
+        noteRefusal(pick)
         return false
     end
 
-    DebugLog("Healing [" .. pick.name .. "] with [" .. pick.action:Name() .. "]")
+    -- the bar it will be judged against is said when the heal starts, because the two log lines
+    -- either side of it are what a loop looks like: chosen against a number and then called off
+    -- against the same one
+    DebugLog("Healing [" .. pick.name .. "] with [" .. pick.action:Name() .. "] (against " ..
+        tostring(pick.threshold) .. "%)")
     HealState._.castId = castId
     -- who it is for, not what the cast targets: a pet heal aims itself, and the settle window and
     -- the abandon check are both about the person whose health this was chosen for
-    HealState._.healTarget = { id = pick.forId, name = pick.name, spell = pick.action:Name() }
+    HealState._.healTarget = {
+        id = pick.forId,
+        name = pick.name,
+        spell = pick.action:Name(),
+        -- carried from the pick rather than re-read when the cast lands: the two windows it
+        -- feeds are about the heal that was *chosen*, and by the time it finishes the slot has
+        -- been forgotten and the spell would have to be resolved a second time to ask
+        durationMs = pick.action:Subject():DurationMs(),
+        castTimeMs = pick.action:Subject():CastTimeMs()
+    }
     HealState._.healSlot = pick.slot
     HealState._.healThreshold = pick.threshold
+
+    -- **said at the start, not at the end.** The whole value of the call is that it arrives while
+    -- the cast is still going out, which is the window another healer would otherwise spend
+    -- starting the same heal on the same person
+    callHeal(pick.forId, pick.name)
     return true
 end
 
@@ -897,6 +1519,14 @@ end
 ---one, and dropping it every time somebody else takes a scratch would mean never landing
 ---anything. What ends a heal is it being *wrong* -- the target does not need it, or somebody
 ---else needs one more than they do.
+---
+---**A slot's fight window is deliberately not re-asked here**, which is the same rule and worth
+---naming because the neighbouring jobs look like they disagree. It says which heal to *choose*; a
+---pull landing mid-cast does not make the heal already on its way the wrong one for the person it
+---is aimed at, who is exactly as hurt either way, and calling it off would spend the mana and the
+---seconds and leave them unhealed. Curing and rezzing do re-ask theirs (`reasonToAbandonCure`,
+---`reasonToAbandonRez`) because theirs is a whole job being switched off underneath them, not a
+---choice between heals.
 ---@param candidates table
 ---@return string|nil reason to call it off, nil to let it finish
 local function reasonToAbandon(candidates)
@@ -912,7 +1542,11 @@ local function reasonToAbandon(candidates)
 
     -- somebody else healed them, or the mob switched targets
     if pct > (HealState._.healThreshold or 100) + abortMarginPct then
-        return "they are back up to " .. tostring(math.floor(pct)) .. "%"
+        -- the bar it is being judged against is said as well as the reading: this is the one
+        -- abandon reason that can disagree with the rule that *chose* the heal, and the two
+        -- numbers side by side are what tells that apart from a heal landing from elsewhere
+        return "they are back up to " .. tostring(math.floor(pct)) .. "% (chosen against " ..
+            tostring(HealState._.healThreshold) .. "%)"
     end
 
     -- Someone else is in real trouble, this heal is not for them, and -- the part that has to be
@@ -923,7 +1557,9 @@ local function reasonToAbandon(candidates)
     if pct > emergency then
         for _, candidate in ipairs(candidates) do
             if candidate.id ~= target.id and candidate.pct <= emergency and wouldChoose(candidate) then
-                return candidate.name .. " needs it more"
+                -- their reading too: the whole weight of this reason is that somebody is in
+                -- trouble, and a name on its own cannot be checked against what happens next
+                return candidate.name .. " needs it more (" .. tostring(math.floor(candidate.pct)) .. "%)"
             end
         end
     end
@@ -941,8 +1577,24 @@ local function recordFinished(status, outcome, reason)
         HealState._.lastResult = tostring(target.spell) .. " on " .. tostring(target.name) ..
             (outcome ~= Casting.outcomes.succeeded and (" (" .. tostring(reason) .. ")") or "")
         if target.id ~= nil then
-            HealState._.settleUntil[target.id] = Time.current_time() + healSettleMs
+            local now = Time.current_time()
+            HealState._.settleUntil[target.id] = now + healSettleMs
             HealState._.tryAgainAt[target.id] = nil
+
+            -- **this heal is on its own clock now, and only this one.** Scaled by how long the
+            -- cast took, because that is the only thing said here about how big it was: a six
+            -- second heal is the one worth not casting twice, and an instant clicky is barely
+            -- worth holding at all. The slots under it stay free the whole time
+            local key = tostring(target.id) .. "/" .. tostring(target.spell)
+            HealState._.slotHeldUntil[key] = now + slotReuseMs + (tonumber(target.castTimeMs) or 0)
+
+            -- and if it keeps working after it lands, remember until when -- the plain end of it,
+            -- with no margin taken off. The margin belongs at the reading, where it can be applied
+            -- to the client's answer about this heal as well as to ours
+            local durationMs = tonumber(target.durationMs) or 0
+            if durationMs > 0 then
+                HealState._.hotUntil[key] = now + durationMs
+            end
         end
     elseif not HealState._.calledOff then
         -- a heal we called off already said why; anything else is the client refusing it
@@ -1247,6 +1899,77 @@ function HealState.Init()
         set = HealStateConfig.SetHealPets
     })
 
+    ToggleCommand.Register({
+        key = HealState.key,
+        phrase = HealState.eventIds.healXTarget,
+        summary = "Turns watching extended target friendlies on or off",
+        about = {
+            "The people the group window cannot answer for: a raid-mate, a boxed character",
+            "grouped elsewhere, somebody's second-account tank.",
+            "Anything on the extended target window that reads as a player or a pet is watched",
+            "and can be chosen for a heal; mobs fighting us are skipped, being nobody's heal.",
+            "Off by default -- it widens who this character is responsible for, and the mana",
+            "comes out of the same bar the group is drawing on."
+        },
+        get = HealStateConfig.GetHealXTarget,
+        set = HealStateConfig.SetHealXTarget
+    })
+
+    ToggleCommand.Register({
+        key = HealState.key,
+        phrase = HealState.eventIds.healCalls,
+        summary = "Turns calling and hearing heals on or off",
+        about = {
+            "Two healers watching the same group see the same health and reach the same answer,",
+            "so they cast the same heal at the same person and one of the two is wasted. Nothing",
+            "in the world says somebody else has it; the only way to know is to be told.",
+            "On, this character says who it has started on and stands off anybody another healer",
+            "has called -- unless they are below the emergency point, where two heals landing is",
+            "the answer being right twice.",
+            "Off by default: it is a group protocol, so it is worth switching on for the group's",
+            "healers together rather than for one of them."
+        },
+        get = HealStateConfig.GetHealCalls,
+        set = HealStateConfig.SetHealCalls
+    })
+
+    local healCallDocs = ChelpDocs.new(function() return {
+        "(" .. HealState.eventIds.healCall .. " <id>) One healer telling the others who it is on",
+        " -- Machine-to-machine: spoken by a cabby healer as its heal goes out, and acted on by",
+        "    any healer with " .. HealState.eventIds.healCalls .. " switched on. There is nothing",
+        "    to type here by hand.",
+        " -- A called target is left to them for a moment rather than forever, and never when they",
+        "    are below the emergency point: two heals on somebody dying is not a mistake.",
+        " -- Whether this character speaks and hears these at all: see /chelp " ..
+            HealState.eventIds.healCalls
+    } end )
+    local function event_HealCall(_, speaker, args)
+        -- The usual ACL, widened by the group for the reason the tank's defend report is: calls
+        -- are machine-spoken by whichever healers happen to be grouped with us, and a group
+        -- assembled fresh would otherwise need every member added to an owner list before any of
+        -- them was listened to. A stranger naming spawn ids still costs nothing -- the worst it
+        -- can do is make this character pause on somebody for three seconds.
+        if not Commands.GetCommandOwners(HealState.eventIds.healCall):HasPermission(speaker)
+            and mq.TLO.Group.Member(speaker).ID() == nil then
+            DebugLog("Ignoring heal call speaker [" .. speaker .. "]")
+            return
+        end
+
+        -- our own call coming back to us through localecho: standing off ourselves would mean
+        -- never casting the second heal on anybody
+        if speaker == mq.TLO.Me.CleanName() then return end
+
+        if not HealStateConfig.GetHealCalls() then return end
+
+        args = StringUtils.Split(StringUtils.TrimFront(args or ""))
+        local id = tonumber(args[1])
+        if id == nil or id < 1 then return end
+
+        DebugLog("[" .. speaker .. "] is healing " .. tostring(id))
+        HealState._.calledBy[id] = Time.current_time() + healCallHoldMs
+    end
+    Commands.RegisterCommEvent(Command.new(HealState.eventIds.healCall, event_HealCall, healCallDocs))
+
     ---What a person might type for each setting. Three answers to one question, so a switch will
     ---not do -- but the words people reach for are still on/off words, and `curing on` meaning
     ---"cure, out of fights" is the reading that matches how every other switch in cabby behaves
@@ -1519,6 +2242,13 @@ function HealState.Init()
         if result ~= nil then
             print(" -- last: " .. result)
         end
+
+        -- what every slot's fight window is being read against, which is otherwise the silent
+        -- reason a configured heal is not firing -- the same shape of gap the cure mode left, and
+        -- the same fix. `IsGroupFighting` because that is what the slots are held to; a healer
+        -- standing in a fight it is not engaged in is precisely the case that has to read "on"
+        print(" -- the fight, as the heal slots see it: " ..
+            (Combat.IsGroupFighting() and "one is on" or "none right now"))
         local notCuring = reasonNotCuring()
         print(" -- curing: " .. HealStateConfig.GetCureModeDisplay(HealStateConfig.GetCureMode()) ..
             (notCuring ~= nil and (" -- not answering right now: " .. notCuring) or ""))
@@ -1566,9 +2296,22 @@ function HealState.Init()
                 (held ~= nil and (" -- held: " .. held) or ""))
         end
 
+        print(" -- calling heals: " .. (HealStateConfig.GetHealCalls() and "on" or "off"))
+
+        -- **the judged reading is printed beside the real one whenever the two differ**, which is
+        -- the whole of explaining a head start. A healer that goes to the warrior first while the
+        -- wizard shows a lower number is doing exactly what it was told to, and this is the only
+        -- place that can be seen -- without it the behaviour reads as a bug with no way in
         for _, candidate in ipairs(getCandidates()) do
-            print(" -- " .. candidate.name .. ": " .. tostring(math.floor(candidate.pct)) .. "%" ..
-                (candidate.isTank and " (tank)" or "") .. (candidate.isPet and " (pet)" or ""))
+            local judged = math.floor(candidate.urgency)
+            local real = math.floor(candidate.pct)
+            print(" -- " .. candidate.name .. ": " .. tostring(real) .. "%" ..
+                (judged ~= real and (" (judged " .. tostring(judged) .. "%)") or "") ..
+                (candidate.class ~= nil and (" " .. tostring(candidate.class)) or "") ..
+                (candidate.isTank and " (tank)" or "") .. (candidate.isPet and " (pet)" or "") ..
+                (candidate.isXTarget and " (xtarget)" or "") ..
+                (candidate.isHolding and " (holding aggro)" or "") ..
+                (isCalledByAnother(candidate) and " -- another healer has this one" or ""))
         end
     end
     Commands.RegisterSlashCommand(SlashCmd.new("cheal", Bind_CHeal, chealDocs))

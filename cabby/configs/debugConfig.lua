@@ -55,7 +55,9 @@ function DebugConfig.Init()
             "(/debug) Toggle debug tracing by debug category key",
             " -- Usage (toggle): /debug key",
             " -- Usage (1 = on, 0 = off): /debug key <0|1>",
-            " -- To find a list of keys, use /debug list"
+            " -- To find a list of keys, use /debug list",
+            " -- `/debug file 1` sends all of it to lua/Debug.log instead of the console, which",
+            "    is the only readable form for anything logging once a frame"
         } end )
         local function Bind_Debug(...)
             local args = {...} or {}

@@ -34,10 +34,6 @@ setmetatable(CastTask, {
     end
 })
 
----Cast times at or below this are instant: no cast bar, nothing to interrupt, so no standing
----still and nothing to watch for.
-local instantCastMs = 100
-
 ---How often a target that will not take, or a memorize that did not land, is asked for again.
 ---Re-issuing the command is the retry; there is nothing else to try.
 local retryIntervalMs = 2000
@@ -119,6 +115,9 @@ function CastTask.new(subject, options)
         targetedAtMs = nil,
         memorizedAtMs = nil,
         memorizedLandedMs = nil,
+        ---the last moment the client was seen counting a gem or the bar down, which is what the
+        ---frame either side of that countdown is measured from
+        recoveringSeenMs = nil,
         firedAtMs = nil,
         castTimeMs = 0
     }
@@ -229,11 +228,11 @@ local function validate(self)
     end
 
     self._.castTimeMs = subject:CastTimeMs()
-    -- Bards sing on the move, and an instant cast has no bar to lose. Worked out here rather
-    -- than at the hold-still step because callers ask whether this cast pins the character down
-    -- (`RequiresStillness`) from the moment it is accepted.
-    local isBardSong = subject:IsSpell() and mq.TLO.Me.Class.ShortName() == "BRD"
-    self._.requiresStillness = not isBardSong and self._.castTimeMs > instantCastMs
+    -- Bards sing on the move, and an instant cast has no bar to lose. Read off the subject, which
+    -- is where that fact lives, and taken down here rather than at the hold-still step because
+    -- callers ask whether this cast pins the character down (`RequiresStillness`) from the moment
+    -- it is accepted -- and because a cast that is over stops pinning anybody (see `inFlight`).
+    self._.requiresStillness = subject:RequiresStillness()
 
     return advance(self, self.AcquireTarget)
 end
@@ -337,9 +336,11 @@ end
 ---
 ---A gem the caller named wins outright: that is what naming one means. Otherwise an empty gem,
 ---and only failing that the configured one -- because the whole cost of memorizing something is
----what it replaces, and an empty gem replaces nothing. It also settles on its own: each spell a
----rotation is short of takes an empty gem once and stays there, rather than a rotation with two
----unmemorized spells in it spending the fight casting them over each other.
+---what it replaces, and an empty gem replaces nothing. It also settles on its own where there is
+---room: each spell a rotation is short of takes an empty gem once and stays there. A full bar has
+---no room to settle into and the fallback gem is the only one on offer, which is why what keeps
+---two unmemorized spells from casting each other off it lives in the caller: a rotation that
+---finishes one before it starts the next only memorizes over that gem once.
 ---@return number|nil gem
 local function gemFor(self)
     if self._.gem ~= nil then return self._.gem end
@@ -399,17 +400,34 @@ local function fire(self)
     end
 
     if not subject:IsReady() then
-        -- A gem we have only just memorized into is greyed out for a moment, and the spell landing
-        -- in it is what `IsMemorized` reports -- so arriving here "not ready" straight after a
-        -- memorize is the gem settling, not a refusal. Failing that would mean spending eight
-        -- seconds memorizing and then throwing the cast away a tenth of a second short.
-        if self._.memorizedLandedMs ~= nil and
-            Time.current_time() - self._.memorizedLandedMs < self._.readyWaitMs then
+        -- A gem we have only just memorized into is greyed for seconds afterwards, not for a
+        -- moment, and the client says how many -- so "not ready" here is the gem on its way back
+        -- rather than a refusal, and it is asked of the world rather than waited out on a guess.
+        -- The guess is what this used to be, and it was always short: every cast that had to be
+        -- memorized was thrown away a second or two before the gem it had just spent seconds
+        -- memorizing came up. Nothing gives up on this, for the same reason nothing gives up on
+        -- standing still or on the memorize itself -- it is a wait for something that will change,
+        -- and the only thing that ends one is the caller no longer wanting the cast.
+        if subject:IsRecovering() then
+            self._.recoveringSeenMs = Time.current_time()
+            return waiting(self, "waiting for " .. subject:Name() .. " to come back")
+        end
+
+        -- Nothing counting down and still not ready: an item or an AA timer, or a spell the
+        -- client will not have. That is an answer rather than a wait.
+        --
+        -- The window below is what is left of the old grace, and it is no longer covering the
+        -- wait itself -- only the seams at either end of it, which are a frame each. The client
+        -- takes a beat to put a countdown on a gem a spell has just been memorized into, and at
+        -- the other end the countdown reaching zero and the gem being marked castable are read
+        -- from the same moment with a strict comparison, so there is a frame where it is neither
+        -- counting down nor ready. Refusing on either of those would throw the cast away for the
+        -- one thing that is not an answer: nothing having been said yet.
+        local seenMs = math.max(self._.recoveringSeenMs or 0, self._.memorizedLandedMs or 0)
+        if seenMs > 0 and Time.current_time() - seenMs < self._.readyWaitMs then
             return waiting(self, "waiting for " .. subject:Name() .. " to be ready")
         end
 
-        -- the gem timer moved under us between validate and here, most likely a recovery from
-        -- something else that went off in the meantime
         return finish(self, CastOutcome.notReady)
     end
 
@@ -448,7 +466,7 @@ local function confirmStart(self)
         return waiting(self, "casting " .. self._.subject:Name())
     end
 
-    if self._.castTimeMs <= instantCastMs then
+    if self._.subject:IsInstant() then
         if now - (self._.firedAtMs or now) >= 400 + ping() then
             return finish(self, CastOutcome.succeeded)
         end

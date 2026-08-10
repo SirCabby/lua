@@ -17,11 +17,19 @@ local ActionType = require("cabby.actions.actionType")
 ---
 ---- **`stop_pct`** -- a mob this close to dead is not worth locking. It also is not worth the
 ---  *risk*: a mez that lands on something the group is three seconds from killing takes it out of
----  reach of the damage already in the air.
+---  reach of the damage already in the air. **It is asked only of a mob being picked for the first
+---  time.** Health never climbs back, so a gate on it applied to everything is a one-way door: the
+---  moment anything hits a mob crowd control was already holding it falls under the line and can
+---  never be mezzed again -- and being hit is precisely what broke the mez. See `isWorthMezzing`.
 ---- **`mana_floor`** -- the same floor the rotation keeps, and for the same reason. An enchanter
 ---  out of mana is a group with no crowd control at all in ten seconds' time.
 ---- **`ae_min`** -- how many loose mobs make an AE worth its aggro. One is never worth it: an AE
 ---  mez wakes what it does not land on, and a single-target mez was going to cover one mob anyway.
+---  **Loose means nothing on it at all, not "due for a refresh"** -- an area mez is the catch-up for
+---  more adds than one cast at a time can hold, and what keeps a camp locked afterwards is the
+---  single-target mez, which lasts several times longer for the same cast. Counting mobs that are
+---  merely ageing would have the blast go off again at a camp already held, every time its own short
+---  mez came round.
 ---
 ---A slot carries at most two dials of its own, and only where they mean anything -- a mez has
 ---nothing to say about either.
@@ -58,6 +66,13 @@ local MezStateConfig = {
 ---a mez that must be started *now* or it wears off mid-cast, which is the mob loose on a caster who
 ---is stood still and unable to do anything about it. So the answer is always `cast time + this`,
 ---and this is the margin for the server's round trip and for the pass we did not get.
+---
+---**A mez shorter than its own margin is never asked the question**, because it could never answer
+---yes: an area mez lasting a tick would read every mob it holds as loose from the moment it landed,
+---and recast itself forever over the top of the long mezzes below it in the list. Such a mez is
+---re-applied once it has actually lapsed rather than topped up early -- see `isHeld` in
+---`states/mezState.lua`. So raising this does not starve the AE slots, and it is safe to set by what
+---a *single-target* refresh needs.
 local defaultRefreshLeadMs = 3000
 
 ---@param str string
@@ -94,7 +109,8 @@ local function initAndValidate()
     if configRoot.stop_pct == nil then
         -- 80 is where every mez macro has landed. A mob under it has taken real damage from
         -- somebody, which means it is either being killed or about to be, and a mez that lands on
-        -- it takes it away from the damage already in the air
+        -- it takes it away from the damage already in the air. It only ever decides whether to
+        -- *start* holding a mob -- one already held is refreshed however hurt it is
         configRoot.stop_pct = 80
         taint = true
     end

@@ -1,7 +1,6 @@
 local BaseClass = require("cabby.classes.baseClass")
 local Priorities = require("cabby.classes.priorities")
 
-local BuffState = require("cabby.states.buffState")
 local HealState = require("cabby.states.healState")
 local PetDpsState = require("cabby.states.petDpsState")
 local PetSetupState = require("cabby.states.petSetupState")
@@ -34,8 +33,7 @@ local Magician = BaseClass.new({
         { state = SpellDpsState, priority = Priorities.dps - 1 },
         { state = HealState, priority = Priorities.heal + 5 },
         { state = PetDpsState, priority = Priorities.dps - 2 },
-        { state = PetSetupState, priority = Priorities.buff - 1 },
-        { state = BuffState, priority = Priorities.buff }
+        { state = PetSetupState, priority = Priorities.buff - 1 }
     },
     unimplemented = {
         "summoning on request: mod rods, food and drink for whoever asks"

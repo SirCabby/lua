@@ -1,7 +1,6 @@
 local BaseClass = require("cabby.classes.baseClass")
 local Priorities = require("cabby.classes.priorities")
 
-local BuffState = require("cabby.states.buffState")
 local HealState = require("cabby.states.healState")
 local MeleeState = require("cabby.states.meleeState")
 local SpellDpsState = require("cabby.states.spellDpsState")
@@ -19,8 +18,7 @@ local Paladin = BaseClass.new({
     states = {
         { state = HealState, priority = Priorities.heal + 5 },
         { state = SpellDpsState, priority = Priorities.dps - 1 },
-        { state = MeleeState, priority = Priorities.dps },
-        { state = BuffState, priority = Priorities.buff }
+        { state = MeleeState, priority = Priorities.dps }
     },
     unimplemented = {
         "tanking as its own state: aggro-loss detection driving the taunt and hate lists"

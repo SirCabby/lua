@@ -1,7 +1,6 @@
 local BaseClass = require("cabby.classes.baseClass")
 local Priorities = require("cabby.classes.priorities")
 
-local BuffState = require("cabby.states.buffState")
 local HealState = require("cabby.states.healState")
 local MeleeState = require("cabby.states.meleeState")
 local PetDpsState = require("cabby.states.petDpsState")
@@ -22,8 +21,7 @@ local Beastlord = BaseClass.new({
         { state = SpellDpsState, priority = Priorities.dps - 1 },
         { state = MeleeState, priority = Priorities.dps },
         { state = PetDpsState, priority = Priorities.dps - 2 },
-        { state = PetSetupState, priority = Priorities.buff - 1 },
-        { state = BuffState, priority = Priorities.buff }
+        { state = PetSetupState, priority = Priorities.buff - 1 }
     },
     unimplemented = {
         "slow, as the group's second slower",

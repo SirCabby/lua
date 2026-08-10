@@ -38,6 +38,21 @@ function ActionType:IsReady(request)
     error("Action:IsReady() not implemented")
 end
 
+---The half of `IsReady` that is about *them* rather than about us: could this land on that spawn
+---from where we are standing, leaving aside cooldowns and resources. A caller that walks a list
+---asks it to tell "wait a beat" apart from "they are not here" -- the first is worth holding the
+---list for and the second is not.
+---
+---Answered `true` by default: anything with no range to speak of -- a skill, a discipline, a
+---self-aimed cast -- reaches whoever it is for by definition, and only `CastAction` has a reason
+---to say otherwise.
+---@param targetId? number whoever it would be for; what is targeted now when left out
+---@return boolean canReach
+---@diagnostic disable-next-line: unused-local
+function ActionType:CanReach(targetId)
+    return true
+end
+
 ---Use it. Returns as soon as the action has been *started*, which for a cast means the request
 ---has been handed to the casting service and the cast itself is still seconds away.
 ---@param request? table who is asking: `{ owner, priority, targetId }`. Skills and disciplines

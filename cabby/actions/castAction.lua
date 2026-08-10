@@ -120,6 +120,39 @@ function CastAction:Subject()
     return self._.subject
 end
 
+---Could this land on them from where we are standing?
+---
+---The half of readiness that is about *them* -- they are here, they are inside the spell's range,
+---and nothing is in the way -- with nothing in it about whether we are in a position to cast.
+---
+---Worth asking on its own because the two halves mean opposite things to somebody choosing what
+---to cast. "Not ready yet" is our gem coming back, our mana, our cast in flight: it is over in a
+---beat and the thing to do is wait for it. "Cannot be reached" is somebody off at the pull or
+---round a corner, and no amount of waiting brings them back -- whoever is asking should move on
+---and pick them up again when they turn up. See `buffState`'s `choosePickFor`, which counts the
+---people it is still waiting on with exactly this question.
+---@param targetId? number whoever this would be for; what is targeted now when left out
+---@return boolean canReach always true for anything that aims itself, which needs nobody
+function CastAction:CanReach(targetId)
+    local subject = self._.subject
+    if not subject:NeedsTarget() then return true end
+
+    -- whoever this is for: the spawn the caller named, or what is targeted now
+    local spawn = mq.TLO.Target
+    if targetId ~= nil then
+        spawn = mq.TLO.Spawn("id " .. tostring(targetId))
+    end
+
+    local spawnId = tonumber(spawn.ID())
+    if spawnId == nil or spawnId < 1 then return false end
+
+    local range = subject:Range()
+    local distance = tonumber(spawn.Distance())
+    if range > 0 and distance ~= nil and distance > range then return false end
+
+    return spawn.LineOfSight() ~= false
+end
+
 ---Is this worth asking for right now?
 ---
 ---Deliberately stricter than the cast's own checks. Everything here is a reason the cast would
@@ -171,24 +204,7 @@ function CastAction:IsReady(request)
     local manaCost = subject:ManaCost()
     if manaCost > 0 and (tonumber(mq.TLO.Me.CurrentMana()) or 0) < manaCost then return false end
 
-    if subject:NeedsTarget() then
-        -- whoever this is for: the spawn the caller named, or what is targeted now
-        local spawn = mq.TLO.Target
-        if targetId ~= nil then
-            spawn = mq.TLO.Spawn("id " .. tostring(targetId))
-        end
-
-        local spawnId = tonumber(spawn.ID())
-        if spawnId == nil or spawnId < 1 then return false end
-
-        local range = subject:Range()
-        local distance = tonumber(spawn.Distance())
-        if range > 0 and distance ~= nil and distance > range then return false end
-
-        if spawn.LineOfSight() == false then return false end
-    end
-
-    return true
+    return self:CanReach(targetId)
 end
 
 ---Ask the casting service for this cast. Returns as soon as it has asked -- the cast itself

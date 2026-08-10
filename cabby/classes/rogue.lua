@@ -7,6 +7,10 @@ local MeleeState = require("cabby.states.meleeState")
 ---for a plain `Stick` (`MeleeState.StickToCurrentTarget`). The rear-arc stick already exists --
 ---`utils/Movement/Stick.lua` has a `behind` mode that strafes into the back arc -- so this is a
 ---matter of the melee state knowing to ask for it, not of writing the movement.
+---
+---Buffing comes from the common states, and what a rogue puts in the list is clickies and AAs --
+---a buff slot is an action, so having no spellbook costs it nothing here. Poisons are not that
+---job and are still missing: they are applied to a weapon rather than cast at anybody.
 ---@type BaseClass
 local Rogue = BaseClass.new({
     key = "Rogue",

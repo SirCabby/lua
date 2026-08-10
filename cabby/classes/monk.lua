@@ -6,6 +6,9 @@ local MeleeState = require("cabby.states.meleeState")
 ---A monk hits things and pulls them. The hitting works: the melee state's primary and secondary
 ---skill slots exist because of monks (`Character.HasSecondaryAbilities`), so a monk's rotation
 ---is already configurable on the Melee State page.
+---
+---Its buffs come from the common states, and are clickies and AAs rather than spells -- which a
+---buff slot holds as readily as it holds a spell, since a slot has always been an action.
 ---@type BaseClass
 local Monk = BaseClass.new({
     key = "Monk",

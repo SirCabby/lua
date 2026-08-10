@@ -97,18 +97,42 @@ local deliveries = {
 ---mob so the mez after it takes. Nothing is labelled by hand, for the reason nothing else in cabby
 ---is: a tash filed as a mez is a page that looks configured and a camp full of loose adds.
 ---
+---**An area mez and a single-target mez are the same job at two different moments, and telling them
+---apart is most of what this state does well or badly.** An enchanter's AE mez is short -- a tick or
+---two where the single-target holds for eight -- and that is not a defect, it is what it is for: the
+---*catch-up*, when more mobs are loose at once than one cast at a time could work through before
+---somebody dies. What holds a camp afterwards is the long single-target mez, which buys several
+---times the duration for the same cast. So the two are chosen by a fact about the fight rather than
+---by position in the list: an AE is worth its aggro only for mobs that are **loose right now**
+---(`aeBlast`), and mobs that are merely ageing are left to the single-target slots, which quietly
+---upgrade them from a tick of area mez to a full one -- the blast to lock the camp down, the single
+---mez to keep it that way.
+---
+---That falls out of two readings rather than out of a mode, so nothing can be stuck in the wrong
+---one: what counts toward an AE, and what `isHeld` says a slot has left to do. **Both used to say
+---the wrong thing in the same direction**, and the result was an enchanter that recast a
+---six-second blast at an already-mezzed camp for an entire fight while the long mez sat below it in
+---the list, never reached.
+---
 ---**Two questions decide every mob, every pass, and neither is a timer.**
 ---
----1. *Is it still under?* Four readings, strongest first: our own mez landing a beat ago (which
----    bridges the round trip before the client has been told anything); the world saying it woke up
----    (the awakened line, and the mob doing something other than standing there); and failing both,
----    the client's own cached reading of the mez, which ages by itself. The third of those is the
----    one every other mez script leaves out and the one that matters most -- a cached mez counts
----    down happily through a break it was never told about.
----2. *Is it worth mezzing?* Not what the group is killing, not something already immune to it, not
----    something already hurt past the point of being worth taking out of reach of the damage in the
----    air, and not something out of range or out of sight -- which the casting service answers for
----    us, since a slot's `IsReady` is judged against the mob the cast would be aimed at.
+---1. *Is it still under?* Readings, strongest first: our own mez landing a beat ago (which bridges
+---    the round trip before the client has been told anything); the world contradicting it -- the
+---    awakened line, the mob having moved or turned since we mezzed it, the mob having *been hit*
+---    since we mezzed it, the mob doing something other than standing there; and failing all of
+---    those, the client's own cached reading of the mez, which ages by itself. The cache is the one
+---    every other mez script leans on and the one that must never be leaned on alone -- a cached mez
+---    counts down happily through a break it was never told about. The damage reading is the one
+---    that covers what none of the others can: a mob mezzed in melee range, already facing what it
+---    was hitting, breaks free and resumes swinging without moving a coordinate, and the only trace
+---    of it is that something took its health down.
+---2. *Is it worth mezzing?* Not what the group is killing, not something already immune to it, and
+---    not something out of range or out of sight -- which the casting service answers for us, since
+---    a slot's `IsReady` is judged against the mob the cast would be aimed at. A mob nobody has
+---    started on yet is also weighed against `stop_pct`: one already this hurt is being killed by
+---    somebody, and a mez would take it out of reach of damage already in the air. **That last one
+---    asks only about a mob being picked for the first time**, because health only falls and a gate
+---    on it is otherwise a door that shuts for good -- see `isWorthMezzing`.
 ---
 ---**An add is only an add beside something being killed**, which is why both answers above stop at
 ---the same place: a *new* mob is chosen only once something has been named first to kill
@@ -142,7 +166,9 @@ local MezState = {
         lastResult = nil,
         holdReason = nil,
         landed = {},         -- ["<effect>@<id>"] = trusted until
-        mezzedAtMs = {},     -- [id] = when our mez landed on it -- the mark the motion read is against
+        -- [id] = { atMs, pose, healthPct } -- what was true of the mob at the instant our mez landed
+        -- on it, which is the mark every break reading below is measured against
+        mezzed = {},
         immune = {},         -- [id] = name -- this spawn will never take a mez
         resisted = {},       -- [id] = true -- a mez bounced off it; soften before spending another
         awake = {},          -- [id] = true -- the world said this one woke up, whatever the cache says
@@ -274,7 +300,7 @@ local function prune()
 
     for _, record in ipairs({
         MezState._.immune, MezState._.resisted, MezState._.awake,
-        MezState._.suspect, MezState._.mezzedAtMs
+        MezState._.suspect, MezState._.mezzed
     }) do
         for id in pairs(record) do
             local spawn = mq.TLO.Spawn("id " .. tostring(id))
@@ -329,27 +355,66 @@ end
 
 ---Has this mob moved since the mez we put on it landed?
 ---
----**The strongest break signal there is, and it needs no window and no threshold.** A mez landed at
----one instant and the mob moved at another; which of those came second is the entire answer. A mob
----held by a mez is *perfectly* still -- not "not running", but the same coordinates and the same
----heading, pulse after pulse -- so anything else is the mez not holding it.
+---**The strongest break signal there is, and it needs no window and no threshold.** A mob held by a
+---mez is *perfectly* still -- not "not running", but the same coordinates and the same heading,
+---pulse after pulse -- so anything else is the mez not holding it.
 ---
 ---Heading is half of it and the half that catches what position alone misses: a mob handed back its
 ---own will faces whoever it is about to hit before it takes a step, and one that is rooted or
 ---snared may never take one at all. `macros/bots/enchanterBot.mac` samples exactly this pair for
 ---exactly this reason.
 ---
+---**What is compared is where the mob was, not when the roster last saw it move**, and wording it
+---the other way was a bug for as long as it stood. The reading used to ask whether the mob's
+---last-moved *sample* was stamped later than our mez landed -- and that is wrong about the mob a mez
+---is most often aimed at. An add is still running when the mez takes it; `cabby.mobs` samples four
+---times a second; the sample that finally notices the mob has halted is stamped at the moment it
+---was taken, which is after the mez landed. So it reported movement for the last stride of the
+---run-in, every mez cast at something in motion read as broken the instant its trust window closed,
+---and a second mez went out at a mob that was already held -- three seconds and a gem timer spent
+---while whatever actually was loose waited. `Mobs.MarkPose`/`Mobs.MovedFrom` compare a position
+---against a position instead, which has no such seam: the mob is either where we left it or it is
+---not.
+---
 ---False when we have no mark to measure against -- a mez somebody else landed, or one of ours old
 ---enough to have been forgotten -- because "we cannot say" is not "it broke".
 ---@param id number
 ---@return boolean hasMoved
 local function movedSinceMez(id)
-    local mezzedAt = MezState._.mezzedAtMs[id]
-    if mezzedAt == nil then return false end
+    local record = MezState._.mezzed[id]
+    if record == nil then return false end
+    return Mobs.MovedFrom(id, record.pose)
+end
 
-    local lastMoved = Mobs.LastMovedMs(id)
-    if lastMoved == nil then return false end
-    return lastMoved > mezzedAt
+---Has this mob been hit since the mez we put on it landed?
+---
+---**The only reading here that is evidence of the *cause* of a break rather than of the mob's
+---reaction to one**, and the only one that needs the mob neither to be looked at, nor to move, nor
+---to be spoken about. A mez ends because something damaged the mob; everything else in this chain
+---is waiting to see what the mob does about it.
+---
+---That is what makes it the one that covers the case the rest cannot. A mob mezzed where it stood
+---- in melee range, already facing whoever it was hitting -- breaks free without changing a
+---coordinate or a degree of heading and goes straight back to swinging. `movedSinceMez` has nothing
+---to see; the animation list has it standing, which is what a mob between swings is doing; and the
+---awakened line is then the only thing left, so a line that was missed leaves a cached mez counting
+---happily down through the break for the two minutes it had left. That is the mob left chewing on
+---the healer while crowd control believes the camp is locked.
+---
+---Health falls only when something hit it, and being hit is what a mez does not survive. It is a
+---coarse reading for a spawn nobody is targeting -- the client is sent a percentage, so a hit worth
+---less than one of them does not show -- but it is never wrong in the direction that matters, and
+---the mark is rewritten every time we mez the mob again.
+---@param id number
+---@param spawn any mq spawn TLO
+---@return boolean wasHit
+local function hurtSinceMez(id, spawn)
+    local record = MezState._.mezzed[id]
+    if record == nil or record.healthPct == nil then return false end
+
+    local pct = Status.HealthPct(spawn)
+    if pct == nil then return false end
+    return pct < record.healthPct
 end
 
 ---Is this mob standing there doing nothing?
@@ -377,9 +442,13 @@ end
 ---
 ---1. **We just landed one.** For the couple of seconds it takes the server to tell the client,
 ---    what we did is the only record there is.
----2. **The world said it woke up.** The awakened line, or the mob visibly up and doing something.
----    This *overrides the cache*, which is the whole point: nothing tells a cached buff about a
----    break, so a mez ended by a backstab sits there counting down for the two minutes it had left.
+---2. **The world contradicted it**, four ways, no one of which sees every break: the awakened line;
+---    the mob having moved or turned since we mezzed it; the mob having *been hit* since we mezzed
+---    it, which is the cause of a break rather than a symptom of one and the only reading that
+---    catches a mob breaking free without stirring from where it stands; and the mob visibly up and
+---    doing something. Any of them *overrides the cache*, which is the whole point: nothing tells a
+---    cached buff about a break, so a mez ended by a backstab sits there counting down for the two
+---    minutes it had left.
 ---3. **The client's own reading**, `CachedBuff[^mezzed]` -- the same `SPA_ENTHRALL` search the
 ---    client's `Target.Mezzed` is built on, filled in whenever the mob was last targeted (which for
 ---    a mob we mez is every time we mez it) and ageing by itself from there, so a stale cache
@@ -421,6 +490,7 @@ local function mezRemainingMs(id, spawn)
     end
 
     if movedSinceMez(id) then return 0 end
+    if hurtSinceMez(id, spawn) then return 0 end
     if not isStandingStill(spawn) then return 0 end
 
     local cached = spawn.CachedBuff("^mezzed")
@@ -433,20 +503,44 @@ local function mezRemainingMs(id, spawn)
     return remaining
 end
 
----Is this mob held well enough to leave alone?
+---Is this mob held well enough for *this slot* to leave alone?
 ---
 ---The margin is the cast plus the configured lead, and it is arithmetic rather than a timer: a mez
 ---with four seconds left that takes three to cast has to be started *now* or it wears off with the
 ---caster stood still mid-cast, which is the worst moment of the fight to hand an add back. So "is
 ---it mezzed" is never the question; "will it still be mezzed when the next one could land" is.
+---
+---**A mez that cannot outlast its own margin is exempt from being asked, and leaving it in was the
+---bug that stalls the whole list.** An AE mez is short by design -- an enchanter's PBAE holds a mob
+---for a single tick where the single-target mez holds it for eight -- so with any ordinary refresh
+---lead the margin is longer than the entire mez. Asked the question above, such a slot answers
+---"loose" for every mob it holds, from the instant its own cast lands until the moment the mez
+---expires, forever. It therefore always has work; and since the list is walked in order and the
+---first slot with work wins, **it starves every slot below it** -- which is where the long
+---single-target mez lives. The enchanter recasts a six-second area mez at mobs it just mezzed for
+---the whole fight and never lays down a forty-eight second one.
+---
+---The honest reading is that the question does not apply: you cannot start a refresh before
+---something lapses when it lapses faster than you can react to it. A mez this short is not a thing
+---to top up early, it is a thing to re-apply once it has actually gone -- which is the `remaining <=
+---0` answer above, and is exactly the emergency an AE mez is for. Nothing is tuned to reach that
+---conclusion: what the mez grants and what the margin asks for are both read off the spell.
 ---@param id number
 ---@param spawn any mq spawn TLO
 ---@param spell any mq spell TLO the mez that would be recast
 ---@param subject CastSubject
 ---@return boolean isHeld
 local function isHeld(id, spawn, spell, subject)
+    local remaining = mezRemainingMs(id, spawn)
+    -- nothing on it at all is loose to everything, however short the mez being offered
+    if remaining <= 0 then return false end
+
     local margin = subject:CastTimeMs() + MezStateConfig.GetRefreshLeadMs()
-    return mezRemainingMs(id, spawn) > margin
+
+    local grant = subject:DurationMs()
+    if grant > 0 and grant <= margin then return true end
+
+    return remaining > margin
 end
 
 ---Is this spell's own effect already on this mob?
@@ -599,10 +693,22 @@ end
 ---question is never "which of these looks like the add" but "has anybody said which one is first",
 ---and until somebody has, this state picks nothing.
 ---
----**A mob we have already mezzed is exempt, and that is what stops the rule blinking.** What is
----first to kill is unknown for a beat every time one mob dies before the next is picked up --
----exactly when the adds already held come up for a refresh -- and a mob we put a mez on was judged
----an add at the moment we did it. The rule governs *choosing* a target; that one was chosen.
+---**A mob we have already mezzed is exempt from all of it, and that is what stops the rule
+---blinking.** What is first to kill is unknown for a beat every time one mob dies before the next
+---is picked up -- exactly when the adds already held come up for a refresh -- and a mob we put a mez
+---on was judged an add at the moment we did it. The rule governs *choosing* a target; that one was
+---chosen.
+---
+---**`stop_pct` is inside that exemption, and leaving it outside was a bug with a fight-losing
+---shape.** Health only ever falls, so a gate on it is a one-way door: the moment anything hits a mob
+---this state was holding, it drops under the line and is disqualified from being mezzed *ever
+---again*, however loose it plainly is. That is exactly the mob the rule most needs to allow --
+---getting hit is what broke the mez in the first place -- and the shipped default of 80 means a
+---couple of swings does it. The group hits an add, switches back off it, and crowd control watches
+---it eat the healer while `/cmez` calls it loose. What the line is really proxying for is "there is
+---damage in the air aimed at this one", which this state already answers properly and directly with
+---`isKillTarget` -- our own engagement and the main tank's target -- so as a veto on a mob we chose
+---and held it was never adding an answer, only overriding one.
 ---@param candidate MezCandidate
 ---@param candidates MezCandidate[] the fight it is in, for the lone-pull reading above
 ---@param killId number|nil what is first to kill (`namedKill`); nil when nobody here can say
@@ -611,22 +717,23 @@ local function isWorthMezzing(candidate, candidates, killId)
     if candidate.isKillTarget then return false end
     if MezState._.immune[candidate.id] then return false end
 
-    -- Both of these are about picking a *new* mob to hold, so neither is asked of one this state
-    -- is already holding: a mez of ours on it is the record of having decided, and the fight going
-    -- quiet for a beat does not hand it back.
-    if MezState._.mezzedAtMs[candidate.id] == nil then
+    -- All three of these are about picking a *new* mob to hold, so none is asked of one this state
+    -- is already holding: a mez of ours on it is the record of having decided, and neither the fight
+    -- going quiet for a beat nor somebody landing a hit on it hands it back.
+    if MezState._.mezzed[candidate.id] == nil then
         -- the mob being brought in is nobody's add until there is something else here
         if isUnfoughtPull(candidates) then return false end
         -- and with several here, no telling the add from the one the group is about to kill
         if killId == nil then return false end
+        -- and one already this hurt is being killed by somebody, so a mez would only take it out
+        -- of reach of the damage already aimed at it
+        local pct = Status.HealthPct(candidate.spawn)
+        if pct ~= nil and pct < MezStateConfig.GetStopPct() then return false end
     end
     -- nothing in this list reaches through a wall, so a mob we cannot see is not a mob to plan
     -- around: it is neither mezzed, nor counted toward an AE being worth casting, nor waited for.
     -- It comes back the pass it comes into sight
     if not candidate.canSee then return false end
-
-    local pct = Status.HealthPct(candidate.spawn)
-    if pct ~= nil and pct < MezStateConfig.GetStopPct() then return false end
 
     return true
 end
@@ -793,7 +900,8 @@ local function looseFor(spell, subject, candidates, deferred, killId)
     -- different mob every pass for no reason.
     local rank = {}
     for index, candidate in ipairs(loose) do
-        rank[candidate.id] = (MezState._.awake[candidate.id] or movedSinceMez(candidate.id))
+        rank[candidate.id] = (MezState._.awake[candidate.id] or movedSinceMez(candidate.id)
+            or hurtSinceMez(candidate.id, candidate.spawn))
             and index or (index + #loose)
     end
     table.sort(loose, function(left, right) return rank[left.id] < rank[right.id] end)
@@ -823,6 +931,21 @@ end
 ---pulls the room -- so the mobs that make an AE worth casting have to be ones something actually
 ---told us about. The mobs it *also* catches are not filtered, because a blast catches what it
 ---catches; what is being decided here is only where to point it.
+---
+---**Only a mob that is genuinely loose counts toward the blast being worth casting** -- not one
+---that is merely due for a top-up -- and that one line is what divides the two jobs an enchanter's
+---mezzes do. An AE is the *catch-up*: several mobs are loose at once, more than a single-target mez
+---could work through before somebody dies, so one cast covers all of them. A single-target mez is
+---what actually *holds* a camp, because it lasts several times longer for the same cast. Counting a
+---held-but-ageing mob toward an AE collapses the distinction -- three mobs mezzed by the area spell
+---come up for a refresh together, the AE sees "three to mez" and fires again, and the enchanter
+---spends the fight re-blasting a camp it already had rather than laying long mezzes down one at a
+---time. So a mob with anything left on it is left for the single-target slots, and the AE goes off
+---only for the thing an AE is for: mobs that are loose *now*.
+---
+---The blast still catches whatever it catches, and what it catches is still what gets written down
+---as mezzed -- the same split the confirmed-only rule already draws between what makes a cast worth
+---it and what the cast happens to land on.
 ---@param loose MezCandidate[]
 ---@param aeRange number
 ---@param delivery string
@@ -831,6 +954,14 @@ end
 ---@return number count how many loose mobs it would cover
 local function aeBlast(loose, aeRange, delivery)
     local confirmedOnly = MezStateConfig.GetAeConfirmedOnly()
+
+    ---Does this mob count toward the blast being worth its aggro?
+    ---@param candidate MezCandidate
+    ---@return boolean counts
+    local function counts(candidate)
+        if confirmedOnly and not Mobs.IsConfirmed(candidate.id) then return false end
+        return mezRemainingMs(candidate.id, candidate.spawn) <= 0
+    end
 
     ---@param centre MezCandidate|nil
     ---@return MezCandidate[] caught
@@ -848,19 +979,28 @@ local function aeBlast(loose, aeRange, delivery)
         return caught
     end
 
+    ---@param caught MezCandidate[]
+    ---@return number count
+    local function worth(caught)
+        local count = 0
+        for _, candidate in ipairs(caught) do
+            if counts(candidate) then count = count + 1 end
+        end
+        return count
+    end
+
     if delivery == deliveries.centred then
         local caught = coveredBy(nil)
-        return nil, caught, #caught
+        return nil, caught, worth(caught)
     end
 
     local best, bestCaught, bestCount = nil, {}, 0
     for _, centre in ipairs(loose) do
-        if not confirmedOnly or Mobs.IsConfirmed(centre.id) then
+        -- aimed at a mob that is loose itself, not at one that merely has the most neighbours: a
+        -- blast centred on something already held is a blast pointed away from the emergency
+        if counts(centre) then
             local caught = coveredBy(centre)
-            local count = 0
-            for _, candidate in ipairs(caught) do
-                if not confirmedOnly or Mobs.IsConfirmed(candidate.id) then count = count + 1 end
-            end
+            local count = worth(caught)
             if count > bestCount then
                 best, bestCaught, bestCount = centre, caught, count
             end
@@ -1079,11 +1219,19 @@ function MezState.DescribeMobs()
                 status, note = "killing", "what we are fighting"
             elseif id == killId then
                 status, note = "killing", killSource
-            elseif isPull and MezState._.mezzedAtMs[id] == nil then
+            elseif isPull and MezState._.mezzed[id] == nil then
                 status, note = "incoming", "the only mob in the fight and nobody is on it -- the pull"
-            elseif killId == nil and MezState._.mezzedAtMs[id] == nil then
+            elseif killId == nil and MezState._.mezzed[id] == nil then
                 -- the one that would otherwise read as a state doing nothing for no reason
                 status, note = "waiting", "nothing is first to kill yet -- no telling this from it"
+            elseif MezState._.mezzed[id] == nil and (function()
+                    local pct = Status.HealthPct(spawn)
+                    return pct ~= nil and pct < MezStateConfig.GetStopPct()
+                end)() then
+                -- the refusal that used to be silent, and read on the page as a mob sitting at
+                -- *loose* with nothing ever cast at it -- which is indistinguishable from broken
+                status, note = "hurt", "under the " .. tostring(MezStateConfig.GetStopPct()) ..
+                    "% line, so somebody is already killing it"
             elseif spawn.LineOfSight() == false then
                 -- said out loud rather than left off: a mob missing from the page with no reason
                 -- given is the same puzzle as a slot that never fires
@@ -1100,6 +1248,8 @@ function MezState.DescribeMobs()
                         note = "something called this woke and none of them owned up"
                     elseif movedSinceMez(id) then
                         note = "it has moved since we mezzed it"
+                    elseif hurtSinceMez(id, spawn) then
+                        note = "it has been hit since we mezzed it"
                     end
                 elseif remaining == math.huge then
                     status, note = "mezzed", "no timer on it"
@@ -1271,7 +1421,7 @@ function MezState.Init()
         for _, id in ipairs(Mobs.GetIds()) do
             local spawn = mq.TLO.Spawn("id " .. tostring(id))
             if spawn.CleanName() == name and not MezState._.awake[id]
-                and MezState._.mezzedAtMs[id] ~= nil then
+                and MezState._.mezzed[id] ~= nil then
                 candidates[#candidates + 1] = id
             end
         end
@@ -1363,7 +1513,7 @@ function MezState.Go()
     if zoneId ~= 0 and zoneId ~= MezState._.zoneId then
         MezState._.zoneId = zoneId
         MezState._.landed = {}
-        MezState._.mezzedAtMs = {}
+        MezState._.mezzed = {}
         MezState._.immune = {}
         MezState._.resisted = {}
         MezState._.awake = {}
@@ -1422,15 +1572,24 @@ function MezState.Go()
         if status == Casting.status.succeeded and outcome == Casting.outcomes.succeeded then
             MezState._.lastResult = what .. ": landed"
             if MezState._.castRole == roles.mez then
-                -- The mark the motion read measures against, written for every mob the cast
+                -- The mark every break reading measures against, written for every mob the cast
                 -- covered -- an AE's whole blast, not just its centre. From here on "has it moved
-                -- since we mezzed it" has something to compare to, which is the strongest thing
-                -- this state ever knows about whether a mez is still holding.
+                -- since we mezzed it" and "has it been hit since we mezzed it" both have something
+                -- to compare to, which is the strongest this state ever knows about a mez holding.
+                --
+                -- Taken *now*, at the instant the mez is known to have landed, so both marks
+                -- describe the same moment: the roster's own last-moved sample rather than the
+                -- clock (see `movedSinceMez` for why the clock was the wrong thing to write down),
+                -- and the health the mob still had before anybody broke it.
                 local now = Time.current_time()
                 for _, witness in ipairs(MezState._.castWitnesses) do
                     local id = tonumber(tostring(witness.key):match("@(%d+)$"))
                     if id ~= nil then
-                        MezState._.mezzedAtMs[id] = now
+                        MezState._.mezzed[id] = {
+                            atMs = now,
+                            pose = Mobs.MarkPose(id),
+                            healthPct = Status.HealthPct(mq.TLO.Spawn("id " .. tostring(id)))
+                        }
                         -- it took, so whatever we knew about it waking is out of date
                         MezState._.awake[id] = nil
                         MezState._.suspect[id] = nil

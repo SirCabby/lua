@@ -250,6 +250,60 @@ function Mobs.StillForMs(id)
     return Time.current_time() - lastMoved
 end
 
+---Where this mob is right now, as a mark to be handed back to `MovedFrom` later.
+---
+---**Read from the world rather than from the sampled history, and that is the entire reason this
+---pair exists beside `LastMovedMs`.** What the sample carries is a *time* -- "the roster noticed a
+---change at this instant" -- and its granularity is the pulse, so the sample that finally notices a
+---mob has come to a halt is stamped after the halt. A reader asking "has it moved since the thing I
+---did" against that time is told yes for a run that ended before it did: `states/mezState.lua`
+---mezzes an add mid-stride, and a quarter of a second later the roster reports movement for the
+---last stride of the run-in -- so the mez read as broken the moment its trust window closed and was
+---thrown a second time at a mob that was already held, every time, for as long as that reading was
+---worded against the clock.
+---
+---A mark and a comparison have no such seam, because neither of them is a clock: the mob is either
+---where we left it or it is not. `LastMovedMs` stays for the readers that genuinely want the
+---cadence ("how long has it been still"); this is for the ones measuring against a moment of their
+---own.
+---@param id number
+---@return table|nil mark nil when the world will not say where it is
+function Mobs.MarkPose(id)
+    local spawn = mq.TLO.Spawn("id " .. tostring(id))
+    local x, y, z = tonumber(spawn.X()), tonumber(spawn.Y()), tonumber(spawn.Z())
+    if x == nil or y == nil or z == nil then return nil end
+    return { x = x, y = y, z = z, heading = tonumber(spawn.Heading.Degrees()) }
+end
+
+---Has this mob moved or turned since that mark was taken?
+---
+---The same pair of readings and the same slack `samplePoses` works in, because it is the same
+---question -- what counts as having moved is this service's to answer, and a caller measuring
+---against its own moment should not be carrying a second copy of the epsilons.
+---
+---False when there is no mark, or when the world will not say where the mob is, because "we cannot
+---say" is not "it moved".
+---@param id number
+---@param mark table|nil from `MarkPose`
+---@return boolean hasMoved
+function Mobs.MovedFrom(id, mark)
+    if mark == nil then return false end
+
+    local spawn = mq.TLO.Spawn("id " .. tostring(id))
+    local x, y, z = tonumber(spawn.X()), tonumber(spawn.Y()), tonumber(spawn.Z())
+    if x == nil or y == nil or z == nil then return false end
+
+    if math.abs(x - mark.x) > movedEpsilon
+        or math.abs(y - mark.y) > movedEpsilon
+        or math.abs(z - mark.z) > movedEpsilon then
+        return true
+    end
+
+    local heading = tonumber(spawn.Heading.Degrees())
+    if heading == nil or mark.heading == nil then return false end
+    return math.abs(Geometry.HeadingDiff(mark.heading, heading)) > turnedEpsilonDegrees
+end
+
 ---Rebuild the roster from all four angles.
 ---
 ---Order is strongest angle first and, within an angle, the order that angle listed them -- which

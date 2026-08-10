@@ -13,21 +13,39 @@ local GeneralConfig = require("cabby.configs.generalConfig")
 ---A rez arrives as one of two things, and which one depends on whether we are still hovering over
 ---our own corpse when it lands:
 ---
----**On our feet already** -- released to bind, or dragged back and standing there -- and the client
----puts up its confirmation box (`%1 wants to RESURRECT you. Do you wish this?`, eqstr 9046). Yes is
----the whole answer, and the server does the rest (`Client::OPRezzAnswer`, `zone/client_process.cpp`).
+---**On our feet already** -- released to bind, standing in another zone entirely, or dragged back
+---and standing there -- and the client puts up its confirmation box. Yes is the whole answer, and
+---the server does the rest (`Client::OPRezzAnswer`, `zone/client_process.cpp`).
 ---
 ---**Still hovering dead**, and there is no box to answer: the offer is the `Resurrect` line on the
 ---respawn window, which the server puts there at death and always last
 ---(`Client::SendRespawnBinds`). Picking it *is* accepting -- `Client::HandleRespawnFromHover`
 ---answers the rez itself rather than asking us again -- so the row is selected and Respawn clicked.
 ---
----**The box is read before it is answered, every time.** `ConfirmationDialogBox` is the client's one
----confirmation box and it asks about everything: destroying an item, deleting a character, and -- the
----one that matters here -- `%1 wants to SACRIFICE you. You get NO experience back with Resurrection,
----even GM. Die & lose exp?` (eqstr 9054), which is a request to *kill* us and which says
----"Resurrection" while it asks. Only "wants to resurrect you" is answered Yes, and anything
----mentioning a sacrifice is the player's to answer whatever else it says.
+---**The box the rez actually arrives as does not say "resurrect" anywhere.** It is
+---`%1 wants to cast %2 (%3 percent) upon you. Do you wish this?` (eqstr 9047) -- the client names
+---the spell and the experience it hands back, and leaves the word to the spell. So what settles it
+---is the *spell*, read out of the spell data: a rez is a spell carrying `SPA_RESURRECT`, which is
+---the same reading `cabby.actions.rezzes` makes of our own book, asked here of somebody else's
+---spell. Nothing is inferred from the name -- `Resuscitate` and `Reviviscence` are rezzes and say so
+---nowhere in theirs, and `Sacrifice` carries an effect of its own (95) rather than this one.
+---
+---**Every box is read before it is answered.** `ConfirmationDialogBox` is the client's one
+---confirmation box and it asks about everything: destroying an item, deleting a character, joining a
+---guild, and any other spell somebody wants to put on us, which arrives in exactly the wording
+---above. A box offering a spell that is not a rez is left alone, as is one that does not offer a
+---spell at all. Two are refused by name because they talk about a resurrection while asking
+---something else:
+---
+--- * `%1 wants to SACRIFICE you. You get NO experience back with Resurrection, even GM. Die & lose
+---   exp?` (eqstr 9054) -- a request to *kill* us, which says "Resurrection" while it asks
+--- * `%1 is attempting to return you to your corpse. If you accept this, you will still be able to
+---   get a resurrection later. Do you wish this?` (eqstr 3563) -- a corpse summon, which is a
+---   different offer with a different cost and the player's to weigh
+---
+---A box saying "resurrect" plainly is still taken (eqstr 9046 is that box, and other clients use
+---it), and one left alone while saying it is said out loud once -- that case is exactly what this
+---module being broken looks like from the outside, and it should never be silent again.
 ---
 ---**The hover pick waits for evidence that a rez is really pending**, and that evidence is the
 ---client saying so ("You have been offered a resurrection."). The `Resurrect` row is on the respawn
@@ -51,7 +69,9 @@ local Rez = {
         offered = false,
         lastLookMs = 0,
         ---what we last said we were doing, so it is said once rather than every look
-        announced = nil
+        announced = nil,
+        ---the last box we said we were leaving alone, for the same reason
+        declined = nil
     }
 }
 
@@ -87,15 +107,112 @@ local function isDead()
     return state == "DEAD" or state == "HOVER"
 end
 
+---The boxes that talk about a resurrection while asking about something else -- see the notes on
+---this module. Lowercase, matched as plain text.
+local notOurBox = {
+    "sacrifice",
+    "return you to your corpse"
+}
+
+---`SPA_RESURRECT` (81) and `SPA_POP_RESURRECT` (155): what makes a spell a rez, in the data. The
+---first is the one `cabby.actions.rezzes` chooses our own rezzes by, and the second is here because
+---recognizing one costs nothing while missing one costs the character its rez.
+local rezEffects = { 81, 155 }
+
+---The window text as it reads, with any markup taken out of it and the spacing evened up. The
+---client hands back the STML source rather than the words, and a tag sitting inside the sentence
+---would otherwise be a phrase that never matches.
+---@param raw string|nil
+---@return string text
+local function plainText(raw)
+    local text = tostring(raw or ""):gsub("<[^<>]*>", " ")
+    text = text:gsub("%s+", " ")
+    return (text:match("^%s*(.-)%s*$"))
+end
+
+---The spell named in `%1 wants to cast %2 (%3 percent) upon you. Do you wish this?` (eqstr 9047).
+---@param text string the box text as it reads
+---@param lower string the same, lowercased -- same length, so either can be cut at the same place
+---@return string|nil name nil when the box is not that one
+local function spellOfferedInDialog(text, lower)
+    local _, castEnd = lower:find("wants to cast ", 1, true)
+    if castEnd == nil then return nil end
+
+    -- what the client puts after the name: the experience the spell hands back
+    local tailStart = lower:find("%([^()]*percent[^()]*%)%s*upon you", castEnd + 1)
+    if tailStart == nil then return nil end
+
+    local name = text:sub(castEnd + 1, tailStart - 1):match("^%s*(.-)%s*$")
+    if name == nil or name == "" then return nil end
+    return name
+end
+
+---Whether a spell the client has named is a resurrection. Asked of the spell data rather than of
+---the name, which is not evidence of anything -- see the notes on this module.
+---@param name string
+---@return boolean isRez
+local function isRezSpell(name)
+    local spell = mq.TLO.Spell(name)
+    -- a name the client's own spell table does not know is one we can say nothing about
+    if tonumber(spell.ID()) == nil then return false end
+
+    for _, spa in ipairs(rezEffects) do
+        if spell.HasSPA(spa)() == true then return true end
+    end
+    return false
+end
+
+---Said once per box. A box that talks about a resurrection and is left alone is exactly what this
+---module failing looks like from the outside, so it says which box it saw rather than going quiet.
+---@param text string
+local function noteDeclined(text)
+    if Rez._.declined == text then return end
+    Rez._.declined = text
+    print("(" .. GeneralConfig.eventIds.acceptRez .. ") Leaving this box for you to answer: " .. text)
+end
+
 ---Whether the confirmation box on screen is one asking us to take a rez -- see the notes on this
 ---module for why the box is never answered on being open alone.
 ---@return boolean isRezOffer
 local function dialogOffersRez()
-    if mq.TLO.Window(dialogWindow).Open() ~= true then return false end
+    if mq.TLO.Window(dialogWindow).Open() ~= true then
+        -- the box is gone, so the next one is said out loud even if it says the same thing
+        Rez._.declined = nil
+        return false
+    end
 
-    local text = tostring(mq.TLO.Window(dialogWindow).Child(dialogText).Text() or ""):lower()
-    if text:find("sacrifice", 1, true) ~= nil then return false end
-    return text:find("wants to resurrect you", 1, true) ~= nil
+    local text = plainText(mq.TLO.Window(dialogWindow).Child(dialogText).Text())
+    local lower = text:lower()
+
+    for _, phrase in ipairs(notOurBox) do
+        if lower:find(phrase, 1, true) ~= nil then
+            if lower:find("resurrect", 1, true) ~= nil then noteDeclined(text) end
+            return false
+        end
+    end
+
+    -- the box a rez really arrives as, which names the spell and never the word
+    local offered = spellOfferedInDialog(text, lower)
+    if offered ~= nil then
+        if isRezSpell(offered) then
+            Rez._.declined = nil
+            DebugLog("The box offers [" .. offered .. "], which the spell data says is a rez")
+            return true
+        end
+
+        -- somebody's ordinary spell, waiting on the player to answer it. Not said out loud: a box
+        -- about a spell that is not a rez is none of our business and needs no explaining
+        DebugLog("The box offers [" .. offered .. "], which is not a rez -- leaving it")
+        return false
+    end
+
+    if lower:find("resurrect", 1, true) ~= nil then
+        Rez._.declined = nil
+        DebugLog("The box says it is a rez: " .. text)
+        return true
+    end
+
+    return false
 end
 
 ---The `Resurrect` line on the respawn window, if it is showing one.
