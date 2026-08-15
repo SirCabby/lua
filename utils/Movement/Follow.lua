@@ -110,6 +110,7 @@ end
 --- - nudgeAfter: stalled windows before an unstick attempt, default 2
 --- - failAttempts: consecutive failed unstick attempts before giving up, default 9
 --- - owner: key of whoever asked for the follow
+--- - priority: that owner's place in the host's priority chain (see Movement.GetPriority)
 ---@return Follow
 function Follow.new(spawnId, options)
     local self = setmetatable({}, Follow)
@@ -117,6 +118,7 @@ function Follow.new(spawnId, options)
 
     self.key = Follow.key
     self.owner = options.owner
+    self.priority = options.priority
 
 ---@diagnostic disable-next-line: inject-field
     self._ = {}

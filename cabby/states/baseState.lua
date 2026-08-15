@@ -31,6 +31,16 @@
 ---    - **`false` -- I have nothing to do.** The walk carries on to the next state down, which is
 ---      how a character with nothing to heal ends up following the group in the same pass.
 ---
+---Work handed to a **service** is not a reason to hold the pass, and this is worth being exact
+---about: a service runs every frame whatever the chain is doing, so a move already under way needs
+---no frame of ours to keep going. What holding the pass would buy is stopping weaker states from
+---acting -- and where they could act on the *same* thing (the character's feet, the cast bar), the
+---service settles it by band instead, because it took the asker's band with the request. So a
+---state hands down the frames its own service is carrying and reports busy for what it is
+---*deciding*: FollowState is busy starting a follow, calling one stuck and going through a zone
+---line, and not busy for the walking in between -- which is what lets the buff state below it
+---click an instant clicky while the group runs, without either of them knowing about the other.
+---
 ---# State held across passes
 ---
 ---Keep only what cannot be re-derived from the world: the id of the cast we started, the spawn we

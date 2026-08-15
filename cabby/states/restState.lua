@@ -217,9 +217,11 @@ local function holdReason()
 
     -- The movement service is driving. A `/sit` under a move is answered with a `/stand` on the
     -- service's next pulse, which is an argument this state cannot win and should not be having --
-    -- and the frames it happens on are exactly the ones it gets, because a follow hands the frame
-    -- back the moment it is nearly caught up while the task is still closing the last few units.
-    -- A task that is *parked* is not driving, and is precisely when resting is the right answer.
+    -- and the frames it happens on are most of the frames of a run, because a follow hands the pass
+    -- down for as long as the service is carrying the walking and takes it back only to decide
+    -- something. This is the whole of what keeps this state off its knees mid-run; there is no
+    -- frame up the chain doing it for us. A task that is *parked* is not driving, and is precisely
+    -- when resting is the right answer.
     if Movement.IsActive() and not Movement.IsParked() then
         return "we are being moved"
     end

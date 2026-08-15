@@ -30,6 +30,23 @@ local TravelConfig = require("cabby.configs.travelConfig")
 ---enabled, there is never a pass in which both run. Neither state knows the other exists; the
 ---ordering is the whole of the coordination, which is the design working as intended.
 ---
+---**What it reports busy for is deciding, not walking.** A walk already under way is the movement
+---service's, and a service needs no frame of ours to keep it going -- so a pass that finds the
+---follow running and getting somewhere hands the turn down the chain. What still ends a pass is
+---everything that is a decision or a procedure: starting or dropping a follow, a stuck call, the
+---two ways through a zone line.
+---
+---This is the whole of what the band below gets to do while the group is on the move, and it is
+---worth being exact about why it is safe to give: a state down there can act on the run *only* in
+---ways that survive running, and each of them re-derives that for itself from the world (buffing
+---asks what it is about to cast -- an instant clicky costs movement nothing, a cast bar does;
+---resting asks whether the service is driving). What the ordering still owes them is that nothing
+---weaker takes the character's *feet* while this one has them, and that is enforced where the feet
+---live: the movement task carries the band that asked for it, and everything weighing a move
+---against something else weighs those numbers (`Movement.GetPriority`). Held frames were never what
+---made that true -- they only made a follower with a lapsed run buff unable to click it back on,
+---since the pass it needed was the one it never got while walking (2026-08).
+---
 ---**It holds the orders, because they cannot be re-derived**: who to follow, where to stand and in
 ---which zone, and progress through a zone line -- clicking one's switch, or walking through after
 ---somebody where there is no switch to click (a clicked door looks exactly like an unclicked one,
@@ -44,6 +61,12 @@ local Travel = {
     key = "Travel",
     _ = {
         isInit = false,
+        -- The band this pass is being driven at, handed over by the state that called `Drive`.
+        -- It is not ours to know -- following runs at the follow band and travel mode at the
+        -- passive one, for the same machinery -- and it is not decoration either: it is what the
+        -- movement task is asked for at, so that anything weighing a move against a cast has a
+        -- number to weigh it with (see `Movement.GetPriority`).
+        priority = nil,
         -- who we were told to follow
         followTarget = "",
         -- 0 while we are holding the target by name (see followTargetSpawn), the spawn id we
@@ -136,6 +159,18 @@ local eventIds = {
 ---@param str string
 local function DebugLog(str)
     Debug.Log(Travel.key, str)
+end
+
+---Options for a movement task started here, with the band this pass is being driven at written
+---into them. Every task this core starts goes through it, because a move nobody can rank is a move
+---anything at all may cancel -- which is what a follow was, from the day it moved out of the follow
+---state into this one until 2026-08.
+---@param options table
+---@return table options
+local function owned(options)
+    options.owner = Travel.key
+    options.priority = Travel._.priority
+    return options
 end
 
 local function UpdateLastLoc()
@@ -460,9 +495,10 @@ local function FollowPass()
 
     if targetSpawn.Name() == nil then
         -- Their breadcrumb trail outlives them leaving; walk it out first, which puts us at the
-        -- spot where they vanished before we decide what to do about it.
+        -- spot where they vanished before we decide what to do about it. The walking is the
+        -- service's, so the pass goes on down the chain (see the notes on this module).
         if Movement.IsFollowing(Travel._.followSpawnId) then
-            return true
+            return false
         end
 
         -- A target held by spawn id is not coming back once that id stops resolving -- it died,
@@ -593,12 +629,11 @@ local function FollowPass()
         Travel._.waitingReported = false
         Travel._.followSpawnId = followSpawnId
         Travel._.stuck.checking = false
-        Movement.Follow(followSpawnId, {
+        Movement.Follow(followSpawnId, owned({
             distance = distance,
             resumeDistance = resumeDistance,
-            requireSight = holdNeedsSight(),
-            owner = Travel.key
-        })
+            requireSight = holdNeedsSight()
+        }))
         return true
     end
 
@@ -621,8 +656,11 @@ local function FollowPass()
         return true
     end
 
-    -- mid-run: nothing weaker should start moving us somewhere else
-    return true
+    -- Mid-run, and the running is the service's: whatever is below can have the pass. Nothing down
+    -- there can take our feet (the task carries the band that asked for it), and what it can do on
+    -- the move is the point -- a run buff that lapsed while we walked is clicked back on while we
+    -- walk. See the notes on this module.
+    return false
 end
 
 ---One pass of standing where we were told to stand.
@@ -651,9 +689,10 @@ local function AnchorPass()
         return false
     end
 
-    -- already walking back to it, let that finish
+    -- already walking back to it, let that finish -- and let the chain below have the pass while
+    -- it does, the same way a follow does (see the notes on this module)
     if Movement.IsMovingTo() and Movement.IsOwnedBy(Travel.key) then
-        return true
+        return false
     end
 
     local myY = mq.TLO.Me.Y()
@@ -662,7 +701,7 @@ local function AnchorPass()
 
     if Geometry.Distance2D(myY, myX, Travel._.anchor.y, Travel._.anchor.x) > anchorRadius then
         Movement.StopFor(Travel.key)
-        Movement.MoveToLoc(Travel._.anchor.y, Travel._.anchor.x, { owner = Travel.key })
+        Movement.MoveToLoc(Travel._.anchor.y, Travel._.anchor.x, owned({}))
         return true
     end
 
@@ -722,7 +761,7 @@ local function ClickZonePass()
         local switchY = mq.TLO.Switch("nearest").Y()
         local switchX = mq.TLO.Switch("nearest").X()
         if switchY ~= nil and switchX ~= nil then
-            Movement.MoveToLoc(switchY, switchX, { distance = 20, timeoutMs = 10000, owner = Travel.key })
+            Movement.MoveToLoc(switchY, switchX, owned({ distance = 20, timeoutMs = 10000 }))
         end
         Travel._.clickZone.step = clickZoneSteps.clickingSwitch
     else
@@ -765,7 +804,7 @@ local function WalkZonePass()
 
     if walkZone.taskId == 0 then
         walkZone.taskId = Movement.MoveToLoc(walkZone.destY, walkZone.destX,
-            { distance = 5, timeoutMs = 20000, owner = Travel.key })
+            owned({ distance = 5, timeoutMs = 20000 }))
         return true
     end
 
@@ -783,8 +822,13 @@ end
 
 ---One pass of carrying out whatever is standing: a procedure in progress first, then whichever
 ---order is standing. Called by exactly one state per pass -- see the notes on this module.
+---@param priority? number the band the calling state is registered at, which is the band the
+---movement gets asked for at. Left out, the move is unranked and anything that weighs itself
+---against it wins.
 ---@return boolean isBusy
-function Travel.Drive()
+function Travel.Drive(priority)
+    Travel._.priority = priority
+
     -- Getting through a zone line is the one kind of thing here that is genuinely part-way done
     -- rather than a decision to re-make, so a procedure in progress comes first and finishes
     -- before anything else is asked.

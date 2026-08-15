@@ -72,8 +72,10 @@ end
 --- gem: number, memorize into exactly this gem, whatever is in it -- for a caller that named one
 --- memGem: number, where a spell goes when no gem is free and the caller named none
 --- settleMs / readyWaitMs / memorizeRetryMs: timings, all defaulted
---- mayStopMovement: fun(priority, movementOwner): boolean -- may this cast cancel the movement
----   task that is running? Defaults to yes; the host installs the real policy.
+--- mayStopMovement: fun(priority, movementOwner, castOwner, movementPriority): boolean -- may this
+---   cast cancel the movement task that is running? Defaults to yes; the host installs the real
+---   policy. The movement's own band is passed because not every mover is a state the host can
+---   look up by name (see `Movement.GetPriority`).
 ---@return CastTask
 function CastTask.new(subject, options)
     options = options or {}
@@ -302,7 +304,12 @@ local function holdStill(self)
     -- Cancel the movement that is running, if this cast outranks whoever asked for it. A task
     -- we may not cancel is not fatal: a follow that has caught up is holding position with the
     -- keys released, which is standing still, so the check below can still succeed.
-    if Movement.IsActive() and self._.mayStopMovement(self.priority, Movement.GetOwner(), self.owner) then
+    --
+    -- A **parked** task is that same standing still, and cancelling one buys nothing while costing
+    -- everything it was holding -- a follow's trail above all, which is the only known-walkable
+    -- route to whoever we are with. So the cancel is for movement that is actually in the way.
+    if Movement.IsActive() and not Movement.IsParked()
+        and self._.mayStopMovement(self.priority, Movement.GetOwner(), self.owner, Movement.GetPriority()) then
         DebugLog("Stopping movement owned by [" .. tostring(Movement.GetOwner()) .. "] to cast")
         Movement.Stop()
     end

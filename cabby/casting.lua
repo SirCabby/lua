@@ -39,16 +39,22 @@ local function DebugLog(str)
 end
 
 ---@param stateMachine StateMachine
----@return function arbiter fun(castPriority, movementOwner, castOwner): boolean
+---@return function arbiter fun(castPriority, movementOwner, castOwner, movementPriority): boolean
 local function buildMovementArbiter(stateMachine)
-    return function(castPriority, movementOwner, castOwner)
+    return function(castPriority, movementOwner, castOwner, movementPriority)
         -- nobody has claimed the movement task, so there is no one to overrule
         if movementOwner == nil then return true end
 
         -- a behavior always gets to stop its own movement to cast
         if castOwner ~= nil and movementOwner == castOwner then return true end
 
-        local movementPriority = stateMachine:GetPriority(movementOwner)
+        -- The band the mover declared when it asked, and only then the chain looked up by name.
+        -- Not every mover is a state: `cabby.travel` carries the follow for FollowState and for
+        -- FleeState, at two different bands, and owns the task under its own key -- which the
+        -- lookup below answers `nil` for. That nil read as "unranked, overrule it", so every cast
+        -- there is -- a buff two bands weaker included -- cancelled the follow, stood the
+        -- character still and left the group to walk off without it (2026-08).
+        movementPriority = movementPriority or stateMachine:GetPriority(movementOwner)
         -- movement started by something that is not a registered state (a /cmove by hand, say)
         if movementPriority == nil then return true end
 

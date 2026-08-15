@@ -713,13 +713,23 @@ end
 
 ---Is what is in the air still worth finishing?
 ---@param code string|nil the hold code this pass, if any
+---@param isCast? boolean whether what is in the air is a cast rather than a hand-off
 ---@return string|nil reason to call it off, nil to let it finish
-local function reasonToAbandon(code)
+local function reasonToAbandon(code, isCast)
     if code == "fighting" then return "a fight started" end
     if code == "dead" then return "we died" end
     -- nothing survives a zone line: a cast is interrupted by the door and a hand-off is a trade
     -- window with the other half of it in a zone we have left
     if code == "zoning" then return "we zoned" end
+
+    -- The group has moved off with a cast up that cannot survive it -- the same thing the hold
+    -- above says about starting one, said about the one already going. A summon waiting out a run
+    -- for the stillness it needs is a summon that pins the character and starves the bands below
+    -- it while the group leaves, and it is no more castable at the end of the wait than it was at
+    -- the start. Only a cast: a hand-off is its own sequence, with a window open and an item on the
+    -- cursor, and calling one off is not the same conversation.
+    if isCast and code == "moving" and Casting.IsHoldingStill() then return "we started moving" end
+
     return nil
 end
 
@@ -1260,7 +1270,7 @@ function PetSetupState.Go()
         local status, outcome, reason = Casting.GetResult(castId)
 
         if status == nil then
-            local abandon = reasonToAbandon(code)
+            local abandon = reasonToAbandon(code, true)
             if abandon ~= nil then
                 DebugLog("Calling off the cast: " .. abandon)
                 PetSetupState._.lastResult = "called off: " .. abandon

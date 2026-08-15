@@ -1189,6 +1189,15 @@ end
 local function reasonToAbandon(code)
     if code == "fighting" then return "a fight started" end
 
+    -- We have started moving with a cast up that cannot survive it. The same judgment `castableNow`
+    -- makes before choosing one, made again about the one already going: the group is on its way and
+    -- this buff is not worth being left behind for. Letting it stand is worse than losing it either
+    -- way -- the cast is lost to the first step regardless, and what it costs in the meantime is the
+    -- character rooted to the spot holding a target and a gem while the group walks out of range.
+    -- Asked of the casting service because it is the cast in the air that answers it: a bard's song
+    -- and an instant clicky pin nobody and are left alone.
+    if code == "moving" and Casting.IsHoldingStill() then return "we started moving" end
+
     local target = BuffState._.buffTarget
     if target == nil or target.id == nil then return nil end
 

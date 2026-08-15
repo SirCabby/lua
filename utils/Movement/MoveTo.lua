@@ -38,6 +38,7 @@ end
 --- - nudgeAfter: stalled windows before an unstick attempt, default 2
 --- - failAttempts: consecutive failed unstick attempts before giving up, default 5
 --- - owner: key of whoever asked for the move
+--- - priority: that owner's place in the host's priority chain (see Movement.GetPriority)
 ---@return MoveTo
 function MoveTo.new(options)
     local self = setmetatable({}, MoveTo)
@@ -45,6 +46,7 @@ function MoveTo.new(options)
 
     self.key = MoveTo.key
     self.owner = options.owner
+    self.priority = options.priority
 
 ---@diagnostic disable-next-line: inject-field
     self._ = {}

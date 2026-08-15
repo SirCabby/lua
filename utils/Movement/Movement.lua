@@ -18,6 +18,11 @@ local Stick = require("utils.Movement.Stick")
 ---`Pulse()` must be called every frame by the host loop, not only by whichever behavior
 ---started the task; that is what guarantees the keys are released when a task ends and that
 ---nothing keeps running while we are stunned, mezzed, casting or sitting.
+---
+---A task carries the **band** of whoever asked for it, the same way a cast does, because standing
+---still and moving are two behaviors wanting the same character at once and the answer to that is
+---never "whoever asked last": see `castHoldsUs` below and `CastTask.HoldStill` at the other end of
+---the same question.
 ---@class Movement
 local Movement = {
     author = "judged",
@@ -33,6 +38,7 @@ local Movement = {
         nextId = 1,
         status = MovementStatus.idle,
         blockedReason = nil,
+        castArbiter = nil,
         last = { id = nil, taskType = nil, status = nil, reason = nil, owner = nil }
     }
 }
@@ -40,6 +46,25 @@ local Movement = {
 ---@param str string
 local function DebugLog(str)
     Debug.Log(Movement.key, str)
+end
+
+---Is the cast bar that is up right now one this task has to stand still for?
+---
+---Moving loses a cast, so the character cannot do both -- and which of the two gives way is a
+---question of *whose* cast and *whose* movement, not of which happened to start first. The host
+---knows the bands; this module does not, so it asks (`Movement.Init`'s `castArbiter`) and defaults
+---to standing still for anything, which is what this did before there was anyone to ask.
+---
+---The answer that matters is the one about a **weaker** cast: a buff that cannot be cast while the
+---group is running is a buff that fails and says so, not a reason to stop following. Pinning the
+---character for it is how a follower ends up watching its group leave -- the cast is not lost by
+---walking away, it is thrown away by standing there.
+---@param task MovementTask the active task, which carries the band that asked for it
+---@return boolean holdsUs
+local function castHoldsUs(task)
+    local arbiter = Movement._.castArbiter
+    if arbiter == nil then return true end
+    return arbiter(task.owner, task.priority) == true
 end
 
 ---Conditions under which we refuse to drive the character, the MQ2MoveUtils "autopause"
@@ -56,8 +81,11 @@ local function blockedReason(task)
     if mq.TLO.Me.Mezzed() ~= nil then return "mezzed" end
     if mq.TLO.Me.Charmed() ~= nil then return "charmed" end
 
-    -- bards move while they sing, everyone else would interrupt the cast
-    if mq.TLO.Me.Casting() ~= nil and mq.TLO.Me.Class.ShortName() ~= "BRD" then return "casting" end
+    -- bards move while they sing, and everyone else stands still for a cast worth more than
+    -- whatever this task is doing -- which is a question for whoever knows the bands
+    if mq.TLO.Me.Casting() ~= nil and mq.TLO.Me.Class.ShortName() ~= "BRD" and castHoldsUs(task) then
+        return "casting"
+    end
 
     if state == "SIT" or state == "DUCK" then
         -- A task with nothing to do this frame is not a reason to be on anyone's feet. A follow
@@ -97,7 +125,11 @@ end
 ---Release the movement keys, dropping anything we believe about their state. Call once at
 ---startup, where a previous run may have left a key down. Main loop only -- this one does
 ---talk to the client immediately.
-function Movement.Init()
+---@param options? table castArbiter: fun(owner: string|nil, priority: number|nil): boolean --
+---does the cast in the air outrank this movement task? Defaults to yes for every cast, which is
+---the answer for a host with no priority chain to compare them in (see `castHoldsUs`).
+function Movement.Init(options)
+    Movement._.castArbiter = (options or {}).castArbiter
     Locomotion.ForceReleaseAll()
     Movement.Stop()
 end
@@ -283,6 +315,19 @@ end
 function Movement.GetOwner()
     if Movement._.task == nil then return nil end
     return Movement._.task.owner
+end
+
+---The band the active task was asked for at, for whoever has to weigh moving against something
+---else the character could be doing instead -- a cast, above all.
+---
+---Published rather than looked up from the owner, because the owner is a *key* and not every mover
+---is a state: `cabby.travel` carries the follow for two different states at two different bands, and
+---a lookup by its name lands on nobody. A caller that could not rank it read that as "no rank at
+---all" and overruled it, which is how a follow got cancelled by the buff below it (2026-08).
+---@return number|nil priority nil when nothing is running, or when the mover declared no band
+function Movement.GetPriority()
+    if Movement._.task == nil then return nil end
+    return Movement._.task.priority
 end
 
 ---@param owner string

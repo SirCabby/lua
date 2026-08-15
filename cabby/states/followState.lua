@@ -160,7 +160,7 @@ function FollowState.Init()
                 Movement.StopFor(FollowState.key)
                 local spawnId = mq.TLO.Spawn("pc radius 200 " .. speaker).ID()
                 if spawnId ~= nil and spawnId > 0 then
-                    Movement.MoveToSpawn(spawnId, { owner = FollowState.key })
+                    Movement.MoveToSpawn(spawnId, { owner = FollowState.key, priority = FollowState.priority })
                 else
                     Commands.GetCommandSpeak(FollowState.eventIds.moveToMe):speak("M2m target [" .. speaker .. "] out of range, aborting...")
                 end
@@ -231,10 +231,15 @@ function FollowState.Init()
 end
 
 ---One pass: carry out whatever movement order is standing, at this band.
+---
+---The band goes down with the order, because the travel core is not a state and has none of its
+---own: what a follow of ours is worth -- against a cast that wants us standing still, above all --
+---is what *this* state is worth, and travel mode asking for the same follow at the passive band is
+---worth something else entirely.
 ---@return boolean isBusy
 ---@diagnostic disable-next-line: duplicate-set-field
 function FollowState.Go()
-    return Travel.Drive()
+    return Travel.Drive(FollowState.priority)
 end
 
 ---@return string description of what this state is doing, for the page and /state

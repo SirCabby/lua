@@ -187,7 +187,9 @@ function FleeState.Go()
         FleeState._.petCalledAtMs = nil
     end
 
-    Travel.Drive()
+    -- At this band, which is what the running is worth while the mode is on: a cast that would
+    -- hold the character still for it has to outrank travel mode to do so, and nothing does
+    Travel.Drive(FleeState.priority)
 
     return true
 end

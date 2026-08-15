@@ -128,6 +128,19 @@ is entitled to. The windows a state keeps (retry throttles, a grace before undoi
 settle over a genuinely flickery world read) pace only that state's own actions, and never
 measure the scheduler.
 
+**What the ordering owes a state is frames; what it owes the character is arbitration.** Two jobs
+can want the same character at once without either being wrong to ask — casting wants stillness and
+following wants feet — and the chain cannot express that, because the state holding the frame is not
+necessarily the one holding the character. So the two services that own a shared, exclusive
+resource take the band with the request and settle it themselves: the casting service (one cast,
+the stronger request wins, the floor) and the movement service (one task, carrying the band that
+asked for it, `Movement.GetPriority`). Both sides of the cast/movement question are that same
+comparison — a cast cancels the move it outranks, a move walks out of the cast it outranks — and
+both are wired from `cabby/casting.lua` and `cabby/movement.lua`, since `utils/` knows nothing
+about bands. This is what lets a state yield the frames its own service is already carrying without
+handing anything else away: following reports busy for the passes where it decides and hands the
+rest down, which is how an instant clicky gets cast on the run without a band of its own.
+
 **Every state keeps the same contract** — written out in full in `states/baseState.lua`, which is
 the thing to read before writing one. In short, `Go()` is one pass of:
 
@@ -220,7 +233,8 @@ cabby/
                       (follow band) or FleeState (passive band), whichever the chain gives the
                       frame to
   stateMachine.lua    priority-chain loop + per-frame services + priority gates (instance class)
-  movement.lua        wiring only: registers the movement service and /cmove
+  movement.lua        wiring only: registers the movement service, tells it which casts a move
+                      stands still for, and /cmove
   casting.lua         wiring only: casting service, its priority gate, movement arbiter, /ccast
   giving.lua          wiring only: registers the giving service and /cgive
   commandQueue.lua    service: runs command lines pushed from ImGui callbacks, a frame later
@@ -507,10 +521,23 @@ Design rules that matter when adding a caller:
 - **One task at a time, one owner of the keys.** Starting a task cancels the previous one.
   Pass `owner = <state key>` and clean up with `Movement.StopFor(owner)`, which no-ops when
   a higher-priority state has since taken movement over — `Movement.Stop()` is unconditional.
+- **A task carries the band that asked for it**, alongside the owner: `priority = <the state's
+  band>`, published as `Movement.GetPriority()`. Moving and standing still are two behaviors
+  wanting the same character at once, and the answer to that is never "whoever asked last" — so
+  both sides of it are settled by comparing bands. A cast weighs itself against the move
+  (`CastTask.HoldStill`, above), and the move weighs itself against the cast: the pause gate holds
+  the character for a cast bar only when that cast **outranks the task**, so a heal parks the
+  follow below it while a buff does not. A buff that cannot be cast while the group is running is
+  a buff that fails and says so, not a reason to stop following — losing it to the walking is what
+  it is worth, and pinning the character for it is how a follower ends up watching its group leave.
+  A cast bar with nothing of ours committed behind it is the player's own hand cast and holds
+  everybody, ranked or not. The comparison is cabby's, so `utils/Movement` takes it as an injected
+  arbiter (`Movement.Init{ castArbiter }`, supplied by `cabby/movement.lua`) and defaults to
+  standing still for anything, which is the answer for a host with no chain to compare in.
 - **The service must be pulsed every frame**, which is why it is a service and not something
   each state pokes. Keys get released the frame a task ends, and the pause gate (dead, bind,
-  feign, stun, mez, charm, mid-cast for non-bards; stands up out of sit/duck) is enforced
-  even while the state that asked for the move is starved.
+  feign, stun, mez, charm, a cast that outranks the task for non-bards; stands up out of sit/duck)
+  is enforced even while the state that asked for the move is starved.
 - **Rooted holds a stick without ending it.** A root is the world refusing the run, not a reason
   to give the task up or to lean on the keys against it: `Stick` releases every key, keeps facing
   the target (turning is the one thing a root leaves), and reports `blocked` until the root fades
@@ -552,9 +579,9 @@ Design rules that matter when adding a caller:
   starts with no trail and a straight line through whatever is between us. The trail, the task id
   and the hysteresis all survive the retune — which threshold is in force is about what we were
   doing a moment ago, and that did not change because the numbers did. Two things it buys: a caster
-  is not parked in the melee ring for every ae and rampage, and a follower that is standing still is
-  a follow band that is *not busy*, so buffing and resting (below follow in the chain) get frames
-  for as long as the fight walks around. It can only ever reach a character with nothing to do in
+  is not parked in the melee ring for every ae and rampage, and a follower held out of the ring is
+  one standing still, which is when the buffing and resting below it can do the whole of their job
+  rather than the part that survives running. It can only ever reach a character with nothing to do in
   the fight — anything with a job in it is busy at a band above follow and never drives the travel
   core at all — which is why it is on by default. A run is not a fight: `Status.IsFleeing` holds the
   base distance whatever the setting says, since the follower that spread out on the way to the zone
@@ -573,7 +600,8 @@ Design rules that matter when adding a caller:
   out ends it** and the follower parks rather than beelining at a target it cannot see; and an
   unreadable `LineOfSight` is read as seen, the same lenient reading the mez state uses, so a
   client declining to answer never marches anybody anywhere. Sight rides inside `WithinHold`, so
-  `IsParked` answers it too and the follow band is honestly busy while it walks. It reaches the same
+  `IsParked` answers it too: a follow walking for a view of them is honestly walking rather than
+  parked, which is the reading everything else about the follow is built on. It reaches the same
   character the relax does and no other, and it is off on a run for the same reason the relax is.
 - **Parking stops the walking, not the recording.** The target's route while we sit is precisely the
   part that is *not* history yet, so a parked follow keeps banking it and walks it when they move
@@ -667,14 +695,23 @@ Rules that matter when adding a caller:
   behavior starting to move again.
 - **Standing still is arbitrated, not assumed.** A cast that outranks whoever owns the movement
   task cancels it; one that does not just waits, which is usually fine — a follow that has caught
-  up is holding position with the keys released, and that is standing still. The comparison needs
-  cabby's priorities, so the service takes the policy as an injected function and `cabby/casting.lua`
-  supplies it from `StateMachine:GetPriority`. Bards are exempt for songs (they sing on the move,
-  and the movement pause gate knows it), as is anything with a cast time under 100 ms, because
-  there is no cast bar to lose. Both exemptions live on the *subject*
-  (`CastSubject:RequiresStillness`) rather than on the task, so a caller can ask which of the
-  things it might cast movement would actually cost it — which is how the buff state keeps firing
-  instant clickies while the group runs.
+  up is holding position with the keys released, and that is standing still. A **parked** task is
+  not cancelled even by a cast that could: it is already standing still, so cancelling buys nothing
+  and costs everything the task was holding — a follow's trail above all, which is the only
+  known-walkable route to the group. The comparison needs cabby's priorities, so the service takes
+  the policy as an injected function and `cabby/casting.lua` supplies it. What it compares is the
+  band the **movement task itself** declares (`Movement.GetPriority`), and only then a lookup of the
+  owner's name in the chain: not every mover is a state, and the one that is not is the one that
+  matters — `cabby.travel` carries the follow for FollowState and for FleeState, at two different
+  bands, under its own key. That key resolved to no band at all, which read as "unranked, overrule
+  it", so every cast there was — a buff two bands weaker included — cancelled the follow, stood the
+  character still and let the group walk off without it (2026-08, from the travel split in
+  2026-07; the fix is that travel takes the driving state's band and hands it to the task).
+  Bards are exempt for songs (they sing on the move, and the movement pause gate knows it), as is
+  anything with a cast time under 100 ms, because there is no cast bar to lose. Both exemptions
+  live on the *subject* (`CastSubject:RequiresStillness`) rather than on the task, so a caller can
+  ask which of the things it might cast movement would actually cost it — which is how the buff
+  state keeps firing instant clickies while the group runs.
 - **Requests never touch the client; only `Pulse()` does** — targeting, `/memspell`, `/cast`,
   `/stopcast`, all of it. Same rule as movement, same reason: a cast asked for from an ImGui
   button or a chat handler must not run EQ commands mid-frame. `Interrupt()`/`StopFor()` record
@@ -2326,9 +2363,12 @@ The order things are decided in, every pass that looks:
    moving, because the casting service would wait to stand still holding a target and a gem and a
    state at the bottom of the chain can afford to ask again later; an instant clicky is over in the
    frame it started, so there was never anything for movement to cost and it goes off on the run.
-   Two things wait for the group to stop anyway: the target-borrowing re-read, whose answer could
-   only lead to a cast that is held back regardless, and an order's idle clock, since an order ends
-   when there is nothing left to *give* rather than when there is nothing we are allowed to cast.
+   The same judgment is made again about a cast **already going**: starting to move with a bar up
+   calls it off, because the first step loses it regardless and what standing there costs in the
+   meantime is the group. Two things wait for the group to stop anyway: the target-borrowing
+   re-read, whose answer could only lead to a cast that is held back regardless, and an order's idle
+   clock, since an order ends when there is nothing left to *give* rather than when there is nothing
+   we are allowed to cast.
 2. **Anything somebody asked for by name** — see Requests below.
 3. **The first slot somebody is missing.** List order is the whole priority — unlike healing there
    is nobody to rank, since everyone standing here is equally unbuffed, so the ordering that
@@ -2342,8 +2382,14 @@ case the old hail macros existed for: an order is not one cast but "give them ev
 missing", so it stays open until a run of casts goes quiet rather than ending on the first one.
 
 **This state gets its frames because follow yields.** At `Priorities.buff` it sits below following,
-which reports busy only while it is actually walking — so buffing happens exactly when the group is
-standing still, without any of the `- 1` band juggling the two dps states needed.
+and following reports busy for the passes where it is *deciding* — starting a follow, calling one
+stuck, going through a zone line — rather than for the walking, which is the movement service's and
+needs no frame of anybody's. So the group standing still is when the whole of this state's job is
+available, and the group on the move is when the half of it that survives running is: the instant
+clicky, which is exactly the buff a group on the move wants (a run buff lapses mid-run, and a
+follower that could only click it back on from a standstill is a follower that never gets another
+one — it is behind, so it never parks). None of the `- 1` band juggling the two dps states needed:
+what may be done on the run is a question about the cast, and the cast is what answers it.
 
 ### Requests — `buff <type>` (`actions/buffTypes.lua`)
 
@@ -3028,8 +3074,12 @@ state needed it. The chain serializes the two drivers: flee sits above follow an
 long as it is enabled, so there is never a pass in which both run, and neither state knows the
 other exists. `anchor` still holds during a flee, since it is a standing order in the same core.
 A cast put in the air by hand (`/ccast`) mid-run pauses the walk at the movement service — which
-refuses to drive through a cast — and the run resumes when it lands, which replaces the old
-"follow is exempt from flee but starved by casting" gate interaction.
+refuses to drive through a cast that outranks the move, and an order typed by the user outranks
+everything — and the run resumes when it lands, which replaces the old "follow is exempt from flee
+but starved by casting" gate interaction. That is also why the driving state hands its band down
+with the order (`Travel.Drive(priority)`): the same follow is worth the passive band while the mode
+is on and the follow band when it is not, and everything that weighs a move against a cast weighs
+that number.
 
 **Services are not suppressed.** Movement, casting, the command queue, character discovery and
 combat pulse every frame whatever the chain is doing, which is what keeps `flee off` reachable from

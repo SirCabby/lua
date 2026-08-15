@@ -33,6 +33,15 @@ workaround.
   flee drives the shared traveling core itself at the passive band instead of gating the chain
   and exempting follow (that exemption mechanism existed and was removed 2026-07 at the user's
   direction; do not reintroduce it).
+- **The chain hands out frames; the services arbitrate the character.** Two jobs can want the same
+  character at once without either being wrong to ask, and the state holding the frame is not
+  necessarily the one holding the character — so casting (one cast) and movement (one task) each
+  take the asker's **band** with the request and settle competing claims by comparing bands, in
+  both directions: a cast cancels the move it outranks, a move walks out of the cast it outranks
+  (`Movement.GetPriority`, `Casting.IsHoldingStill`). A state may therefore hand down the frames
+  its own service is already carrying — following yields while the movement service walks, which
+  is what lets buffing click an instant clicky on the run — and nothing weaker can take the
+  character out from under it, because the band on the request is what stops that, not the frame.
 - **No give-up timers.** States re-derive their answer every pass and drop work the moment it
   stops being right, so nothing needs rescuing by clock. The only legitimate timers in a state or
   service: throttling/pacing its *own* commands and expensive reads; an **evidence window**
@@ -54,6 +63,15 @@ the chain looked away (scheduler time leaking into states). The actual bug was C
 the fight for a beat between mobs — a lying busy signal — and the actual fix was fight
 continuity in Combat. When a lower state misbehaves during upper-state activity, audit the
 upper signal first; do not add defenses downstream.
+
+Followers stopped to buff and lost the group (2026-08). The cast/movement arbiter ranked a move by
+looking its **owner key** up among the registered states, and since the 2026-07 travel split the
+follow is owned by `cabby/travel.lua`, which is a core and not a state: the lookup answered `nil`,
+`nil` was read as "unranked, overrule it", and every cast there was — a buff two bands weaker
+included — cancelled the follow, stood the character still and let the group walk off. The fix was
+the band travelling with the request (`Travel.Drive(priority)` → the movement task → both sides of
+the arbitration). The smell to notice: a priority comparison that resolves to `nil` and treats that
+as the weakest thing there is, when what it actually means is "I could not find out".
 
 ## Verifying changes
 
