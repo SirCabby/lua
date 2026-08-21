@@ -134,7 +134,8 @@ local function onOutcomeLine(outcome, isLate)
     last.reason = CastOutcome.Describe(outcome)
 end
 
----@param options? table movementArbiter: fun(castPriority, movementOwner): boolean, plus any
+---@param options? table movementArbiter: fun(castPriority, movementOwner): boolean;
+---listenPatterns: fun(pattern: string): string[], the host's chat-pattern expander; plus any
 ---`Casting.settings` keys
 function Casting.Init(options)
     if Casting._.isInit then return end
@@ -146,7 +147,13 @@ function Casting.Init(options)
     -- Registered here rather than at require time: requiring a module should not reach into the
     -- client. The host's main loop has to be calling mq.doevents() for these to arrive, which is
     -- also what puts them on the main loop, ahead of this service's pulse.
-    CastOutcome.RegisterEvents(onOutcomeLine)
+    --
+    -- `listenPatterns` is how a host says what a pattern has to be registered as to be heard at
+    -- all. It matters more here than anywhere: every outcome line begins with literal text, which
+    -- is the one shape a timestamped client loses silently, so without it this service hears no
+    -- fizzle, no interrupt, no resist and no refusal -- and calls every instant click a success
+    -- because nothing complained.
+    CastOutcome.RegisterEvents(onOutcomeLine, options.listenPatterns)
 
     Casting._.isInit = true
 end
@@ -311,6 +318,66 @@ end
 ---@return string|nil refusedReason
 function Casting.CastAlt(name, options)
     return Casting.Cast(CastSubject.Alt(name), options)
+end
+
+---Use something instant, right now, and answer only whether the command went out.
+---
+---The other half of this service, for the callers a cast task is the wrong shape for. A task is
+---machinery for a cast that takes *time*: it pins the character still, holds a priority floor over
+---everything weaker, and spends a beat afterwards waiting to be contradicted, because for a spell
+---with a bar the client's complaint is the only evidence there is that the cast was lost. None of
+---that describes a clicky that goes off in the frame it is fired -- no bar to lose, nothing to
+---stand still for, no window in which it can be taken away -- and making one pay for it anyway is
+---what turns a manastone into one click every second and a half.
+---
+---**What the caller gives up is the verdict.** This reports that the command was issued and
+---nothing whatever about what it did, which is only a fair trade for a caller that can see the
+---result in the world for itself -- a health for mana trade watching both bars move is the worked
+---example, and it is a better witness than any chat line, because it is the thing it actually
+---wanted. A caller with no such reading uses `Cast` and reads the outcome it reports.
+---
+---Nothing is queued and nothing is held: it fires or it refuses, and a refusal is answered by
+---asking again next pass. Main loop only, like everything else here that talks to the client.
+---@param subject CastSubject something instant -- a clicky, an AA, an instant spell
+---@param options? table owner: string, whose use this is, for reporting
+---@return boolean fired
+---@return string|nil refusedReason why not, when it did not
+function Casting.Use(subject, options)
+    options = options or {}
+
+    -- The one thing that would make this dishonest: anything that draws a bar has to be watched,
+    -- and watching is exactly what the task is for
+    if not subject:IsInstant() then
+        return false, subject:Describe() .. " draws a cast bar"
+    end
+
+    -- A cast already in the air is a click thrown away. The server refuses a second cast from a
+    -- character that is already casting one, and for a click that draws no bar it refuses it
+    -- without telling anybody -- so the use would simply vanish. Both halves of "already casting"
+    -- are asked: the one this service started, and the one the player started by hand
+    local incumbent = Casting._.task or Casting._.pending
+    if incumbent ~= nil then
+        return false, "already casting " .. incumbent:Describe()
+    end
+    if mq.TLO.Me.Casting.ID() ~= nil then
+        return false, "already casting"
+    end
+
+    if not subject:IsAvailable() then
+        return false, "do not have " .. subject:Describe()
+    end
+
+    -- An item or AA timer is an answer rather than a wait, which is why there is no grace here
+    -- and no equivalent of `readyWaitMs`: the caller comes back next pass or picks something else
+    if not subject:IsReady() then
+        return false, subject:Describe() .. " is not ready"
+    end
+
+    if not subject:Fire() then
+        return false, "could not work out how to use " .. subject:Describe()
+    end
+
+    return true, nil
 end
 
 ---One frame of casting. **Call this every frame from the host's main loop, and from nowhere

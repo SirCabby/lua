@@ -425,11 +425,14 @@ first load, so nobody's pet list or gear counts are lost to the rename. What lan
   own cursor is never taken, and an abandoned hand-off cancels the window and stows what it moved.
   `/cgive` drives it by hand.
 - ~~**Restraint**~~ — dead, in a fight (`petsetupcombat`, off by default) or moving holds everything,
-  and a fight starting calls off what is in the air. A vanished pet gets a five second grace before
-  it is replaced, because the world does not say whether it died or was let go and `/pet get lost`
-  must not be undone on the next frame. Casts for a gear slot are bounded by what the pet is owed,
-  so a summon that lands and conjures nothing is not repeated forever.
-- ~~**Commands**~~ — `summonpet` and `gearpet` as orders (both outrank the switches and the grace),
+  and a fight starting calls off what is in the air. A vanished pet is replaced on the pass that
+  finds it missing; the one wait left is for a pet still crossing a zone line behind us (2026-08-20,
+  `zonedPetSettleMs`), because there "no pet" means *not yet*. The five second grace that used to
+  cover a hand `/pet get lost` was removed with it: the summoning switch is the durable way to say
+  "no pet", and a grace only delayed the same argument by five seconds. Casts for a gear slot are
+  bounded by what the pet is owed, so a summon that lands and conjures nothing is not repeated
+  forever.
+- ~~**Commands**~~ — `summonpet` and `gearpet` as orders (both outrank the switches and the wait),
   `petkeeping`, `petsummoning`, `petgearing` and `petsetupcombat` as switches, `petaction` over both
   lists, `/cpet` for status and for `off`/`gear`/`summon`. Only `petsetupcombat` changed name with
   the split, because "pet" and "combat" in one word now reads like the pet dps master switch. An
@@ -667,6 +670,104 @@ in the heal state's pass. **In-game verification still pending** — see Verify.
 reserved in `priorities.lua` for a curer with no healer to arbitrate against; see ARCHITECTURE.md,
 "Curing".
 
+**Canni: done** (`states/canniState.lua`, `configs/canniStateConfig.lua`,
+`ui/states/canniStateMenu.lua`; the model is described in ARCHITECTURE.md, "Canni state"). Trading
+health for mana, at a new band of its own — `Priorities.canni` (74), above the damage rotations and
+below every job that is the fight itself. What landed:
+
+- ~~**One list for the whole family**~~ — a shaman's cannibalize line and the Cannibalization AA, a
+  magician's modulation rods, a manastone, a necromancer's Death Bloom. They are one job because the
+  trade is one trade, and a slot holds any of them because it holds an *action*.
+- ~~**Found by effect, not by heading**~~ — `Spells.ConvertsToMana` (SPA 0 negative and SPA 15
+  positive, both signs read) with `Spells.manaConversions` as the picker's narrowed list. No category
+  in the book collects these, and the one that sounds right (Mana Flow) is full of the regen buffs
+  that cost nothing. Same reasoning as the control set.
+- ~~**Bounded from both ends**~~ — `min_hp_pct` (85) and `max_mana_pct` (70), plus `cannicombat` for
+  whether a fight is a reason to stop. The floor is a *pre*-use gate: a trade is meant to hurt, and a
+  floor read as "and where would that leave me" refuses a shaman's own AA at every setting worth
+  picking. The ceiling is what hands the frames back to the rotation below, which is what makes a
+  state this strong safe to have.
+- ~~**And the health end is a latch**~~ (2026-08-20, found in game) — `resume_hp_pct` (95) with
+  `_.recovering` between the two. The first version had one threshold, and one threshold cannot work
+  when the action is what moves the reading across it: trade to the floor, sit, take one regen tick
+  back over it, stand up and spend that tick, sit again — a stand and a sit per tick, with the
+  out-of-combat regen bonus never applying long enough to matter. Both edges are read from the world
+  every pass and the trigger runs ahead of every hold, so a pass held by the mana ceiling still
+  watches it. The two are kept in order in both directions and again on read: a resume point under
+  the floor would be a latch that could never clear.
+- ~~**And what the server will not take in combat**~~ (2026-08-20, found in game) — a manastone's
+  click carries `can_cast_in_combat = false`, refused against the caster's aggro count rather than
+  against any notion of "a fight". No TLO exposes the flag, so `CastOutcome` grew `inCombat` /
+  `outOfCombat` over the four client wordings, and the state remembers the slot that earned one and
+  skips it while `Combat.GetHaterIds` is non-empty. **Adding the lines was not enough**: they were
+  never heard, and neither was any other outcome line — see the timestamp fix below, which is what
+  actually stopped the spam.
+- ~~**And then read off the spell instead of learned**~~ (2026-08-20) — `CanCastInCombat` /
+  `CanCastOutOfCombat` added to `MQ2SpellType` (they were always in `SPELL`, beside the already
+  exposed `CanMGB`), so `Spells.CombatRestriction` answers before anything is fired. Both flags are
+  read, since the ordinary spell carries both set and only the lopsided pairs are refused. The
+  learned path stays as the fallback for a client that does not carry the members — **needs an MQ
+  rebuild to take effect**. The read is through `pcall`, because a member the build does not carry
+  is absent rather than nil-answering; guarding the value and not the access broke the state page,
+  and the overlay reported it as `Missing EndChild()` since the error was raised inside ActionUI's
+  child region.
+- ~~**An interrupted burst is not a spent one**~~ (2026-08-20, found in game) — the recovery latch
+  read the projected health, so uses fired and never landed (refused, preempted, lost) pushed it
+  under the floor and latched a run that had not actually cost anything: the ledger cleared, the bar
+  was where it always was, and the job waited to climb to a resume point it never fell from. The
+  latch now reads the settled bar; the projection keeps its own job, which is deciding whether to
+  fire the next use. The one memory here kept without an expiry,
+  because it is a property of the thing rather than a state of ours; passed over rather than ending
+  the walk, and said out loud on the page and in `/ccanni`.
+- ~~**And the gap is skipped where there is no rest to protect**~~ (2026-08-20, found in game) —
+  standing in a fight, the resume point is not consulted and the floor is the only line, so the
+  character trades down to it, takes a heal and trades down again instead of waiting out a number it
+  will not reach until the fight is over. The floor stays unconditional, which is what stops the
+  bypass being a hole in the safety number; sitting is asked (`Me.State`) rather than assumed from
+  the fight, because `restcombat` lets a character med through one it has not joined. No setting —
+  the gap is an efficiency device for medding, so where there is no medding there is nothing to
+  choose.
+- ~~**Costs read off the spell**~~ (`Spells.HealthCost` / `ManaGain`) — on the page beside every
+  slot, so the floor is set by somebody who can see what it allows, and buying exactly one behaviour:
+  nothing is fired that costs more health than the character is carrying (the manastone death).
+- ~~**A duration trade is not re-fired while it is running**~~ — read off the spell and confirmed
+  against our own buff and song windows, with the dps rotation's two-second evidence window over it.
+- ~~**Class profiles**~~ — the twelve classes with a mana bar, at `Priorities.canni`; the shaman's
+  matching `unimplemented` line is gone. The four without a mana bar (WAR, MNK, ROG, BER) have
+  nothing to convert to, and `MaxMana` of zero is what says so.
+- Verified off-client (170 checks, plus a page-render harness: the effect reads against real RoF2 spell data for the whole family
+  and against the heals, mana buffs and nukes that must not join it; the config's defaults, clamps
+  and round-trip, including the pair that oscillates refused from both sides and again on read; every
+  bound at its edges; the fight gate both ways on a character that never engages; the walk passing
+  over what cannot be paid for; a duration slot held off by the bar, by the song window and by the
+  evidence window; a cast in the air not called off by a hold arriving under it; a refused cast
+  handing the frame down; and every way a slot can be skipped. Plus the thrash itself, walked through
+  a regen tick at a time: a run of cheap trades not interrupted above the floor, health lost to
+  something other than a trade latching the same way, the latch still watched on a pass held back by
+  the ceiling, and the two thresholds set equal giving the old behaviour back. And the in-fight
+  bypass from every side: the floor still holding under it, a fight sat through still waiting out the
+  gap, standing up in that same fight trading at once, the gap applying again the pass the fight
+  ends, and a burst pinning health at the floor and going again on a heal. And the combat bar: the
+  refusal learned from the outcome, the slot skipped while something is on us and used while nothing
+  is, a barred slot passed over to reach the one under it, a group fight with nothing on us *not*
+  barring it, and the page told which slot carries one. Plus the registration itself, which is what
+  the bug actually was: every pattern offered to the host's expander, every variant it returns
+  registered, and no variants invented when a host supplies none. Plus the flag read (both lopsided
+  pairs, both flags clear reading as no restriction, an older client answering nothing, and a barred
+  slot skipped without firing anything at all) and the interrupted burst (uses in the air holding the
+  next one off the floor without latching the recovery, and trading resuming the moment the ledger
+  clears)) under LuaJIT and Lua 5.1. The page harness renders the Canni State page against a stub
+  ImGui — empty list, a half-filled row, a slot for something the character does not have, slots
+  with and without the new Spell members, and a character with no mana bar — checking for a Lua
+  error, an unbalanced scope and a nil handed to a text call. It reproduces the `Missing EndChild()`
+  failure exactly when the `pcall` is removed. **In-game smoke test still pending** — see Verify.
+
+Canni's own leftovers: the lich lines (necromancer and shadow knight), which drain for ten minutes
+and are buffs rather than trades — the buff state casts one already, but nothing takes one *off*
+when health gets short; a magician summoning rods for the rest of the group, which is the other half
+of `magician.lua`'s remaining `unimplemented` line; and any sense of whether the mana is about to be
+needed, which is what would let the ceiling be a judgment rather than a number.
+
 Still to come, per priority band: **Passive** (global pause; the same shape as flee with an empty
 exemption set, plus a /cpause slash + comm command),
 **Pull** (target selection, pathing, leash,
@@ -719,6 +820,22 @@ backstab positioning; nothing asks for it).
 - Structured coordination messages ride the Phase 2 transport (actors preferred, chat
   channels as universal fallback).
 - Fleet UX: broadcast config changes ("everyone set camp here"), status dashboards.
+
+**Cast outcome lines were never heard** (2026-08-20, `utils/Casting/CastOutcome.lua`). Every
+pattern in that file begins with literal text, which is the one shape a timestamped client loses
+silently (ARCHITECTURE.md, "Chat timestamps"), and it was the only registration path in the codebase
+not going through `Speak.GetListenPatterns`. A session log with 7552 casts held not one outcome
+line: no fizzle, interrupt, resist, out-of-mana or refusal had ever reached a caller since the
+service was written, and an instant click — whose task treats silence as success — reported every
+server refusal as a landed cast. `Casting.Init` now takes a `listenPatterns` expander beside its
+movement arbiter and `cabby/casting.lua` supplies `Speak.GetListenPatterns`.
+
+**What this turns on is worth watching.** Outcome handling is live for the first time, so behaviour
+that was previously silent now fires everywhere: heals and nukes reporting fizzles and interrupts,
+`CastOutcome.WasBroken` marking casts failed that used to read as successes, and the buff and dps
+states' landed-effect bookkeeping now being told when a cast did *not* land. That is all correct and
+all new — the first session after this is the one to watch for states reacting to reasons they have
+never seen.
 
 ## Cross-cutting gaps (no owner yet)
 
@@ -1471,3 +1588,130 @@ backstab positioning; nothing asks for it).
    - **The edge.** A fight starting while the out-of-a-fight heal is in the air: the cast must stand,
      not be called off. And a fight *ending* while the in-a-fight heal is going out, same. `/cheal`'s
      last-heal line says "called off: ..." if either one is dropped, which is what to look for.
+
+34. **The pet refused, in game** (2026-08-16, `isMezzed` and the `petcannotwake` event in
+   `states/petDpsState.lua`). Sixteen headless checks cover the mechanism — the order once, the
+   refusal heard, nothing said for the four seconds after it, the next mob on us peeled instead,
+   the record taken back by a step, by a turn, by the awakened line and by the mob dying, and a
+   control that shows the same world spamming the order when the refusal is not heard — and none of
+   them touch EverQuest.
+
+   - **The case it was built for.** A magician with the pet's job set to *protect me first*, in a
+     camp where crowd control is holding an add that was on the magician. Before: `/pet attack` at
+     the mezzed add every second and a half, and `<pet> tells you, 'I am unable to wake <mob>,
+     master.'` back every time, until the mez broke. After: one order, one refusal, and then the pet
+     goes back to what the group is killing. `/cpetdps` names the held mob and says what would take
+     the refusal back.
+   - **What to watch for, and the one hole that is known.** The awakened line is a mez being
+     *broken* — the server says it when damage ends one (`%1 has been awakened by %2.`, eqstr 9037,
+     which is what is registered) — and a mez that simply **runs out** says nothing at all. So the
+     mob that could be missed is one mezzed in melee contact with this character, whose mez expires
+     rather than breaking, and which then swings without changing a coordinate or a degree of
+     heading: the pose reading has nothing to see and no line arrives. The first step or turn frees
+     it. Worth watching for a peel that never comes rather than one that comes late; if it turns out
+     to matter, the next honest signal is the mob's animation (the standing-there list crowd control
+     already keeps), not a timer on the refusal.
+   - **The assumption underneath.** That the server's refusal names the mob *we ordered* (EQEmu
+     answers `OP_PetCommands` about the id in the packet, which is what MQ's `/pet attack <id>`
+     fills in). If it ever named the client's own target instead, this would mark the wrong mob of a
+     pair — and it would clear itself within a pass or two, since the wrong mob is one in a fight
+     and fighting mobs move. Worth knowing rather than worth defending against.
+
+35. **Standing off a rooted mob, in game** (2026-08-16, `Mobs.IsRooted`, `states/standoffState.lua`
+   and `roottank` in `states/meleeState.lua`). Forty-one headless checks settle the decisions — the
+   retreat's bearing, the tank's hold moving with the group, the floors either side of it, the sight
+   stop and the spot it marks, both edges of the root reading and the pose half that un-reads it.
+   **One reading of the world decides whether any of it happens**, and a harness cannot answer it.
+
+   **Does `${Target.Rooted}` fill in for an NPC on this client?** The whole feature stands on it:
+   `Mobs.IsRooted` reads the live debuff view of whatever this character is targeted on, and nothing
+   else ever turns it true. Root something the tank is on and watch `/cmobs` — the mob should be
+   marked `rooted` within a pulse and lose the mark the moment the root fades. If the mark never
+   appears, this client caches nothing for NPCs (the same question ROADMAP 22 asks of the rotation's
+   debuff records), the tank holds melee range and nobody stands off, which is the quiet, safe
+   failure — but it is the whole feature not working, and the fix would be at the reading rather
+   than at either state. Worth watching one full root duration before believing it.
+
+   **Then the tank half.** Main tank on a rooted mob with a caster stood at 6: the tank should close
+   inside them and `/cmove` should say the stick is holding at about 4 — and the stick should be the
+   *same task* throughout, not a new one every pass. Back the caster off past melee range and the
+   hold should relax to melee range on the next quarter second. The two edges worth watching are a
+   caster standing *on* the mob (the tank should floor at 5 and stop, not walk into it) and a rogue
+   sticking behind at melee range, which will hold the tank a couple of units tighter for the whole
+   fight — correct, and worth seeing before deciding it is.
+
+   **Then the standoff half**, which is the one with a real failure mode. A cleric between heals,
+   stood at 6 from the tank's rooted target with the tank holding at 14, should back straight out to
+   about 17 — a step past the tank, not past the mob's reach; `/cstandoff` names the mob and the tank
+   distance it read. Move the cleric to 20 with the tank still at 14 and it should not move at all,
+   on a dragon as much as on a rat. Watch for three things: that the retreat does not fight the follow (with `combat_relax` on, the follow holds
+   at 40 and there is nothing to fight — with it *off* and a tight follow distance, the two will
+   trade, and that is the configuration to notice rather than a bug to fix at the state); that a
+   character mid-cast does not walk out of it (the movement service should report the move blocked
+   for the cast, and the retreat should resume when it lands); and that the sight stop does what it
+   says — put a pillar behind the caster and it should stop the pass sight goes, say so in
+   `/cstandoff`, and *not* start the same walk again while it stands there.
+
+   **Then what replaced the setting** (2026-08-20, at the user's direction and in two steps: the
+   per-character distance came out in favour of `Mobs.Reach`, then the whole thing was rescoped to
+   the tank's own target with the comparison made against the tank). The shape to confirm is that
+   **one mob is looked at and one thing is compared**. `Spawn.MaxRangeTo` is MQ's own `GetMeleeRange`
+   for the pair, so the *gate* should scale with the model — a caster at 20 should be moved by
+   something large and not by a rat. The *line* is the tank's own distance to that same mob, so watch
+   it track: walk the tank in by hand and the caster's resting spot should come in behind it, walk
+   the tank out and the caster should back off again, nothing past about 17 either way. Five things
+   to confirm rather than assume.
+
+   - **`Combat.GetTankTargetId` answers at all in a real fight.** It is the whole scope now: nil
+     means nobody moves. On a non-tank box that is not grouped with a speaking tank it may simply
+     never fill in, which is silent-but-safe and also the feature not running. `/cstandoff` says.
+   - **The pair settles rather than trades.** Headless it converges and the directions cannot
+     conflict (the caster only moves out, the tank only moves in). In game they are separate clients
+     moving at once on quarter-second reads, so watch a full fight for a caster taking small
+     repeated steps back.
+   - **A tank hold of 0.** The floor was 5 and is now 0 at the user's direction. What a `/stick` held
+     at 0 actually does on this client is the thing to see — it should run in and stay, and
+     `Stick:ShouldMoveBack` should never fire (its crowded distance goes negative).
+   - **The PC spawn search** replaced the group-window scan, so the tank now closes inside any player
+     near the mob, including a stranger in the camp. Correct by the model — the mob does not check
+     the group window — but worth seeing once before deciding it is. Cost is one `SpawnCount` plus a
+     read per hit on the 250 ms cadence, with the radius widened to `distance-to-mob + reach`.
+   - **A rooted add nobody is holding is now ignored entirely**, where the previous cut backed out of
+     its reach. Deliberate: nobody is being beaten on by a mob nobody is fighting. If it turns out
+     an add roots itself onto a caster in practice, that is a mob the tank should be told about
+     rather than a distance this state should be computing.
+
+   None of these is a reason to put a number back on the page.
+
+   **The assumption underneath.** That a rooted mob on this server hits whoever is in its reach
+   rather than only its top hate — which is what makes being nearest worth anything. If it turns out
+   the mob simply stops swinging when its hate target is out of range, the tank half is still right
+   and the standoff half is pointless rather than harmful. Worth one look at who is actually taking
+   the hits before tuning anything.
+
+36. **Canni, in game** (2026-08-19, `states/canniState.lua`; nothing here has touched a client
+   yet). On a shaman: `/ccanni` should list the cannibalize spells and the Cannibalization AA with
+   the health each one costs read off the
+   spell — that read (`Spell.Attrib`/`Spell.Base` through the MQ TLO for an *AA's* spell, and for an
+   item click) is the thing to confirm first, since the whole page and the manastone guard hang on
+   it. Then: that trading actually starts under the mana ceiling and stops at it; that a use lands
+   the character well under the health floor and is *not* thereby refused (the floor is a pre-use
+   gate on purpose); and that the **resume point** does what it was added for on 2026-08-20 — the
+   first version stood up to trade on every regen tick, because the casting service stands a sitting
+   character up (`utils/Casting/Immobilizer.lua`), RestState then holds its five-second grace, and
+   one tick was enough to cross a single threshold again. What it should look like now is a burst of
+   trading down to the stop point, then a sit that lasts until health is back near full, then
+   another burst. A stand/sit flap that survives this means the gap is too small for the tick size,
+   which is a number rather than the mechanism. Then the in-fight half (2026-08-20): standing in a
+   fight the character should keep trading down to the stop point every time a heal lifts it back
+   over, and never wait on the resume point — while a character sitting through a fight it has not
+   joined should still wait it out, which is the reading that separates the two. And the combat bar
+   on a manastone: the first click with something on the extended target window should draw "You can
+   not cast this spell while in combat.", after which `/ccanni` should mark that slot and it should
+   go quiet until nothing is on us — the reading to confirm is that it is the **hater list** that
+   gates it and not the group's fight, so a character standing untargeted in somebody else's fight
+   should still be able to click. On a magician: that a
+   summoned modulation rod turns up in the clicky registry and its click effect reads as a
+   conversion. On a necromancer: Death Bloom firing once and not again while it is on the bar. And
+   the band itself — a shaman with a rotation and a canni slot should spend the beat on canni ahead
+   of the nuke while mana is under the ceiling, and never ahead of a heal.

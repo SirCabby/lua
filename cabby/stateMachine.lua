@@ -29,10 +29,13 @@ function StateMachine.new()
     ---functions returning a priority floor, or nil for "nothing to hold back"
     self._.priorityGates = {}
     self._.started = false
-    -- MQ resumes the script at most once per game frame, so anything above one frame time
-    -- makes passes skip frames: 25 here cost a whole extra frame of command latency per pass
-    -- at 60fps. 10 stays under typical frame times, which means one pass every pulse.
-    self._.loopDelayMs = 10
+    -- MQ resumes the script at most once per game frame, so any delay longer than one frame
+    -- costs a whole extra frame of latency per pass: 25 here did that at 60fps. 1 asks for the
+    -- next pulse and nothing tighter -- it cannot spin, since the delay always yields the frame
+    -- -- so it stays right whatever the simulation rate is set to. The real ceiling on pass rate
+    -- is not here: it is MQ2Lua's turboNum (Lua instructions per frame) against the frame rate,
+    -- and a pass costing more than turboNum instructions is torn across several frames.
+    self._.loopDelayMs = 1
     self._.paused = {}
     self._.failStreaks = {}
 

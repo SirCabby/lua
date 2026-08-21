@@ -80,6 +80,10 @@ local function blockedReason(task)
     if mq.TLO.Me.Stunned() then return "stunned" end
     if mq.TLO.Me.Mezzed() ~= nil then return "mezzed" end
     if mq.TLO.Me.Charmed() ~= nil then return "charmed" end
+    -- the same answer as the three above, arrived at from the other side: those three take the keys
+    -- away, and a fear takes the steering -- where the character goes is the server's to say, and
+    -- pressing into that is a contest we lose while wearing the movement keys out
+    if mq.TLO.Me.Feared() ~= nil then return "feared" end
 
     -- bards move while they sing, and everyone else stands still for a cast worth more than
     -- whatever this task is doing -- which is a question for whoever knows the bands
@@ -390,6 +394,23 @@ function Movement.IsClosingForSight()
     local task = Movement._.task
     if task == nil or task.IsClosingForSight == nil then return false end
     return task:IsClosingForSight() == true
+end
+
+---Retune how close a running stick holds, while the given owner still holds it -- the same gate
+---`SetFollowHold` uses, and for the same reason: an answer this caller re-derives is about the stick
+---*it* asked for, and a higher priority behaviour's stick is not its to reach into.
+---
+---Exists for the same reason its follow counterpart does: the distance is an answer that changes
+---while the task runs. A main tank closing inside everybody else on a rooted mob is re-deriving that
+---answer every pass off where the rest of the group is standing, and restarting the stick to say so
+---would throw away the closing-speed history and the stuck detector on every one of them.
+---@param owner string
+---@param distance number how close the stick holds station
+---@return boolean applied false when this owner has no stick running
+function Movement.SetStickDistance(owner, distance)
+    if not Movement.IsSticking() or not Movement.IsOwnedBy(owner) then return false end
+    Movement._.task:SetDistance(distance)
+    return true
 end
 
 ---@param spawnId? number when given, also require the task to be sticking to this spawn

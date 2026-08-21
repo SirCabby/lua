@@ -51,6 +51,14 @@ end
 function Discipline:IsReady()
     ---@type Timer
     self._.timer = self._.timer
+
+    -- Feared, the character runs where the server points them, so a discipline fired now is spent
+    -- on whatever happens to be in front of us -- and the endurance and the reuse timer are gone
+    -- either way. The same answer `actions/skill.lua` gives, for the same reason: being feared is
+    -- a fact about the character rather than about any one caller, so every list that holds a
+    -- discipline gets the answer from here instead of asking for itself.
+    if mq.TLO.Me.Feared() ~= nil then return false end
+
     return mq.TLO.Me.CombatAbilityReady(self:Name())() and self._.timer:timer_expired() and
         mq.TLO.Me.CombatAbility(mq.TLO.Me.CombatAbility(self:Name())() or "").EnduranceCost() < mq.TLO.Me.CurrentEndurance()
 end

@@ -91,6 +91,19 @@ function Stick.MeleeDistance(spawnId)
     return math.min(14, maxRangeTo - 3)
 end
 
+---Retune how close this stick holds, without disturbing anything else about it.
+---
+---The right shape for a hold distance that changes while the stick runs -- the melee state closes
+---the main tank inside everybody else on a rooted mob, and that answer moves as they move. Nothing
+---else is touched: the stuck detector, the closing-speed history and the task's id all survive, so
+---a retune is not a fresh stick and does not read as one.
+---@param distance number
+function Stick:SetDistance(distance)
+    distance = tonumber(distance)
+    if distance == nil then return end
+    self._.distance = distance
+end
+
 ---@param reason string
 ---@return string status
 function Stick:Fail(reason)

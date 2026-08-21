@@ -66,6 +66,17 @@ local maxCastAttempts = 4
 ---reading *is* the record and there is nothing worth writing down; see `recordFinished`.
 local minimumRecheckMs = 30000
 
+---How long a pairing is left alone when the client refuses it and the person's bar does not say
+---why.
+---
+---Their bar answers most refusals: something on it that ours will not go over, with a duration on
+---it saying when it stops mattering. What is left over is the refusal that has no duration --
+---most often a buff too powerful for them to take, which no amount of waiting fixes and a level
+---does. There is nothing to come back for, so this is only about the cost of asking: the question
+---is a walk of their whole bar, and a pairing that will answer the same way all evening should
+---not be asking it on every pass. A minute is far inside how long anybody would take to level.
+local refusedRecheckMs = 60000
+
 ---How long an order waits with nothing left to cast before it is treated as finished. A buff
 ---order is not one cast, it is "give them everything they are missing", so it ends when there is
 ---nothing more to give rather than when the first cast lands.
@@ -106,7 +117,7 @@ local verifyEvidenceMs = 1000
 
 ---How long a cast that says it went off waits to be *seen* on the bar of the person it was cast
 ---at. One target swap and a round trip, which is what a fresh reading costs -- see
----`buffsReadSince` for why it cannot simply be watched for. Running out is inconclusive on the
+---`buffsJustRead` for why it cannot simply be watched for. Running out is inconclusive on the
 ---same terms as verification: the world said nothing, so the cast's own account of itself stands.
 local confirmEvidenceMs = 1500
 
@@ -137,9 +148,19 @@ local petTargetTypes = { ["pet"] = true, ["pet2"] = true }
 ---asks "what is missing", and the honest answer to that is only partly readable. Your own buffs
 ---and your pet's are there to be read; everybody else's are visible only once the client has
 ---cached them, which happens when they are targeted, and an empty cache reads exactly like a
----clean target. So this state reads what it can, casts when what it reads says to, and does not
----ask the same question again for a while afterwards -- which is what the per-pairing retry
----window below is. It is not a give-up timer: it is how long an answer is good for -- and an
+---clean target.
+---
+---**So nothing is cast at a bar nobody has shown us.** Those two being indistinguishable is not a
+---reason to guess, and guessing wrong is expensive in the ordinary case rather than the strange
+---one: walk up to a group who have been buffed all evening and every one of them reads as bare.
+---What an unread bar buys is a *look* -- the target borrowed for a moment, on the pass that had
+---nothing to cast -- and only then a decision. What that look finds is not only our own buffs:
+---something stronger of the same line sitting over ours answers the stacking check with a plain
+---no, and its duration is when that no runs out, so the pairing is put down for exactly that long
+---rather than asked about again on the next pass.
+---
+---So this state reads what it can, casts when what it reads says to, and does not ask the same
+---question again for a while afterwards -- which is what the per-pairing retry window below is. It is not a give-up timer: it is how long an answer is good for -- and an
 ---answer can be voided early. Dying strips every buff at once, so an observed death (the scan
 ---seeing them down, or the world's slain line arriving mid-fight) drops every window held for
 ---that name, and they are looked at afresh the moment they are back on their feet. **No window is
@@ -159,8 +180,10 @@ local petTargetTypes = { ["pet"] = true, ["pet2"] = true }
 ---remembered about them afterwards; a buff handed over on request and a buff kept up are different
 ---jobs, and only the second one is a record of what is on anybody.
 ---
----What it deliberately leaves out: other people's pets, curing, and any awareness of what the
----other buffers in the group have already cast.
+---What it deliberately leaves out: other people's pets, curing, and any arrangement with the
+---other buffers in the group about who casts what. What they have already cast is not arranged
+---with them, it is *read off the people they cast it on*, which is the only account of it that
+---cannot be out of date.
 ---@class BuffState : BaseState
 local BuffState = {
     key = "BuffState",
@@ -206,7 +229,8 @@ local BuffState = {
         attempts = {},      -- { ["<slot>@<name>"] = casts that failed in a row on that pairing }
         doubted = {},       -- { ["<slot>@<name>"] = when a sighting last contradicted a cast }
         verify = nil,       -- { id, name, startedMs, restoreId } a target-swap re-read in flight
-        verifiedAt = {},    -- { [name] = when another player's buffs were last actually seen }
+        verifiedAt = {},    -- { [name] = when another player's buffs were last looked at }
+        readAt = {},        -- { [name] = when a whole bar of theirs was last actually sent to us }
         calledOff = false,
         lastResult = nil,
         holdReason = nil
@@ -376,6 +400,10 @@ function buffsWereStripped(name)
             BuffState._.attempts[key] = nil
         end
     end
+    -- and the reading itself, for the same reason: what we were sent about somebody was a
+    -- description of a bar that no longer exists, so they go back to being somebody nothing is
+    -- known about rather than somebody known to be carrying what they were carrying before
+    BuffState._.readAt[name] = nil
 end
 
 ---Drop retry windows that have run out. They are the only thing this state accumulates, and a
@@ -484,7 +512,7 @@ local function remainingMs(spell, candidate)
     return tonumber(cached.Duration()) or 0
 end
 
----Whether what the client holds for this spawn's buffs was read *after* a given moment.
+---Whether the client has just been sent this person's whole bar.
 ---
 ---There is one place another player's buffs can be read from, and it is filled solely by the
 ---client's **complete** buff message. The partial ones -- a single buff sent down on its own,
@@ -499,24 +527,103 @@ end
 ---way to a newer one is to make the client ask for the whole bar again, which it does when the
 ---target changes.
 ---
----So freshness is read off the cache entries themselves, each of which carries the moment its
----packet arrived. Nothing fresh is not the same as nothing there: a bar we have never been sent
----reads exactly like an empty one, and this is the question that tells those apart -- which is
----what makes an absent buff worth acting on rather than a shrug.
+---So freshness is asked of the client's own flag for it, which it clears the instant the target
+---changes and sets when a complete message lands. Paired with the target still being them, that is
+---exactly: *this* is what the server says is on them, as of now.
+---
+---Read this way rather than off the ages carried by the cache entries, which cannot answer it: the
+---client reports every entry belonging to the **current target** as brand new whatever moment it
+---really arrived, so a bar cached an hour ago looks freshly delivered from the instant the target
+---lands back on them -- and a re-read would conclude on the frame it started, with the very
+---snapshot it was sent to go behind.
+---
+---And nothing fresh is not the same as nothing there. A bar we have never been sent reads exactly
+---like an empty one; a message carrying no buffs at all still sets the flag, so this is what tells
+---those two apart -- which is what makes an absent buff worth acting on rather than a shrug.
 ---@param id number
----@param sinceMs number a reading older than this is the snapshot from before
 ---@return boolean isFresh
-local function buffsReadSince(id, sinceMs)
-    local spawn = mq.TLO.Spawn("id " .. tostring(id))
+local function buffsJustRead(id)
+    if tonumber(mq.TLO.Target.ID()) ~= id then return false end
+    return mq.TLO.Target.BuffsPopulated() == true
+end
+
+---Has anybody actually told us what is on this person?
+---
+---The question that has to come before a cast, and the one an empty cache cannot answer on its
+---own: **nothing held for somebody is what "never looked at" and "carrying nothing" both look
+---like**, and every reading below takes the first for the second. `remainingMs` finds no buff of
+---ours on them, the stacking check finds nothing in the way, and the honest meaning of both --
+---*I could not find out* -- comes back as "they need it, cast".
+---
+---Which is wrong exactly when it costs the most. Walking up to a group who have been buffed all
+---evening, every one of them reads as bare, and the whole list is cast over the top of what they
+---already have: a spell each, a gem each, the mana for all of it, and in the ordinary case a
+---worse buff than the one that was already there.
+---
+---So the two are told apart the only way the client allows. Anything at all in the cache is a bar
+---we were sent -- entries age out of it by themselves, so what is left is a reading and not a
+---memory. A bar we were sent that was *empty* leaves nothing behind to say so, and that is what
+---`readAt` is: it is written where a whole bar was read (see `concludeVerify` and the sighting a
+---cast is squared with) and it is good for as long as any other reading of somebody is.
+---
+---Our own bar and our pet's are never in doubt: both answer at any moment.
+---@param candidate BuffCandidate
+---@return boolean isKnown
+local function buffsKnown(candidate)
+    if candidate.isSelf or candidate.isPet then return true end
+
+    local spawn = mq.TLO.Spawn("id " .. tostring(candidate.id))
+    if (tonumber(spawn.CachedBuffCount()) or 0) > 0 then return true end
+
+    local at = BuffState._.readAt[candidate.name]
+    return at ~= nil and Time.current_time() - at < verifyIntervalMs
+end
+
+---What is already on somebody that our buff will not go over, and how long the longest of it has
+---left to run.
+---
+---The other half of "do they need this", and the half a lookup by name cannot reach. Somebody
+---buffed by a better shaman than us is carrying our line's *stronger* version under a different
+---name: asking for ours by name finds nothing, and the stacking check says only "no". True, and
+---useless on its own -- what it leaves out is that the no has an expiry, because ours does not
+---land while theirs is up and does the moment it is not. So the answer worth having is *when*,
+---and their bar is carrying it.
+---
+---Every buff on that bar is put to the client's own stacking question, and the longest-lived of
+---the ones that answer no is what has to be waited out -- all of them have to go, not just the
+---first one found.
+---
+---Read from the same cache as everything else about another player, so it says nothing whatever
+---about somebody who has never been looked at. That is `buffsKnown`'s question, and it is asked
+---before this one rather than here.
+---@param spell any mq spell TLO
+---@param candidate BuffCandidate
+---@return number|nil ms nil when nothing readable on their bar is in the way
+local function blockedForMs(spell, candidate)
+    if candidate.isSelf or candidate.isPet then return nil end
+
+    local spawn = mq.TLO.Spawn("id " .. tostring(candidate.id))
     local count = tonumber(spawn.CachedBuffCount()) or 0
-    local age = Time.current_time() - sinceMs
+    local longest = nil
 
     for index = 1, count do
-        local staleness = tonumber(spawn.Buff(index).Staleness())
-        if staleness ~= nil and staleness <= age then return true end
+        local buff = spawn.Buff(index)
+        local name = buff.Spell.Name()
+        -- `== false` rather than `not`, because there is a third answer: a spell the client cannot
+        -- look up comes back as nothing at all, and nothing at all is not a refusal
+        if name ~= nil and spell.WillStack(name)() == false then
+            longest = math.max(longest or 0, tonumber(buff.Duration()) or 0)
+        end
     end
 
-    return false
+    if longest == nil then return nil end
+
+    -- Nothing left on a buff that is still on their bar means it is not the kind that runs out --
+    -- an illusion, an aura, a worn effect. There is no moment to come back for, so this is a floor
+    -- rather than an answer: without it the pairing would ask again next pass, and asking costs a
+    -- walk of their whole bar for as long as they carry it.
+    if longest <= 0 then return minimumRecheckMs end
+    return longest
 end
 
 ---Should this buff be cast on this person right now?
@@ -527,29 +634,49 @@ end
 ---answers, and it answers more than "do they already have it": a better buff in the same line,
 ---or a buff too powerful for them to take, both come back as "no" without a cast being spent to
 ---find out.
+---
+---Only ever asked of somebody whose bar has been read (`buffsKnown`), because every one of these
+---readings takes an empty cache for a bare character.
+---
+---The second answer is how long a no is good for, and every no here has one: what is on them has
+---a duration, what is over ours has a duration, and a flat refusal their bar does not account for
+---gets a clock of its own. It is what the pairing is put down for, and it is the same answer the
+---re-read squares its windows against -- one question, asked in both places, so a window can
+---never mean something the picker would not agree with. A yes has no such number, and neither
+---does a no about our own bar or our pet's: those are read again from nothing every pass, and a
+---window over them would only be a worse copy of what the bar already says.
 ---@param slot Action
 ---@param spell any mq spell TLO
 ---@param lastsMs number what the buff lasts
 ---@param candidate BuffCandidate
 ---@return boolean needsIt
+---@return number|nil holdOffMs how long the answer is good for, when it is a no with an expiry
 local function needsBuff(slot, spell, lastsMs, candidate)
     local remaining = remainingMs(spell, candidate)
     if remaining ~= nil then
-        return remaining <= rebuffAtMs(slot, lastsMs)
+        local rebuffAt = rebuffAtMs(slot, lastsMs)
+        if remaining <= rebuffAt then return true, nil end
+        return false, remaining - rebuffAt
     end
 
     if candidate.isSelf then
         -- a buff the player has blocked will report as cast and never appear, so asking here is
         -- the difference between one wasted cast every half hour and none
-        if mq.TLO.Me.BlockedBuff(spell.Name()).ID() ~= nil then return false end
-        return spell.Stacks() == true
+        if mq.TLO.Me.BlockedBuff(spell.Name()).ID() ~= nil then return false, nil end
+        return spell.Stacks() == true, nil
     end
 
     if candidate.isPet then
-        return spell.StacksPet() == true
+        return spell.StacksPet() == true, nil
     end
 
-    return spell.StacksSpawn(candidate.id)() == true
+    if spell.StacksSpawn(candidate.id)() == true then return true, nil end
+
+    -- Refused, and their bar usually says why: something on it ours will not go over, whose
+    -- duration is when the refusal stops. A bar that says nothing means a refusal with no duration
+    -- to it -- the spell is too powerful for them, most often -- and that one is not waited out,
+    -- it is simply not asked again for a while.
+    return false, blockedForMs(spell, candidate) or refusedRecheckMs
 end
 
 ---Would the picker still say this person needs this buff, now that the cast is over?
@@ -582,7 +709,8 @@ local function stillWants(slot, candidate)
     local lastsMs = durationMs(spell)
     if lastsMs <= 0 then return false end
 
-    return needsBuff(slot, spell, lastsMs, candidate)
+    local needsIt = needsBuff(slot, spell, lastsMs, candidate)
+    return needsIt
 end
 
 ---------------- Choosing a buff --------------------
@@ -711,7 +839,37 @@ local function choosePickFor(slot, candidates)
     local isNeeded = false
 
     for _, candidate in ipairs(candidates) do
-        if appliesTo(slot, aim, candidate) and dueNow(slot, candidate.name) and needsBuff(slot, spell, lastsMs, candidate) then
+        -- **Somebody whose bar has never been read is passed over, not cast at.** Everything this
+        -- slot could ask about them answers out of a cache nobody has filled, and an unfilled
+        -- cache reads as a bare character -- so the whole list would go on them at the moment we
+        -- know least about them, which is the moment we meet them. They are not counted as owing
+        -- us anything either: an unknown is not a slot waiting on a gem, and counting it would
+        -- hold the pass on a decision that cannot be made. Nothing else here can fix that; what
+        -- fixes it is looking, and the pass with nothing to cast is where that happens
+        -- (`chooseVerify`).
+        local isCandidate = appliesTo(slot, aim, candidate) and dueNow(slot, candidate.name)
+            and buffsKnown(candidate)
+        local needsIt, holdOffMs = false, nil
+
+        if isCandidate then
+            needsIt, holdOffMs = needsBuff(slot, spell, lastsMs, candidate)
+
+            -- A no with a time on it: what they are carrying has that long to run, or what is
+            -- sitting over ours has, or the client refuses it for a reason their bar never
+            -- mentions. Written down rather than shrugged at, because the reading behind it is the
+            -- one expensive question this state asks -- a walk of somebody's whole bar -- and
+            -- shrugging would ask it again on every pass for as long as they were covered.
+            --
+            -- Never for our own bar or our pet's. Those answer at any moment and the answer is
+            -- better than anything we could write down about them; the whole state turns on that.
+            if not needsIt and holdOffMs ~= nil and not candidate.isSelf and not candidate.isPet then
+                DebugLog("[" .. tostring(action:Name()) .. "] is not due on [" .. candidate.name ..
+                    "] for another " .. tostring(math.floor(holdOffMs / 1000)) .. "s")
+                holdOff(slot, { candidate.name }, holdOffMs)
+            end
+        end
+
+        if needsIt then
             -- a spell that aims itself is cast at nobody. EQ puts a self buff on us and a pet buff
             -- on our pet with nothing targeted, and a group buff on the group; targeting for one
             -- of those would drop whatever we were looking at to no purpose
@@ -796,31 +954,43 @@ end
 ---swap is an intrusion on the player's target, and the answer is worth nothing if the recast it
 ---might call for would be refused for range or line of sight anyway.
 
----Is anything held for them worth the swap -- and could we do anything about the answer?
+---Is there anything about them worth the swap -- and could we do anything about the answer?
 ---
----Two halves of one question. There is nothing to square if no live window is held for them, and
----nothing to be done about a voided one if they are out of reach or behind a wall: everything
----this state would do about it is a cast at them, and that cast is refused for exactly those two
----reasons. So the reach is read off the spells whose windows are live, the same way the cast
----itself reads it, rather than being a number of our own. Somebody skipped this way keeps their
----unread mark rather than being marked looked-at, so they are read the moment they walk back
----into reach instead of a minute afterwards.
+---Two reasons a bar is worth reading, and they are the two halves of not casting blind.
+---
+---- **A record of ours to square with the world.** A live window says a buff of theirs is up for
+---  another while yet, and the window is the only thing saying so; a dispel, a death nobody saw,
+---  a buff that was never really there all read the same from here.
+---- **Nothing known about them at all.** Somebody we have never been sent has every slot on the
+---  list held over them, because nothing is cast at a bar nobody has shown us (`buffsKnown`), and
+---  only a look moves that. This is where somebody who just joined the group is dealt with, and
+---  it is the whole reason the first pass after joining is a read rather than six casts.
+---
+---Either way there has to be something to be done about the answer. Out of reach or behind a
+---wall, everything this state would do about it -- a cast at them -- is refused for exactly those
+---reasons, so the reach is read off the spells that are asking rather than being a number of our
+---own. Somebody skipped this way keeps their unread mark rather than being marked looked-at, so
+---they are read the moment they walk back into reach instead of a minute afterwards.
 ---@param candidate BuffCandidate
 ---@return boolean worthReading
-local function hasReachableWindows(candidate)
+local function worthReading(candidate)
     local spawn = mq.TLO.Spawn("id " .. tostring(candidate.id))
     if spawn.ID() == nil then return false end
     if spawn.LineOfSight() == false then return false end
 
     local distance = tonumber(spawn.Distance())
     local now = Time.current_time()
+    local unread = not buffsKnown(candidate)
 
     for _, slot in ipairs(BuffStateConfig.GetActions()) do
-        local at = BuffState._.tryAgainAt[pairKey(slot, candidate.name)]
-        if at ~= nil and at > now then
-            local action = Action.GetActionType(slot)
-            local subject = (action ~= nil and action.Subject ~= nil) and action:Subject() or nil
-            if subject ~= nil then
+        local action = Action.GetActionType(slot)
+        local subject = (action ~= nil and action.Subject ~= nil) and action:Subject() or nil
+        if subject ~= nil then
+            local at = BuffState._.tryAgainAt[pairKey(slot, candidate.name)]
+            local asks = (at ~= nil and at > now)
+                or (unread and Action.IsEnabled(slot) and appliesTo(slot, aimOf(subject), candidate))
+
+            if asks then
                 -- no range at all means the spell carries no limit worth checking, not that it
                 -- cannot reach; an unreadable distance is the same non-answer
                 local range = subject:Range()
@@ -832,10 +1002,10 @@ local function hasReachableWindows(candidate)
     return false
 end
 
----The first person whose records are worth re-reading against the world: somebody whose buffs
----cannot be read from here, holding at least one live window they are still in reach of, not
----looked at for a while. A landed cast counts as looked at -- verification is for what changes
----*between* casts.
+---The first person whose bar is worth reading against the world: somebody whose buffs cannot be
+---read from here, who has something to answer for (`worthReading`) and is in reach of it, and who
+---has not been looked at for a while. A cast aimed at them counts as looked at -- targeting is
+---what makes the server send a bar, so the cast fetched one on its way past.
 ---@param candidates table
 ---@return BuffCandidate? candidate
 local function chooseVerify(candidates)
@@ -843,7 +1013,7 @@ local function chooseVerify(candidates)
     for _, candidate in ipairs(candidates) do
         if not candidate.isSelf and not candidate.isPet then
             local at = BuffState._.verifiedAt[candidate.name]
-            if (at == nil or now - at >= verifyIntervalMs) and hasReachableWindows(candidate) then
+            if (at == nil or now - at >= verifyIntervalMs) and worthReading(candidate) then
                 return candidate
             end
         end
@@ -864,9 +1034,11 @@ end
 ---@param candidate BuffCandidate
 local function startVerify(candidate)
     local restoreId = tonumber(mq.TLO.Target.ID())
+    local firstLook = not buffsKnown(candidate)
     BuffState._.verify = {
         id = candidate.id,
         name = candidate.name,
+        firstLook = firstLook,
         startedMs = Time.current_time(),
         restoreId = restoreId ~= candidate.id and restoreId or nil,
         -- Already looking at them, so there is nothing to change and nothing will be sent. The
@@ -875,7 +1047,8 @@ local function startVerify(candidate)
         lookAway = restoreId == candidate.id
     }
 
-    DebugLog("Borrowing the target to re-read [" .. candidate.name .. "]'s buffs")
+    DebugLog("Borrowing the target to " .. (firstLook and "read" or "re-read") ..
+        " [" .. candidate.name .. "]'s buffs")
     if restoreId ~= candidate.id then
         mq.cmdf("/mqtarget id %d", candidate.id)
     end
@@ -910,18 +1083,21 @@ local function concludeVerify(verify)
             local action = Action.GetActionType(slot)
             local spell = (action ~= nil and action.Subject ~= nil) and action:Subject():Spelldata() or nil
             if spell ~= nil then
-                local rebuffMs = rebuffAtMs(slot, durationMs(spell))
-                local remaining = remainingMs(spell, candidate)
-                if remaining == nil or remaining <= rebuffMs then
-                    BuffState._.tryAgainAt[key] = nil
-                else
-                    BuffState._.tryAgainAt[key] = now + remaining - rebuffMs
-                end
+                -- The picker's own question, put to the reading that has just landed. A window
+                -- survives only as what the bar says it is worth now -- longer or shorter,
+                -- observation replacing inference -- and is voided outright where the answer has
+                -- turned into "they need it".
+                local needsIt, holdOffMs = needsBuff(slot, spell, durationMs(spell), candidate)
+                BuffState._.tryAgainAt[key] =
+                    (not needsIt and holdOffMs ~= nil) and (now + holdOffMs) or nil
             end
         end
     end
 
     BuffState._.verifiedAt[verify.name] = now
+    -- the whole bar came down with that packet, which is the one thing that answers "is there
+    -- anything to go on for this person at all"
+    BuffState._.readAt[verify.name] = now
     -- something may have been voided; the very next pass is worth a real look
     BuffState._.nextLookMs = 0
     DebugLog("Re-read [" .. verify.name .. "]'s buffs from the target window")
@@ -973,7 +1149,7 @@ local function progressVerify(code)
         return
     end
 
-    if targetId == verify.id and buffsReadSince(verify.id, verify.startedMs) then
+    if buffsJustRead(verify.id) then
         concludeVerify(verify)
         restoreTarget(verify)
         BuffState._.verify = nil
@@ -985,6 +1161,14 @@ local function progressVerify(code)
         -- player taking it mid-read, so only a swap we still hold is put back
         BuffState._.verifiedAt[verify.name] = Time.current_time()
         if targetId == verify.id then
+            -- We held them for the whole window and no bar ever came. Counted as a look anyway,
+            -- and this is the one place that is deliberately generous: a bar that never arrives is
+            -- the world saying nothing, and if the answer to that were "keep waiting" then a
+            -- server that does not send player buffs at all would leave this state casting on
+            -- nobody but itself, for ever, with nothing anywhere saying why. So the reading falls
+            -- back to what can be seen without one, which is what this state did before it knew to
+            -- ask -- one cast that may not have been needed, rather than a group left unbuffed.
+            BuffState._.readAt[verify.name] = Time.current_time()
             restoreTarget(verify)
         end
         BuffState._.verify = nil
@@ -1039,7 +1223,8 @@ function BuffState.Describe()
         return "casting " .. tostring(BuffState._.buffTarget.spell) .. " on " .. BuffState._.buffTarget.name
     end
     if BuffState._.verify ~= nil then
-        return "re-reading " .. BuffState._.verify.name .. "'s buffs"
+        return (BuffState._.verify.firstLook and "reading " or "re-reading ") ..
+            BuffState._.verify.name .. "'s buffs"
     end
     if BuffState._.holdReason ~= nil then
         return "holding: " .. BuffState._.holdReason
@@ -1221,7 +1406,7 @@ end
 ---So a cast aimed at one person is not believed until the buff has been *seen* on them. Which is
 ---not the same thing as watching for it to appear: the reading we hold was taken when the cast
 ---targeted them, from before it was fired, and the update that carries the new buff is thrown away
----for being partial (`buffsReadSince` has the why). The client has to be made to ask for the whole
+---for being partial (`buffsJustRead` has the why). The client has to be made to ask for the whole
 ---bar again, and the look away and back below is that.
 ---
 ---Three answers, and the third is what keeps it honest:
@@ -1249,7 +1434,7 @@ local function sightBuff(confirm)
         return true, remaining
     end
 
-    if not buffsReadSince(confirm.id, confirm.startedMs) then return nil, nil end
+    if not buffsJustRead(confirm.id) then return nil, nil end
 
     local cached = mq.TLO.Spawn("id " .. tostring(confirm.id)).CachedBuff(confirm.spell)
     if cached.SpellID() == nil then return false, nil end
@@ -1396,6 +1581,12 @@ local function progressConfirm(code)
 
     local isOn, remaining = sightBuff(confirm)
 
+    -- Their whole bar came down with that answer, not just the line we asked about -- so a cast
+    -- squared this way doubles as the look that says anything at all is known about them.
+    if isOn ~= nil and not confirm.readable then
+        BuffState._.readAt[confirm.name] = now
+    end
+
     if isOn == true then
         DebugLog("[" .. confirm.spell .. "] is on [" .. confirm.name .. "]")
         local slot = BuffState._.buffSlot
@@ -1482,9 +1673,16 @@ local function recordFinished(status, outcome, reason, observedRemainingMs)
                     -- minutes to go is not one that has just been cast.
                     holdOff(slot, { name }, landedMs)
                     BuffState._.attempts[pairKey(slot, name)] = nil
-                    -- a landed cast is as good as a look at their bar: verification is for what
-                    -- changes between casts, and this starts that clock over
-                    BuffState._.verifiedAt[name] = Time.current_time()
+                    -- A cast aimed at one person is as good as a look at their bar: targeting is
+                    -- what makes the server send one, so the cast fetched a bar on its way past
+                    -- and verification is for what changes between casts. **Only the person it was
+                    -- aimed at.** A group cast is aimed at nobody, and crediting the other five
+                    -- with a look they never got is what would leave somebody who just joined
+                    -- unread -- and so unbuffable by everything the group cast did not cover --
+                    -- for as long as the look was thought to be good for.
+                    if name == target.name then
+                        BuffState._.verifiedAt[name] = Time.current_time()
+                    end
                 end
             end
         end
@@ -1859,6 +2057,7 @@ function BuffState.Recheck()
     BuffState._.tryAgainAt = {}
     BuffState._.attempts = {}
     BuffState._.verifiedAt = {}
+    BuffState._.readAt = {}
     BuffState._.doubted = {}
     BuffState._.lastScanMs = 0
     BuffState._.nextLookMs = 0

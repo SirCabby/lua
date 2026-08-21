@@ -930,10 +930,12 @@ function Combat.Pulse()
     -- flee order has already said everything there is to say about the fight.
     if attackReleased and Combat.IsEngaged() and CombatConfig.GetDisengageOnAttackOff()
         and not Status.IsFleeing() then
-        -- Only a toggle let go of, never one taken: a mez, a charm or a stun drops auto attack
-        -- with nobody choosing to stop, and coming to with the whole fight called off is not
-        -- what this switch is for. A feign is a choice, and does count.
-        if not (mq.TLO.Me.Stunned() or mq.TLO.Me.Mezzed() ~= nil or mq.TLO.Me.Charmed() ~= nil) then
+        -- Only a toggle let go of, never one taken: a mez, a charm, a stun or a fear drops auto
+        -- attack with nobody choosing to stop, and coming to with the whole fight called off is not
+        -- what this switch is for -- from a tank it would call the group off a mob that is still
+        -- very much on us. A feign is a choice, and does count.
+        if not (mq.TLO.Me.Stunned() or mq.TLO.Me.Mezzed() ~= nil or mq.TLO.Me.Charmed() ~= nil
+            or mq.TLO.Me.Feared() ~= nil) then
             Combat.CallOff("attack switched off by hand")
         end
     end

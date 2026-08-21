@@ -40,6 +40,8 @@ local CastOutcome = {
     stunned = "stunned",
     distracted = "distracted",
     wrongPlace = "wrongPlace",
+    inCombat = "inCombat",
+    outOfCombat = "outOfCombat",
     didNotStart = "didNotStart",
 
     -- broken: started and lost
@@ -73,6 +75,8 @@ local descriptions = {
     stunned = "stunned",
     distracted = "too distracted to cast",
     wrongPlace = "the spell does not work here",
+    inCombat = "it cannot be used while anything is fighting us",
+    outOfCombat = "it can only be used while something is fighting us",
     didNotStart = "the cast never started",
     fizzled = "fizzled",
     interrupted = "interrupted",
@@ -117,6 +121,18 @@ local outcomeLines = {
     { "You need to play a#*#instrument for this song#*#",           CastOutcome.missingComponents },
     { "This spell does not work here#*#",                           CastOutcome.wrongPlace },
     { "You can only cast this spell in the outdoors#*#",            CastOutcome.wrongPlace },
+
+    -- The spell's own `can_cast_in_combat` / `can_cast_out_of_combat` flags, refused server-side
+    -- against the caster's *aggro count* -- how many NPCs hold this character on their hate list,
+    -- which is the `Auto Hater` list on the extended target window and nothing to do with whether
+    -- the group is fighting or whether we have engaged anything. The flags are in the spell data
+    -- and the client keeps them (`eqlib`'s `SPELL::CanCastInCombat`), but no TLO exposes them, so
+    -- these four lines are the only way to find out that a spell carries one. A manastone is the
+    -- example that turned them up: its click is barred while anything is on us.
+    { "You can not cast this spell while in combat#*#",             CastOutcome.inCombat },
+    { "You can not use this ability while in combat#*#",            CastOutcome.inCombat },
+    { "You can not cast this spell while out of combat#*#",         CastOutcome.outOfCombat },
+    { "You can not use this ability while out of combat#*#",        CastOutcome.outOfCombat },
 
     -- broken mid-cast
     { "Your spell fizzles#*#",                                      CastOutcome.fizzled },
@@ -183,12 +199,38 @@ end
 ---it is a late line; deciding whether a cast is even in flight is the service's business, not
 ---this module's.
 ---@param onOutcome fun(outcome: string, isLate: boolean, line: string)
-function CastOutcome.RegisterEvents(onOutcome)
-    for index, entry in ipairs(outcomeLines) do
+---@param expand? fun(pattern: string): string[] the host's pattern expander. Every other
+---registration path in cabby goes through `Speak.GetListenPatterns`, which adds a timestamped copy
+---of any pattern that could not otherwise match a stamped chat line; this one did not, and so heard
+---nothing at all on a client that stamps
+function CastOutcome.RegisterEvents(onOutcome, expand)
+    local eventId = 0
+
+    for _, entry in ipairs(outcomeLines) do
         local pattern, outcome, isLate = entry[1], entry[2], entry[3] == true
-        mq.event("cabbyCastOutcome" .. tostring(index), pattern, function(line)
-            onOutcome(outcome, isLate, line)
-        end)
+
+        -- **Every pattern in this file begins with literal text**, which is the one shape that a
+        -- timestamped client silently loses. Blech files a pattern under the first character it
+        -- can match and tests a line only against the patterns filed under that line's own first
+        -- character (plus those starting with a variable); a client that stamps chat sends every
+        -- line in starting with `[`, so a pattern filed under "Y" is never tested against it and
+        -- the outcome is not refused, it is never heard -- and nothing anywhere says so.
+        --
+        -- Found 2026-08-20, and it had swallowed the lot: a whole session's log carried 7552 casts
+        -- and not one outcome line. Every fizzle, interrupt, resist and refusal in that session was
+        -- invisible, which for an instant click means the task's "no complaint, so it worked" reads
+        -- true no matter what the server said.
+        --
+        -- The expander is the host's, because which variants a pattern needs is a fact about the
+        -- client rather than about casting, and this library does not get to require a cabby
+        -- module. Without one, the patterns register exactly as they read -- correct on a client
+        -- that does not stamp its chat.
+        for _, variant in ipairs(expand ~= nil and expand(pattern) or { pattern }) do
+            eventId = eventId + 1
+            mq.event("cabbyCastOutcome" .. tostring(eventId), variant, function(line)
+                onOutcome(outcome, isLate, line)
+            end)
+        end
     end
 end
 

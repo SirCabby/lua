@@ -27,6 +27,7 @@ local Spells = {
     control = {},       -- what a crowd control list is picked from -- see `Spells.Controls`
     petSummons = {},    -- what puts a pet beside us
     itemSummons = {},   -- what conjures an item, which is how a pet gets its gear
+    manaConversions = {}, -- what trades our own health for our own mana -- see `Spells.ConvertsToMana`
     _ = {
         categories = {} -- lowercased spell name -> how its filing reads, for the pickers
     }
@@ -131,6 +132,10 @@ local spas = {
     ---SPA_HP_NPC_ONLY (84). The *sign* of the base value is what says which way -- negative is
     ---damage, positive is a heal -- so none of these means anything without reading it
     health = { 0, 79, 84 },
+    ---SPA_MANA (15): the effect that moves mana. Read with its sign exactly as `health` is --
+    ---positive is mana put in the bar, negative is mana taken out of it -- so this means nothing
+    ---on its own either
+    mana = { 15 },
     ---The five resist debuffs: fire, cold, poison, disease and magic (46-50), plus SPA_RESIST_ALL
     ---(111). Negative base is the debuff; positive is a resist *buff*, which is a different spell
     ---entirely. A magic resist debuff is what a tash is, and it is what makes a mez land
@@ -278,6 +283,107 @@ end
 function Spells.Damages(spell)
     if spell == nil then return false end
     return baseOfSPA(spell, spas.health, function(base) return base < 0 end) ~= nil
+end
+
+---Does this spell trade our own health for our own mana?
+---
+---The cannibalize line and everything shaped like it: a shaman's canni and the Cannibalization AA,
+---a necromancer's Death Bloom, the modulation rods a magician summons, a manastone. **No heading
+---holds them.** The client files them under Health, under Mana, under Utility Beneficial and under
+---nothing at all, and the heading that sounds exactly right -- Mana Flow -- is full of the regen
+---buffs that cost nothing, which is the opposite of this job. So this is read off the effects, like
+---the control set and for the same reason: the two effects that make one of these *are* what it is.
+---
+---Both signs matter, and that is the whole of it. Health has to go down and mana has to go up; read
+---either half on its own and the answer fills with heals (health up), with plain mana buffs (no
+---health at all) and with the mana drains cast at somebody else.
+---
+---It says nothing about *how* the trade arrives. A canni converts on the spot and a Death Bloom
+---leaves something on the bar that converts a tick at a time; both carry these two effects, and
+---which one it is is a duration read rather than a different question.
+---@param spell any mq spell TLO, or nil
+---@return boolean converts
+function Spells.ConvertsToMana(spell)
+    if spell == nil then return false end
+    if baseOfSPA(spell, spas.health, function(base) return base < 0 end) == nil then return false end
+    return baseOfSPA(spell, spas.mana, function(base) return base > 0 end) ~= nil
+end
+
+---What one use of this costs in hit points, as a positive number.
+---
+---Read so that a health floor can mean what it says. A cannibalize at the top of the line takes six
+---thousand hit points in one go, so "never go below 85%" is a lie on any character whose last 15%
+---is worth less than that: the floor is checked before the cast and the character is under it
+---afterwards, which is the one way this job gets somebody killed. The cost is what closes that.
+---
+---Zero means "nothing readable here", which covers a spell that takes no health at all and a base
+---the client will not give us. It is not the same as free, and the caller is the one that has to
+---decide what to do about not knowing.
+---
+---For something that converts a tick at a time this is the cost of **one tick**, not of the whole
+---duration, because that is what the effect data says. Under-reporting is the safe direction for a
+---spell whose drain can be walked away from by letting it fade.
+---@param spell any mq spell TLO, or nil
+---@return number hp
+function Spells.HealthCost(spell)
+    if spell == nil then return 0 end
+    local base = baseOfSPA(spell, spas.health, function(b) return b < 0 end)
+    if base == nil then return 0 end
+    return math.abs(base)
+end
+
+---Is this spell barred by the server for being in, or out of, combat?
+---
+---The two flags the server actually checks (`can_cast_in_combat` / `can_cast_out_of_combat` in the
+---spell data) against the caster's **aggro count** -- how many NPCs hold this character on their
+---hate list, which is neither our engagement nor the group's fight. A manastone's click is the
+---example: barred the moment anything is on us, and perfectly usable in a fight nothing has noticed
+---us in.
+---
+---Both flags matter and neither means anything alone. The ordinary spell carries both set, and the
+---server refuses only in the two lopsided cases: `in` clear with `out` set is barred while something
+---is on us, and the mirror is barred while nothing is. Read as "not `CanCastInCombat`" alone, every
+---spell with both flags clear -- which the data does contain -- would be barred for no reason.
+---
+---**`nil` is a first-class answer here**, and it is what an older MQ gives: the client keeps these
+---in `SPELL` (`eqlib`'s `CanCastInCombat`, beside `CanMGB`) but no build exposed them until the
+---members were added, so a script on yesterday's binary cannot read them at all. Not knowing must
+---not read as "it is fine" -- that is the whole of the mistake in the buff state's cached-buff
+---work -- so the answer is nil and the caller decides, which for the canni state means falling
+---back to what the server has already refused out loud.
+---
+---"Cannot read them at all" is meant literally: a member the running build does not carry is not a
+---member that answers nil, it is one that is not there, and reading it raises.
+---@param spell any mq spell TLO, or nil
+---@return boolean|nil barredInCombat nil when the client will not say
+---@return boolean|nil barredOutOfCombat
+function Spells.CombatRestriction(spell)
+    if spell == nil then return nil, nil end
+
+    -- Asked through pcall because these two members are **build-dependent**: they exist only
+    -- where `MQ2SpellType` carries them, and on a client that predates that the member does not
+    -- answer nil -- it is not there, and calling it is an error.
+    --
+    -- Guarding the returned value instead of the access is what broke the Canni State page
+    -- (2026-08-20). The error was raised inside the per-slot draw, which runs inside ActionUI's
+    -- child region, so what the overlay reported was `Missing EndChild()` and a truncated path --
+    -- nothing that named a spell, a member, or this file's actual fault.
+    local ok, canIn, canOut = pcall(function()
+        return spell.CanCastInCombat(), spell.CanCastOutOfCombat()
+    end)
+    if not ok then return nil, nil end
+    if type(canIn) ~= "boolean" or type(canOut) ~= "boolean" then return nil, nil end
+
+    return (not canIn) and canOut, canIn and (not canOut)
+end
+
+---What one use of this puts in the mana bar. Zero when there is nothing readable, exactly as
+---`Spells.HealthCost` reads zero, and a tick's worth for something that arrives over a duration.
+---@param spell any mq spell TLO, or nil
+---@return number mana
+function Spells.ManaGain(spell)
+    if spell == nil then return 0 end
+    return baseOfSPA(spell, spas.mana, function(b) return b > 0 end) or 0
 end
 
 ---Does this spell make what it lands on easier to land spells on?
@@ -497,6 +603,7 @@ function Spells.Refresh()
     Spells.control = {}
     Spells.petSummons = {}
     Spells.itemSummons = {}
+    Spells.manaConversions = {}
     Spells._.categories = {}
 
     local levels = {}
@@ -524,6 +631,9 @@ function Spells.Refresh()
                 -- and a category never has to be trusted for either
                 if Spells.SummonsPet(book) then Spells.petSummons[#Spells.petSummons+1] = spell end
                 if Spells.SummonedItemId(book) ~= nil then Spells.itemSummons[#Spells.itemSummons+1] = spell end
+                -- read off the effects for the same reason again: what trades health for mana says
+                -- so exactly, and no heading in the book collects them
+                if Spells.ConvertsToMana(book) then Spells.manaConversions[#Spells.manaConversions+1] = spell end
                 -- in both lists on purpose: a damage shield is a buff worth keeping up out of a
                 -- fight and a damage action worth casting in one, and which of those it is for is
                 -- the user's decision rather than ours
@@ -545,7 +655,7 @@ function Spells.Refresh()
     for _, list in ipairs({
         Spells.all, Spells.beneficial, Spells.detrimental,
         Spells.heals, Spells.buffs, Spells.damage, Spells.control,
-        Spells.petSummons, Spells.itemSummons
+        Spells.petSummons, Spells.itemSummons, Spells.manaConversions
     }) do
         table.sort(list, byLevelThenName)
     end
@@ -556,7 +666,8 @@ function Spells.Refresh()
         tostring(#Spells.damage) .. " damage, " ..
         tostring(#Spells.control) .. " control, " ..
         tostring(#Spells.petSummons) .. " pet summons, " ..
-        tostring(#Spells.itemSummons) .. " item summons)")
+        tostring(#Spells.itemSummons) .. " item summons, " ..
+        tostring(#Spells.manaConversions) .. " mana conversions)")
 end
 
 return Spells

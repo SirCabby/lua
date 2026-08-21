@@ -71,6 +71,7 @@ local Mobs = {
         ids = {},        -- ordered, strongest angle first
         entries = {},    -- [id] = MobEntry
         poses = {},      -- [id] = { x, y, z, heading, lastMovedMs } -- survives a rebuild
+        rooted = {},     -- [id] = true, for mobs seen held where they stand (see IsRooted)
         sweptIds = nil,  -- the last sweep's answer, folded in until the next one replaces it
         lastSweepMs = 0,
         lastPoseMs = 0,
@@ -204,9 +205,16 @@ local function samplePoses()
                 -- just started watching has told us nothing about whether it is held
                 poses[id] = { x = x, y = y, z = z, heading = heading, lastMovedMs = now }
             else
-                local moved = math.abs(x - was.x) > movedEpsilon
+                -- Position on its own, kept apart from the pair below, because it is the half that
+                -- answers a different question: turning is movement for "is it active", and it is
+                -- not movement at all for "is it held where it stands" -- a rooted mob turns to
+                -- face whoever it is swinging at and never leaves the spot. `IsRooted` reads this
+                -- one; `LastMovedMs` reads the pair.
+                local wentSomewhere = math.abs(x - was.x) > movedEpsilon
                     or math.abs(y - was.y) > movedEpsilon
                     or math.abs(z - was.z) > movedEpsilon
+
+                local moved = wentSomewhere
                 if not moved and heading ~= nil and was.heading ~= nil then
                     local turn = math.abs(Geometry.HeadingDiff(was.heading, heading))
                     moved = turn > turnedEpsilonDegrees
@@ -216,6 +224,13 @@ local function samplePoses()
                     was.x, was.y, was.z, was.heading = x, y, z, heading
                     was.lastMovedMs = now
                 end
+
+                -- A mob that has gone somewhere is not being held anywhere, whatever we last saw on
+                -- it. This is the second edge of the root reading for everyone who is not looking
+                -- straight at the mob: the client only updates a spawn's debuffs while it is our
+                -- target, so a root that broke while we were watching something else is announced
+                -- by the mob taking a step and by nothing else.
+                if wentSomewhere then Mobs._.rooted[id] = nil end
             end
         end
     end
@@ -225,6 +240,82 @@ local function samplePoses()
     for id in pairs(poses) do
         if Mobs._.entries[id] == nil then poses[id] = nil end
     end
+    for id in pairs(Mobs._.rooted) do
+        if Mobs._.entries[id] == nil then Mobs._.rooted[id] = nil end
+    end
+end
+
+---What the client is being told, right now, about the debuffs on the mob we are looking at.
+---
+---**Only ever the target, and that is the whole point.** A spawn's buff list is filled in and kept
+---current by the client for as long as it is targeted -- the root appearing when it lands and going
+---when it fades, with no help from us -- and it is stale the moment we look away, ageing on its own
+---from whatever it said last. So the live view is read where it is live and written down as a fact
+---about the mob; a mob nobody here is looking at is answered by that record and by the mob's own
+---feet (see `samplePoses`), never by a stale buff list pretending to be current.
+---
+---Both edges are written, which is what keeps this from being a latch: a target that reads clean is
+---recorded clean on the same pulse the root drops.
+local function sampleRoot()
+    local targetId = tonumber(mq.TLO.Target.ID()) or 0
+    if targetId < 1 or Mobs._.entries[targetId] == nil then return end
+
+    local rooted = mq.TLO.Target.Rooted
+    if rooted.SpellID() == nil or (tonumber(rooted.Duration()) or 0) == 0 then
+        Mobs._.rooted[targetId] = nil
+        return
+    end
+
+    Mobs._.rooted[targetId] = true
+end
+
+---Is this mob held where it stands?
+---
+---The fact positioning is decided by: a mob that cannot come to anybody hits whoever is standing in
+---its reach, so who stands where stops being cosmetic and starts being the whole of who takes the
+---beating. `states/meleeState.lua` reads it to close the main tank inside everyone else, and
+---`states/standoffState.lua` reads it to move everyone else out.
+---
+---Assembled from the live view (`sampleRoot`) and the mob's own feet (`samplePoses`), never from a
+---clock: nothing here expires, and nothing needs to. It goes true when the client shows us a root on
+---the mob we are looking at, and false when the client shows us it has gone, when the mob leaves the
+---spot it was rooted on, or when the mob leaves the fight altogether.
+---
+---False is "as far as this client can tell, no" -- which is also the answer for a mob nobody here
+---has ever targeted. Both readers are asking whether to *move*, and standing still is the right
+---thing to do about not knowing.
+---@param id number
+---@return boolean isRooted
+function Mobs.IsRooted(id)
+    return Mobs._.rooted[tonumber(id) or 0] == true
+end
+
+---How far this mob can hit from, in units.
+---
+---**The client already works it out, and it is not a number anybody should be typing.** A mob's
+---reach is its body against ours: MQ's own `GetMeleeRange` adds the two melee radii, takes three
+---quarters of that, floors the result at 14 and adds the difference in height. A rat, a giant and a
+---dragon are three different answers, an ogre standing at one of them is a fourth, and no single
+---setting is right for more than one of them -- which is the whole reason this is read rather than
+---configured.
+---
+---Read off `MaxRangeTo`, which is that calculation for this pair of bodies. The game keeps one melee
+---range per pair and hands the same number back whichever way round it is asked, so this is equally
+---"how far it reaches me" and "how far I reach it" -- there is no second, further number to back out
+---past.
+---
+---**Both halves of standing on a rooted mob are measured with it, and that is what keeps them
+---ordered without either half knowing the other exists.** The tank holds at melee range, which is
+---`min(14, reach - 3)` and so inside this by construction whatever the two of them are made of;
+---everyone else backs out past it (`states/standoffState.lua`). Nobody compares themselves to
+---anybody -- they compare themselves to the mob, and the ordering falls out.
+---
+---Nil is "no reading": the spawn has gone, or the client has not answered yet. A caller with no
+---reading of a mob's reach has no business deciding where to stand relative to it.
+---@param id number
+---@return number|nil reach
+function Mobs.Reach(id)
+    return mq.TLO.Spawn("id " .. tostring(id)).MaxRangeTo()
 end
 
 ---When this mob was last seen to move or turn, in wall-clock ms.
@@ -440,6 +531,7 @@ function Mobs.Pulse()
         Mobs._.entries = {}
         Mobs._.ids = {}
         Mobs._.poses = {}
+        Mobs._.rooted = {}
     end
 
     if Status.IsFleeing() then
@@ -447,6 +539,7 @@ function Mobs.Pulse()
         Mobs._.entries = {}
         Mobs._.ids = {}
         Mobs._.poses = {}
+        Mobs._.rooted = {}
         return
     end
 
@@ -460,6 +553,14 @@ function Mobs.Pulse()
     end
 
     rebuild()
+
+    -- Every pulse, unthrottled, and it is the one reading here that earns that: it is three reads
+    -- of one spawn the client already has open, and it is the only moment this client will ever be
+    -- shown that mob's debuffs. A quarter of a second of looking away -- a heal borrowing the
+    -- target, a retarget between two mobs -- is a quarter of a second in which the root that just
+    -- landed is invisible to everybody, and the answer is wanted by whoever is deciding where to
+    -- stand *now*.
+    sampleRoot()
 
     -- after the rebuild, so a mob that joined the fight this pulse is sampled from the pulse it
     -- joined rather than from the one after
@@ -503,6 +604,9 @@ function Mobs.Init(stateMachine)
         " -- A mob only the sweep saw is the loose one: it is in combat with somebody, and the",
         "    client cannot say that somebody is us. Anything crowd control must not get wrong",
         "    waits for one of the other three.",
+        " -- (rooted) is read off the mob's own debuffs, which the client only shows us while the",
+        "    mob is this character's target -- so a mob nobody here has looked at reads as not",
+        "    rooted. It stops reading rooted when the root drops, or when the mob takes a step.",
         " -- The sweep is the (" .. Mobs.eventIds.mobSweep .. ") switch; its reach is on the Mobs page."
     } end )
     local function Bind_CMobs()
@@ -518,7 +622,8 @@ function Mobs.Init(stateMachine)
             if entry ~= nil then
                 print(" -- " .. entry.name .. " (id " .. tostring(id) .. "): " ..
                     Mobs.DescribeSources(id) ..
-                    (Mobs.IsConfirmed(id) and "" or " -- unconfirmed"))
+                    (Mobs.IsConfirmed(id) and "" or " -- unconfirmed") ..
+                    (Mobs.IsRooted(id) and " -- rooted" or ""))
             end
         end
 

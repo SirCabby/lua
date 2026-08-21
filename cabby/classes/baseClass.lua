@@ -8,6 +8,7 @@ local FollowState = require("cabby.states.followState")
 local MeleeState = require("cabby.states.meleeState")
 local Priorities = require("cabby.classes.priorities")
 local RestState = require("cabby.states.restState")
+local StandoffState = require("cabby.states.standoffState")
 
 ---One entry in a class profile: a state singleton and where it sits in the priority chain.
 ---@class ClassStateEntry
@@ -31,7 +32,7 @@ local BaseClass = { key = "BaseClass" }
 
 ---The states every class registers, whatever it is.
 ---
----Seven jobs have nothing to do with what the character can do, so no class should have to
+---Eight jobs have nothing to do with what the character can do, so no class should have to
 ---remember to ask for them. Following is the first -- a wizard follows the same way a warrior
 ---does; and FollowState is also the anchor and click-to-zone state, all three at the follow band
 ---because they are one state and one `Go()`. Resting is the second: sitting to get health, mana
@@ -56,20 +57,28 @@ local BaseClass = { key = "BaseClass" }
 ---in never defaulting `enabled`, so the state stays off until it is switched on -- what a caster
 ---gains here is the option and the Melee State page, not a new habit.
 ---
----Minding the loot window is the fifth: with somebody else controlling the group's loot, every
+---Standing out of a rooted mob's reach is the fifth, and it is here because the chain is what
+---decides who does it. A mob that cannot move hits whoever is standing in its reach, so everyone
+---but the main tank backs out of it -- and "everyone but the main tank" is not a list anybody has
+---to write down: at `Priorities.standoff` this sits below every job in the fight, so the only
+---characters that ever reach it are the ones with nothing in hand. A melee character swinging is
+---busy above it and is never moved. The other half of the same idea lives in MeleeState, which
+---closes the tank inside the group on the same mob.
+---
+---Minding the loot window is the sixth: with somebody else controlling the group's loot, every
 ---member passes on whatever roll nobody has answered, so the looter alone deals with the items
 --- -- the same etiquette whoever the character is. It sits at the loot band, below the fighting
 ---and above follow and rest, so rolls are cleared promptly without ever being answered ahead of
 ---a swing.
 ---
----Getting our own gear back off the ground is the sixth, and everyone dies the same way. It does
+---Getting our own gear back off the ground is the seventh, and everyone dies the same way. It does
 ---nothing at all until somebody says `lootcorpse`, and then it empties every corpse of this
 ---character's within reach. One step weaker than minding the window (`loot + 5`), because a roll
 ---nobody has answered is a roll the whole group is waiting on, while our own gear is waiting on
 ---nobody -- and above follow, so a character told to loot does that rather than trotting off after
 ---the group with its gear still on the floor.
 ---
----Keeping buffs up is the seventh, and it is the one that used to be a capability judgment. It
+---Keeping buffs up is the eighth, and it is the one that used to be a capability judgment. It
 ---read as a spellbook job, so the twelve classes with a book declared it and the four without
 ---(WAR, MNK, ROG, BER) went without a Buff State page at all -- which was the wrong reading of
 ---what a buff slot holds. A slot holds an *action*, and a clicky and an AA hold buffs exactly the
@@ -92,6 +101,7 @@ local function CommonStates()
         -- states under it, so it has to be above them
         { state = FleeState, priority = Priorities.passive },
         { state = MeleeState, priority = Priorities.dps + 5 },
+        { state = StandoffState, priority = Priorities.standoff },
         { state = AdvLootState, priority = Priorities.loot },
         { state = CorpseState, priority = Priorities.loot + 5 },
         { state = FollowState, priority = Priorities.follow },

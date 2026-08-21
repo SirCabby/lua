@@ -31,14 +31,20 @@ local idleLookIntervalMs = 1000
 ---cost nothing, so this is only here to stop the same hopeless attempt being made every pass.
 local retryAfterFailureMs = 5000
 
----How long a pet has to have been gone before it is replaced.
+---How long a pet that walked through a zone line with us is presumed to still be arriving.
 ---
----A pet vanishes for two reasons and the world does not say which: it died, or somebody let it
----go. This is the grace that keeps `/pet get lost` from being undone on the next frame -- the same
----courtesy the rest state pays a player who stood up by hand. It is deliberately short, because
----the common case is a pet that died and a character that would rather have another one; anybody
----who means to play without a pet has the switch.
-local resummonGraceMs = 5000
+---**The only wait a missing pet gets, and it is not a courtesy -- it is a reading that cannot be
+---taken yet.** We are put back into the world a beat before the pet is, so for a stretch after the
+---loading screen lifts "there is no pet" means *not yet* rather than *no*, and the first pass to
+---believe it summons a second pet over the one still walking through. Armed at the line, and only
+---when there was a pet to walk through it; ended the moment the pet turns up, which is the evidence
+---this is waiting on rather than a duration anybody chose.
+---
+---A pet that vanishes **without** a zone line is not waited on at all. It died or it was let go,
+---and either way the standing order to keep a pet up is the more explicit statement of the two --
+---anybody who means to play without one has the switch, and turning that off is a decision that
+---sticks, where a grace only delays this state fighting the same player a few seconds later.
+local zonedPetSettleMs = 5000
 
 ---How long a pet we did not summon is left unjudged after it turns up.
 ---
@@ -180,8 +186,8 @@ local PetSetupState = {
         startupPetId = nil,
         ---a summon of ours landed, so the next pet to appear is one we made
         ourPetComing = false,
-        ---when we first noticed there was no pet, for the grace above
-        goneSinceMs = nil,
+        ---while this stands, a pet we cannot see is one still arriving rather than one to replace
+        petExpectedUntilMs = nil,
         ---orders, both held as the time they stop standing: `summonpet` lapses if nothing was
         ---ready to cast, `gearpet` ends once the casts and hand-offs go quiet
         summonOrder = nil,
@@ -301,10 +307,10 @@ end
 ---attaching, by name.
 ---
 ---And the pet is **behind us**: it is put back into the world a beat after we are, so the stretch
----where the client says there is no pet begins on arrival rather than back at the door. Time spent
----looking at a loading screen is not time spent without a pet, and counting it as such is what
----leaves the grace before a missing pet is replaced already run out by the time the screen lifts
------ so the first pass in the new zone summons a second pet over the one still walking through.
+---where the client says there is no pet begins on arrival rather than back at the door. That is what
+---`zonedPetSettleMs` is armed for here, and why it is armed at the line rather than at the door: a
+---window that started back at the loading screen has already run out by the time the screen lifts,
+---and the first pass in the new zone summons a second pet over the one still walking through.
 ---@return number|nil zoneId the zone we are in, nil while the client will not say
 local function noticeZoneLine()
     local zoneId = tonumber(mq.TLO.Zone.ID())
@@ -314,7 +320,11 @@ local function noticeZoneLine()
     -- the first zone we ever see is not one we crossed into
     if PetSetupState._.zoneId ~= nil then
         DebugLog("A zone line was crossed into zone " .. tostring(zoneId))
-        PetSetupState._.goneSinceMs = Time.current_time()
+        -- only if there was a pet to come through with us: an arrival with no pet behind it has
+        -- nothing to wait for, and waiting anyway is this state pretending to know something
+        if PetSetupState._.pet ~= nil or PetSetupState._.lastPet ~= nil then
+            PetSetupState._.petExpectedUntilMs = Time.current_time() + zonedPetSettleMs
+        end
         -- whatever a summon of ours was going to produce, it produced it on the other side of the
         -- line: the pet standing here now is one that walked through, not one we just cast. Left
         -- set, it is what tells the pet below that it is brand new and owed everything
@@ -364,14 +374,17 @@ local function refreshPet()
             -- already carrying its gear
             PetSetupState._.lastPet = PetSetupState._.pet
             PetSetupState._.pet = nil
-        end
-        if PetSetupState._.goneSinceMs == nil then
-            PetSetupState._.goneSinceMs = Time.current_time()
+            -- The interval below was set on a pass that found nothing to do, and something has
+            -- just happened: looking again "in a second" is the answer to a question that has been
+            -- overtaken. Every order in this state clears it for the same reason, and without this
+            -- the state sleeps through most of a second before it even asks whether to summon.
+            PetSetupState._.nextLookMs = 0
         end
         return nil
     end
 
-    PetSetupState._.goneSinceMs = nil
+    -- it is here, so it is not still coming
+    PetSetupState._.petExpectedUntilMs = nil
 
     local pet = PetSetupState._.pet
     if pet ~= nil and pet.id == id then
@@ -798,8 +811,9 @@ end
 
 ---------------- Orders --------------------
 
----Summon a pet now: the switch and the grace are the state's own judgment, and somebody asking
----outranks both. It waits for a gem for as long as an order is still an order.
+---Summon a pet now: the switch and the wait for a pet still crossing a zone line are the state's
+---own judgment, and somebody asking outranks both. It waits for a gem for as long as an order is
+---still an order.
 function PetSetupState.OrderSummon()
     PetSetupState._.summonOrder = Time.current_time() + summonOrderTtlMs
     PetSetupState._.nextLookMs = 0
@@ -1036,8 +1050,8 @@ function PetSetupState.Init()
     local summonDocs = ChelpDocs.new(function() return {
         "(summonpet) Tells listener(s) to summon a pet now",
         " -- The first pet on the Pet Setup page that is ready is the one cast.",
-        " -- An order, so it does not wait out the grace a pet that was let go is given, and it",
-        "    stands for fifteen seconds while a gem recovers before it lapses."
+        " -- An order, so it does not even wait for a pet that may still be crossing a zone line,",
+        "    and it stands for fifteen seconds while a gem recovers before it lapses."
     } end )
     local function event_SummonPet(_, speaker)
         if not Commands.GetCommandOwners(PetSetupState.eventIds.summon):HasPermission(speaker) then
@@ -1346,19 +1360,26 @@ function PetSetupState.Go()
 
     if pet == nil then
         local ordered = PetSetupState._.summonOrder ~= nil
+        local expected = PetSetupState._.petExpectedUntilMs
 
         if PetSetupStateConfig.GetSummoning() or ordered then
-            -- a pet that vanished may have been let go on purpose, so give the player a moment
-            -- before replacing it. An order says the moment is not needed
-            local goneSince = PetSetupState._.goneSinceMs or Time.current_time()
-            if ordered or Time.current_time() - goneSince >= resummonGraceMs then
+            -- a pet still walking through a zone line behind us is not a pet to replace. Anything
+            -- else missing is replaced on the pass that finds it missing; an order says even the
+            -- zone line is not worth waiting out
+            if ordered or expected == nil or Time.current_time() >= expected then
                 local pick, isNeeded = chooseSummon()
                 if pick ~= nil and startSummon(pick) then return true end
                 if isNeeded then return false end
             end
         end
 
-        PetSetupState._.nextLookMs = Time.current_time() + idleLookIntervalMs
+        -- Never idle past a moment already being waited on. The interval is for "nothing to do,
+        -- ask again in a while", and a pet expected off a zone line is not nothing to do -- it is
+        -- something to do at a time we already know. Sleeping through it and finding out a second
+        -- late is the same mistake either way round.
+        local nextLook = Time.current_time() + idleLookIntervalMs
+        if expected ~= nil and expected < nextLook then nextLook = expected end
+        PetSetupState._.nextLookMs = nextLook
         return false
     end
 

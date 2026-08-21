@@ -2,7 +2,9 @@ local mq = require("mq")
 
 local Casting = require("utils.Casting.Casting")
 local Debug = require("utils.Debug.Debug")
+local Geometry = require("utils.Movement.Geometry")
 local Movement = require("utils.Movement.Movement")
+local Time = require("utils.Time.Time")
 local Timer = require("utils.Time.Timer")
 
 local Action = require('cabby.actions.action')
@@ -11,6 +13,8 @@ local Combat = require("cabby.combat")
 local MeleeStateConfig = require("cabby.configs.meleeStateConfig")
 local MeleeStateMenu = require("cabby.ui.states.meleeStateMenu")
 local Menu = require("cabby.ui.menu")
+local Mobs = require("cabby.mobs")
+local Roles = require("cabby.roles")
 local Skills = require("cabby.actions.skills")
 local Status = require('cabby.status')
 local ToggleCommand = require("cabby.commands.toggleCommand")
@@ -21,6 +25,20 @@ local sequentialActionDelayMs = 1500
 -- How long to leave a `/stand` before sending it again. Standing takes effect when the server says
 -- so, and repeating the command every frame in the meantime is nothing but spam
 local standRetryMs = 1000
+
+-- How far inside the nearest other group member the main tank aims to stand on a rooted mob. Enough
+-- to be unambiguously the nearest body after the client's own rounding, and no more: every unit of
+-- it is a unit further into a mob that may have an ae.
+local rootTankLead = 2
+-- How close it will get in the attempt. Zero, at the user's direction: being the nearest body is the
+-- job, somebody standing *on* a rooted mob is exactly when it matters most, and there is no distance
+-- at which giving up on it is better than standing there. A stick held at 0 simply runs in and stays.
+local minRootTankDistance = 0
+-- How often the other players are measured against the mob. The same quarter second the roster and
+-- the roles are read on, and for the same reason: it is one spawn search and a handful of reads,
+-- nobody crosses a meaningful amount of ground inside one, and the answer is a hold distance rather
+-- than a swing.
+local groupScanIntervalMs = 250
 
 ---@class MeleeState : BaseState
 local MeleeState = {
@@ -34,6 +52,7 @@ local MeleeState = {
         action = "action",
         bashOverride = "bashoverride",
         melee = "melee",
+        rootTank = "roottank",
         stick = "stick",
         tanking = "tanking"
     },
@@ -43,7 +62,11 @@ local MeleeState = {
         standTimer = nil,
         stickTargetId = 0,
         tauntTimer = Timer.new(sequentialActionDelayMs),
-        hateTimer = Timer.new(sequentialActionDelayMs)
+        hateTimer = Timer.new(sequentialActionDelayMs),
+        -- the last measurement of where the rest of the group is standing relative to what we are
+        -- fighting, for the rooted-mob hold distance. A measurement, re-taken on its own cadence
+        -- and thrown away the moment the fight moves to another mob
+        nearestOther = { id = 0, atMs = 0, distance = nil }
     }
 }
 
@@ -52,9 +75,21 @@ local function DebugLog(str)
     Debug.Log(MeleeState.key, str)
 end
 
+---Nothing this state does can land right now.
+---
+---Feared belongs on this list beside the stun and the mez, and it has to be said *here* and not
+---only down in the actions: the abilities refuse themselves already (`actions/skill.lua`,
+---`actions/discipline.lua`), but the swing toggle and the stick are this state's own. Feared, the
+---server is running the character -- there is nothing to face and nowhere to stand -- so the pass
+---below would ask for `/attack on` on every frame the fear happened to sweep us past the mob, and
+---walk a stick into ground we do not control.
+---
+---The frame is still held, as it is for the other four: being feared in a fight is not idle, and
+---the beat spent running is not a beat for anything below the dps band to sit down in.
 ---@return boolean isIncapacitated
 local function IsIncapacitated()
-    return mq.TLO.Me.Stunned() or mq.TLO.Me.Mezzed() ~= nil or mq.TLO.Me.Charmed() ~= nil or mq.TLO.Me.Binding() or mq.TLO.Me.Casting() ~= nil
+    return mq.TLO.Me.Stunned() or mq.TLO.Me.Mezzed() ~= nil or mq.TLO.Me.Charmed() ~= nil
+        or mq.TLO.Me.Feared() ~= nil or mq.TLO.Me.Binding() or mq.TLO.Me.Casting() ~= nil
 end
 
 ---@return boolean hasAggro Whether we are currently holding aggro on the current target
@@ -89,10 +124,124 @@ local function FixCombatState()
     end
 end
 
+---How close to stand to swing at something: inside its reach by three, and never further out than
+---fourteen however big it is.
+---
+---Read off the mob (`Mobs.Reach`) rather than set anywhere. It is also the ceiling on how far
+---`states/standoffState.lua` ever sends anybody: with a tank standing in a mob's reach, the line the
+---rest of the group gets behind is the tank's own distance to it, and this is the furthest out that
+---distance ever relaxes to.
+---@param id number
+---@return number range
 function MeleeState.GetSpawnMeleeRange(id)
-    local maxRangeTo = mq.TLO.Spawn(id).MaxRangeTo()
-    if maxRangeTo == nil then return 14 end
-    return math.min(14, maxRangeTo - 3)
+    local reach = Mobs.Reach(id)
+    if reach == nil then return 14 end
+    return math.min(14, reach - 3)
+end
+
+---How close the nearest other player is standing to this mob.
+---
+---Measured between their coordinates and the mob's rather than asked of anybody: there is no reading
+---another player's distance to a third spawn, and their own client is not something this one can
+---interrogate. What can be had is two positions and a subtraction.
+---
+---**Every player body near the mob counts, and none of them is asked why it is there.** Not group
+---members -- *players*, found by a spawn search, because a mob does not check the group window
+---before it swings: the raid member from another group, the box with the switch off and the stranger
+---who wandered into the camp are all bodies in its reach, and the one standing nearest is the one it
+---hits. The search is centred on us and widened to cover the mob's whole reach from wherever we
+---are standing, which is the closest the client comes to "everybody near that spawn".
+---
+---Nil is "nobody else to measure": solo, or nobody else near the mob. It is not zero, and the caller
+---must not read it as somebody standing on the mob.
+---@param targetId number
+---@return number|nil distance
+local function nearestOtherDistance(targetId)
+    local cache = MeleeState._.nearestOther
+    local now = Time.current_time()
+    if cache.id == targetId and now - cache.atMs < groupScanIntervalMs then
+        return cache.distance
+    end
+
+    cache.id = targetId
+    cache.atMs = now
+    cache.distance = nil
+
+    local spawn = mq.TLO.Spawn("id " .. tostring(targetId))
+    local mobY, mobX, mobZ = spawn.Y(), spawn.X(), spawn.Z()
+    local myDistance, reach = spawn.Distance3D(), Mobs.Reach(targetId)
+    if mobY == nil or mobX == nil or mobZ == nil or myDistance == nil or reach == nil then
+        return nil
+    end
+
+    -- Everyone within the mob's reach is within this of us, wherever we happen to be standing --
+    -- the triangle inequality and nothing cleverer. Anybody it catches beyond that is filtered by
+    -- the reach test below, so the width costs a few reads rather than a wrong answer.
+    local search = "pc radius " .. tostring(math.ceil(myDistance + reach) + 1)
+
+    local myId = mq.TLO.Me.ID()
+    local count = tonumber(mq.TLO.SpawnCount(search)()) or 0
+    for index = 1, count do
+        local pc = mq.TLO.NearestSpawn(index, search)
+        local id = tonumber(pc.ID()) or 0
+        if id > 0 and id ~= myId then
+            local y, x, z = pc.Y(), pc.X(), pc.Z()
+            if y ~= nil and x ~= nil and z ~= nil then
+                local distance = Geometry.Distance3D(y, x, z, mobY, mobX, mobZ)
+                if distance < reach and (cache.distance == nil or distance < cache.distance) then
+                    cache.distance = distance
+                end
+            end
+        end
+    end
+
+    return cache.distance
+end
+
+---How close to hold station on what we are fighting.
+---
+---Melee range, except in the one fight where standing at melee range is not enough. **A rooted mob
+---hits whoever is standing in its reach**, because reaching anybody else is the one thing it cannot
+---do -- so on one of those, the group's main tank being *nearest* is not a nicety, it is the job,
+---and a caster who has drifted inside the tank is the one taking the hits.
+---
+---Closing is expressed against where the other players actually are rather than against a tighter
+---number, because "nearest" is a comparison and nothing else: the answer moves as they move, it is
+---re-derived every pass from where everybody is standing, and it relaxes straight back to melee
+---range the moment nobody is inside it. Every player body near the mob counts, whatever it is doing
+---and whoever it belongs to, because a mob does not check the group window before it swings.
+---
+---**There is no floor.** It will stand at zero if that is what being nearest takes -- somebody
+---standing *on* a rooted mob is the case this exists for, and there is no distance at which giving
+---up and letting them wear it is the better answer. The only ceiling is melee range: it never
+---widens past the distance it would have held anyway.
+---
+---**The other half is the exact mirror of this, and neither half reads the other**
+---(`states/standoffState.lua`): everybody else measures *their* distance to this same mob against
+---*the tank's*, and backs behind it. Both halves read bodies and a mob and nothing else, and both
+---stop the moment they are no longer the one standing wrong -- which is what makes the pair settle
+---instead of chase. The two directions cannot fight, either: this one only ever moves inward and
+---stops at melee range, that one only ever moves outward and stops a step past wherever this one
+---has got to.
+---
+---Only the main tank, only while the mob reads as rooted, and only while the switch is on -- so on
+---any ordinary mob, for anybody else, this is melee range and nothing has changed.
+---@param targetId number
+---@return number range
+local function holdRange(targetId)
+    local range = MeleeState.GetSpawnMeleeRange(targetId)
+
+    if not MeleeStateConfig.GetRootTank() then return range end
+    if not Roles.IsMainTank() then return range end
+    if not Mobs.IsRooted(targetId) then return range end
+
+    -- Nobody inside us is nothing to fix. Measured against the hold rather than against where we
+    -- happen to be standing this instant, so a tank still walking in does not read the others as
+    -- being in front of it and close further than it needs to.
+    local nearest = nearestOtherDistance(targetId)
+    if nearest == nil or nearest > range then return range end
+
+    return math.max(minRootTankDistance, math.min(range, nearest - rootTankLead))
 end
 
 ---Who this state is, when it asks the casting service for something: its band decides whether
@@ -132,6 +281,14 @@ local function DoPrimaryCombatAction()
         primaryAction = Skills.bash
     else
         primaryAction = MeleeStateConfig.GetPrimaryCombatAbility()
+
+        -- Slam belongs to the race we are wearing rather than to the character, so an illusion of
+        -- something that cannot slam leaves nothing to fire -- and leaves the order perfectly
+        -- intact, since it was right when it was given and will be right again. The backup takes
+        -- the swings for exactly as long as that is true.
+        if not primaryAction:HasAction() then
+            primaryAction = MeleeStateConfig.GetBackupCombatAbility()
+        end
     end
 
     if primaryAction:IsReady(MeleeState.CastRequest()) then
@@ -234,7 +391,13 @@ local function melee()
     local distance = mq.TLO.Target.Distance()
     if distance == nil then return true end
 
-    local range = MeleeState.GetSpawnMeleeRange(targetId)
+    local range = holdRange(targetId)
+
+    -- A hold distance that moves while the stick runs has to reach the stick that is running, or the
+    -- tank closes inside the group exactly once -- on the pass the stick happened to start -- and
+    -- then stands at whatever that pass decided for the rest of the fight. Only ever our own stick;
+    -- a higher priority behaviour that has taken movement over is not ours to retune.
+    Movement.SetStickDistance(MeleeState.key, range)
 
     -- We have pulled it off the tank: stop hitting it until the tank has it back. Combat answers
     -- whether that is what has happened -- both halves of it are its own facts -- and this is what
@@ -319,6 +482,7 @@ function MeleeState.Reset()
     MeleeState._.retargetTimer = Timer.new(0)
     MeleeState._.standTimer = Timer.new(0)
     MeleeState._.stickTargetId = 0
+    MeleeState._.nearestOther = { id = 0, atMs = 0, distance = nil }
     -- only our own stick; a higher priority behavior may have taken movement over since
     Movement.StopFor(MeleeState.key)
 end
@@ -354,6 +518,20 @@ function MeleeState.Init()
             },
             get = MeleeStateConfig.GetStick,
             set = MeleeState.SetStick
+        })
+
+        ToggleCommand.Register({
+            key = MeleeState.key,
+            phrase = MeleeState.eventIds.rootTank,
+            summary = "Turns closing inside the group on a rooted mob on or off",
+            about = {
+                "Only ever acts on the group's main tank, and only on a mob that reads as rooted.",
+                "A mob that cannot move hits whoever is standing in its reach, so the tank closes",
+                "until it is the nearest body and relaxes back to melee range once it is.",
+                "The other half is everyone else standing off (the Standoff page)."
+            },
+            get = MeleeStateConfig.GetRootTank,
+            set = MeleeStateConfig.SetRootTank
         })
 
         ToggleCommand.Register({

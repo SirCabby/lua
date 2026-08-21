@@ -51,6 +51,13 @@ local function initAndValidate()
         taint = true
     end
 
+    -- On, because it only ever bites on the group's main tank and only on a mob that is rooted,
+    -- which is exactly the fight where where everyone stands decides who takes the beating.
+    if configRoot.root_tank == nil then
+        configRoot.root_tank = true
+        taint = true
+    end
+
     -- The default was 50 until 2026-07, and it was too short to answer the main assist: the call
     -- goes out the moment the tank engages at pull range, which is routinely outside 50, and a
     -- character that will not close that distance stands there while the group fights. Exactly 50
@@ -64,6 +71,11 @@ local function initAndValidate()
 
     if configRoot.primary_combat_ability == nil then
         configRoot.primary_combat_ability = Skills.none:Name()
+        taint = true
+    end
+
+    if configRoot.primary_combat_ability_backup == nil then
+        configRoot.primary_combat_ability_backup = Skills.none:Name()
         taint = true
     end
 
@@ -177,6 +189,24 @@ function MeleeStateConfig.SetStick(enable)
     print("MeleeState stick: [" .. tostring(enable) .. "]")
 end
 
+---Whether the main tank closes inside the rest of the group on a mob that cannot move.
+---
+---A rooted mob hits whoever is standing in its reach, so on one of those the tank being *nearest*
+---is the job rather than a nicety. Off is "hold melee range and nothing cleverer", which is the
+---right answer for anyone who would rather place the tank by hand -- and the honest answer on a
+---server where the root never reads (see `cabby.mobs`).
+---@return boolean enable
+function MeleeStateConfig.GetRootTank()
+    return getConfigSection().root_tank == true
+end
+
+---@param enable boolean
+function MeleeStateConfig.SetRootTank(enable)
+    getConfigSection().root_tank = enable == true
+    Global.configStore:SaveConfig()
+    print("MeleeState closes inside the group on a rooted mob: [" .. tostring(enable) .. "]")
+end
+
 ---@return number engageDistance
 function MeleeStateConfig.GetEngageDistance()
     return getConfigSection().engage_distance
@@ -206,6 +236,35 @@ end
 function MeleeStateConfig.SetPrimaryCombatAbility(primary_combat_ability)
     if IsValidActiontype(Character.primaryMeleeAbilities, primary_combat_ability:Name()) then
         getConfigSection().primary_combat_ability = primary_combat_ability:Name()
+        Global.configStore:SaveConfig()
+    end
+end
+
+---What swings while the primary is not this character's to use.
+---
+---An innate ability belongs to the race being worn rather than to the character, so a troll under
+---a gnoll illusion has no Slam until it drops. Nothing about the order is wrong for that stretch
+---and it is not touched -- this is what is reached for instead, and only while the reach is
+---needed. The list it is chosen from holds no innates for the obvious reason: a backup that goes
+---away with the same illusion is not a backup.
+---@return ActionType backup_combat_ability
+function MeleeStateConfig.GetBackupCombatAbility()
+    local currentAbilityName = getConfigSection().primary_combat_ability_backup
+    ---@type ActionType
+    local result = Skills.none
+    if not IsValidActiontype(Character.primaryMeleeBackups, currentAbilityName) then
+        currentAbilityName = result:Name()
+        getConfigSection().primary_combat_ability_backup = currentAbilityName
+        Global.configStore:SaveConfig()
+    end
+    result = Actions.Get(ActionType.Ability, currentAbilityName) or result
+    return result
+end
+
+---@param backup_combat_ability ActionType
+function MeleeStateConfig.SetBackupCombatAbility(backup_combat_ability)
+    if IsValidActiontype(Character.primaryMeleeBackups, backup_combat_ability:Name()) then
+        getConfigSection().primary_combat_ability_backup = backup_combat_ability:Name()
         Global.configStore:SaveConfig()
     end
 end

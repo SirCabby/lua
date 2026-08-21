@@ -52,7 +52,9 @@ point is that the caster is starving everything below it while the cast runs, so
 progress without a turn of its own; **CommandQueue** (`commandQueue.lua`), which runs command
 lines pushed to it by callers that must not run commands themselves — every ImGui callback,
 hotbar buttons above all; **Character** (`character.lua`), which watches for the character
-gaining a level, an AA or a bag of clickies and re-reads what it can do; **Combat**
+gaining a level, an AA or a bag of clickies and re-reads what it can do — and tells what the
+*character* has from what the shape it is wearing has, so an illusion cannot take a race innate
+out of a picker or out of a saved order; **Combat**
 (`combat.lua`), which holds what we are fighting for the several states that fight it; **Mobs**
 (`mobs.lua`), which holds what is *in* the fight — a wider question than Combat's and one several
 jobs need the same answer to, assembled from four angles including a sweep that has to be paced;
@@ -74,12 +76,13 @@ This is a **priority-chain cooperative scheduler**: state order = priority; `Go(
 
 | Priority | State | Priority | State |
 |---|---|---|---|
-| 1 | My commands / Task / DZ | 69 | Tank / grab aggro |
-| 19 | Flee (travel mode) / passive | 79 | DPS (melee/spells) |
+| 1 | My commands / Task / DZ | 79 | DPS (melee/spells) |
+| 19 | Flee (travel mode) / passive | 84 | Standoff (out of a rooted mob's reach) |
 | 29 | Cure *(reserved, see below)* | 89 | Looting |
 | 39 | Heal | 99 | Anchor |
 | 49 | Pulling | 109 | Following |
 | 59 | Mez (in combat) | 119/129 | Buff / Rest (misc) |
+| 69 | Tank / grab aggro | | |
 
 **The cure band is reserved and nothing registers at it.** Curing landed inside the heal state
 instead (see Curing below): a cure and a heal are the same character choosing what to cast with one
@@ -199,7 +202,10 @@ cabby/
   combat.lua          service: what this character is fighting; every state that fights reads it
   mobs.lua            service: what is *in* the fight -- the engagement, the extended target
                       window, the group's defend reports and a sweep for anything in combat
-                      stance nearby, merged into one roster that records which angle saw what
+                      stance nearby, merged into one roster that records which angle saw what.
+                      Also samples each mob's pose, and publishes which of them are rooted --
+                      read off the live debuff view of whatever this client is targeted on, and
+                      un-read by the mob taking a step
   curing.lua          service: what is on *this* character that a cure would take off, said out
                       loud for whoever can answer, plus the queue of everyone who has said it.
                       Every class -- the character standing in a DoT is the only one who can see
@@ -238,7 +244,9 @@ cabby/
   casting.lua         wiring only: casting service, its priority gate, movement arbiter, /ccast
   giving.lua          wiring only: registers the giving service and /cgive
   commandQueue.lua    service: runs command lines pushed from ImGui callbacks, a frame later
-  character.lua       capability snapshot: which skills exist (primary/secondary/melee lists)
+  character.lua       capability snapshot: which skills exist (primary/secondary/melee lists),
+                      and which of those are the race's rather than the character's -- an illusion
+                      takes a race innate away, and absent-under-illusion is not "never had it"
   status.lua          shared predicates (IsFacingTarget)
   pet.lua             what the client will say about this character's pet, and the words it takes
                       back (`/pet attack <id>`, back off, the four toggles); also what *kind* of
@@ -246,7 +254,7 @@ cabby/
                       those words it is listening for; no frames
   states/             baseState, fleeState, followState, mezState, meleeState, spellDpsState,
                       petDpsState, healState, buffState, petSetupState, advLootState, corpseState,
-                      restState
+                      standoffState, canniState, restState
   classes/            priorities (the bands), baseClass (assembly), classes (the registry),
                       and one profile per EQ class
   commands/           the chat-command bus (see below), incl. the toggle/action command factories
@@ -287,7 +295,7 @@ inits and registers each in that order. Rules it enforces:
 - **Every class flees, follows, rests, melees, buffs — and minds the loot window and its own
   corpse.** FleeState,
   FollowState (which is also anchor and click-to-zone — one state, one `Go()`), RestState,
-  MeleeState, BuffState, AdvLootState and CorpseState are the seven jobs that have
+  MeleeState, StandoffState, BuffState, AdvLootState and CorpseState are the eight jobs that have
   nothing to do with what the character is, so no profile has to remember to ask for them. Flee is
   there for a second reason as well: it is not a job at all but the absence of every job below it,
   so what it holds back is the same list whatever the character can do. It is also the only state
@@ -429,8 +437,20 @@ timestamped copy **only where the plain one cannot match a stamped line**. Givin
 would be actively harmful: the line would match both patterns, every command would run twice, and
 on a toggle that is two flips and no visible effect.
 
-Both registration paths expand through it — `Speak.GetPhrasePatterns` for comm channels, where it
-is `bc` alone, and `Commands.RegisterEvent` for raw events, which is why an `Event` carries a list
+**The casting service's outcome lines were the third path, and nobody had noticed** (found
+2026-08-20). `CastOutcome.RegisterEvents` registered its patterns straight with `mq.event`, and
+every one of them begins with literal text — `Your spell fizzles`, `Insufficient Mana`, `You can not
+cast this spell while in combat` — which is exactly the case above that is *never heard*. The
+symptom was as invisible as the mechanism: a session log with 7552 casts in it contained not one
+outcome line, so no fizzle, interrupt, resist or refusal had ever reached a caller, and
+`CastTask.ConfirmStart`'s rule for an instant click — "the absence of a complaint is the result" —
+was unconditionally true. A manastone refused by the server for combat read as a success on every
+click, forever. `Casting.Init` now takes a `listenPatterns` expander the way it takes a movement
+arbiter, and `cabby/casting.lua` hands it `Speak.GetListenPatterns`; the library keeps working
+unexpanded for a host that does not stamp its chat.
+
+The other registration paths expand through it — `Speak.GetPhrasePatterns` for comm channels, where
+it is `bc` alone, and `Commands.RegisterEvent` for raw events, which is why an `Event` carries a list
 of mq event ids the way a `Command` does. No pattern registered today needs the copy (both events
 open with `#1#`), but the shape that does is the ordinary one for a raw event: a line about the
 world rather than about a speaker starts with literal text. Registering an event pattern any other
@@ -1385,10 +1405,114 @@ promise one. Position and heading together, because turning is movement for this
 handed back its own will faces its victim before it takes a step, and a rooted one may never take
 one at all.
 
+**It also publishes which mobs are rooted** (`Mobs.IsRooted`), and the interesting part is where the
+reading comes from. A spawn's debuff list is filled in and kept current by the client only while that
+spawn is **targeted** — the root appearing when it lands and going when it fades, with no help from
+us — and it is stale the moment we look away. So the live view is read where it is live (`sampleRoot`,
+every pulse, off `Target.Rooted`) and written down as a fact about the mob; a mob nobody here is
+looking at is answered by that record, never by a stale buff list pretending to be current.
+
+Both edges are the world's, which is what keeps it from being a latch that needs a clock to let go:
+
+| It goes true | It goes false |
+|---|---|
+| the client shows a root on the mob we are targeted on | the same view shows the root gone, or expired |
+| | the mob **changes position** — a mob that has gone somewhere is not being held anywhere |
+| | the mob leaves the roster (dead, zoned, fled) |
+
+The position half is why `samplePoses` keeps *position on its own* beside the position-and-heading
+pair `LastMovedMs` reads. Turning is movement for "is it active" and is not movement at all for "is
+it held": a rooted mob turns to face whoever it is swinging at and never leaves the spot, so a
+reading that counted the turn would un-root every mob that looked at somebody. It is also the only
+announcement a broken root ever gets for a character that is not looking at the mob.
+
+False therefore means "as far as this client can tell, no" — including for a mob nobody has ever
+targeted. Both readers are asking whether to *move*, and standing still is the right answer to not
+knowing. `/cmobs` marks the mobs that read rooted, which is the thing to look at before believing
+any of it on a given server.
+
 **It decides nothing and says nothing** — no engaging, no targeting, no chat — which is also what
 makes it safe to read from an ImGui callback. Zoning empties it (spawn ids do not survive one) and
 so does a flee (the fight the group ran from is not a fight). `mobsweep` is the switch, its reach is
 two numbers on the Mez page, and `/cmobs` reports every mob with the angles that saw it.
+
+## Standing off a rooted mob (`states/standoffState.lua` + `states/meleeState.lua`)
+
+**A mob that cannot move hits whoever is standing in its reach.** Reaching the thing it hates most is
+the one thing a root takes away, so it swings at what is there instead — and who is standing where
+stops being cosmetic and becomes the whole question of who takes the beating. The group's answer has
+two halves, and they are held in two places because they are two different jobs done by two different
+characters.
+
+**One mob, and it is the main tank's own target** (`Combat.GetTankTargetId`). Who stands where only
+decides who takes a beating on a mob that cannot walk to its hate target, and the mob that matters is
+the one the tank is holding — a rooted add off to the side that nobody is fighting is not a question
+about who takes a beating, because nobody is taking one. Nothing else in the zone is looked at by
+either half. A main tank is a group role and only a group role (see Roles), which is the right answer
+inside a raid too: the tank of *this* group is the body standing between this character and the thing
+hitting it.
+
+**How far is measured, never set, and the two halves are the same measurement from opposite ends.**
+Each character compares *its own distance to that mob* against *the other bodies' distances to it*,
+and moves the way its job says: the tank moves in until it is nearest, everybody else moves back
+until they are not. Nobody reads anybody's state, nobody is told a number, and there is nothing to
+keep in agreement — two positions and a subtraction answer it every pass.
+
+**The tank closes** (`meleeState.lua`, `roottank`). While any other player is standing nearer to the
+mob than the tank's hold, the hold moves inside them; it relaxes straight back to melee range the
+moment nobody is. Every *player* body near the mob counts — found by a spawn search rather than off
+the group window, because a mob does not check the group window before it swings, and the raid member
+from another group, the box with the switch off and the stranger in the camp are all bodies in its
+reach. **There is no floor**: it will stand at zero if that is what being nearest takes, since
+somebody standing *on* a rooted mob is the case this exists for and there is no distance at which
+letting them wear it is better. The only ceiling is melee range. Everyone is measured by coordinates
+rather than asked: there is no reading another player's distance to a third spawn.
+
+**Reach is the gate, not the target** (`Mobs.Reach`). A mob's reach is a body against a body — MQ's
+own `GetMeleeRange` adds the two melee radii, takes three quarters, floors at 14 and adds the height
+difference — so a rat swings at about sixteen units and a dragon at forty. Standing outside it is not
+being hit, so nothing happens however anybody is arranged, and a tank running in from thirty units is
+never read as a line to get behind on a mob that cannot touch us. Inside it, the reach stops being
+the question, because **backing out past a dragon's forty units walks a healer most of the way out of
+the fight to fix something the tank standing at fourteen had already fixed.** The line is the tank's
+own distance, so nobody is ever sent past melee range plus a step — about seventeen units — that
+being the furthest the tank's hold ever relaxes to.
+
+**No tank to compare against is "no comparison to make", and nothing moves** — no main tank named,
+out of the zone, dead, or nobody here can say what it is on. Standing still is what not knowing
+deserves; backing out of everything is the absolute answer this deliberately does not give.
+
+The hold reaches a stick that is **already running** (`Movement.SetStickDistance`, the exact
+counterpart of `SetFollowHold` and there for the same reason). Without it the tank would close inside
+the group once — on the pass the stick happened to start — and then stand at whatever that pass
+decided for the rest of the fight.
+
+**Everyone else opens out** (`standoffState.lua`, `standoff`), and *who* "everyone else" is nobody
+has to write down. At `Priorities.standoff` the state sits below every job in the fight, so the only
+characters that ever reach it are the ones with nothing in hand: the healer between heals, the caster
+out of mana, the hybrid whose swing is off. A melee character in there swinging is busy above it and
+is never moved. The main tank is the one explicit exception, since being nearest is its job.
+
+It sits **above follow and anchor** deliberately: where to stand is contested with the traveling core,
+and the chain is what settles a contest. A retreat therefore holds the frame while it runs, because
+the movement service takes one task at a time and the follow below would start its own over the top
+of ours. It is a short walk, and nothing below it is starved for longer than that.
+
+**Sight is what stops it, and it is read by walking.** There is no asking the world what can be seen
+from a spot we are not standing on, so the retreat is watched rather than planned: it aims straight
+back along the line between us — the one bearing that keeps the mob in front of us the whole way —
+and the pass the mob goes out of sight is the pass it stops. A retreat that ran out of room, for
+sight or for a wall, marks the spot it ran out at, and while we are still standing there nothing
+tries again. That mark is a measurement and dies like one: the mob leaving the fight, the root
+dropping, or us ending up somewhere else all spend it. Nothing here is timed.
+
+The two halves settle rather than chase, and they cannot fight: **this one only ever moves outward
+and stops a step past wherever the tank has got to, that one only ever moves inward and stops at
+melee range.** Each stops as soon as it is no longer the one standing wrong, so whichever notices
+first resolves it for both — a tank that closes inside a caster has already put the caster behind it,
+and a caster that backs out has already let the tank relax. Which is also the answer to why backing away from a mob is allowed here at all
+when `Stick:ShouldMoveBack` refuses it — a mob that can take the ground back turns a retreat into a
+fight walked across the zone a step at a time, and a rooted one cannot.
 
 ## Mez state (`states/mezState.lua`)
 
@@ -1629,6 +1753,152 @@ answers what every other mez script answers with an `/attack off` before each ca
 in the fight is doing — held, loose, immune, or the one being killed — with the reason and the
 roster angles beside it. The phrase is `mezzing` rather than `mez` because no registered phrase may
 be a prefix of another and `mezaction` sits inside the shorter name.
+
+## Canni state (`states/canniState.lua`)
+
+Trading health for mana. One job with four faces and no reason to treat them as four: a shaman's
+cannibalize line and the Cannibalization AA, the modulation rods a magician summons and hands
+round, a manastone, a necromancer's Death Bloom. Every one of them is the same sentence — take hit
+points off, put mana on — so every one of them is a slot in one ordered list.
+
+**What a character owns is read, not declared.** `Spells.ConvertsToMana` finds them off the
+effects, not off a heading: no category in the book collects them (the client files them under
+Health, under Mana, under Utility Beneficial and under nothing at all) and the heading that sounds
+exactly right — Mana Flow — is full of the mana *regen* buffs that cost nothing, which is the
+opposite of this job. Both signs matter and that is the whole of the read: SPA 0 negative (health
+out) and SPA 15 positive (mana in). Either half on its own fills the list with heals, plain mana
+buffs and the mana drains cast at somebody else. The same reasoning as the control set, one layer
+down — where a category is only a coarse label, an effect is the thing itself.
+
+**Where it sits is the design.** `Priorities.canni` (74) is above the damage rotations and below
+every job that *is* the fight. Above the rotations because mana is what they are spent out of: a
+caster that nukes to empty and then stands there has lost more casts than the beat this costs.
+Below the fight because a heal, a mez or a taunt is somebody dying if it waits, and no amount of
+mana is worth that. It also has to be above the melee state, which reports busy for the whole of an
+engagement — anything under that never sees a mid-fight frame at all, and mid-fight is exactly when
+this is worth doing. This band is what a shaman's `unimplemented` line asked for since the class
+profiles landed.
+
+**It is self-limiting, which is what makes a state this strong safe.** The mana ceiling ends it,
+so it takes frames from the rotation below only until the bar is full again — unlike a rotation,
+which has another nuke for as long as the mob is alive.
+
+It is bounded at both ends: `min_hp_pct` (default 85) and `max_mana_pct` (default 70), the same pair
+every bot script in this genre settles on. **The floor is where trading stops, not a budget for each
+use** — asked before a use and not after it, which is the only reading that leaves the expensive half
+of the family usable. The Cannibalization AA takes a third to a half of a shaman's health in one
+click, so a floor read as "and where would that leave me" refuses it at every setting anyone would
+actually pick. A trade is meant to hurt; the floor says how far down the character is willing to go
+before it stops going *further*, and the health comes back afterwards, which is the whole shape of
+canni-dancing.
+
+**The health end is a latch, not a line, and it has to be** (added 2026-08-20, after the first
+version thrashed in game). A single threshold cannot work here, because the trade is what moves
+health across the line it is being judged against: trade down to the floor, sit, take one regen tick
+back over it, stand up and spend that tick, sit again. A stand and a sit per tick — and the
+out-of-combat regen bonus, which is the entire reason for sitting, never applies for long enough to
+be worth anything. So `resume_hp_pct` (default 95) is where trading *starts again*, and
+`_.recovering` holds the state in between: on the pass health falls under the floor, off the pass it
+reaches the resume point, unchanged in between. Both edges are read from the world every pass, so it
+is a reading rather than a mode — nothing here can go stale — and it runs ahead of every hold, since
+a pass held back by the mana ceiling still has to watch where health has been. What it buys is a
+burst of trading and then a rest worth sitting through.
+
+**The latch reads the settled bar and never the projection** (2026-08-20). A use is charged against
+health the instant it is fired, before the server has agreed to it, and that projection is what
+keeps a burst from walking through the floor while its packets are in the air. But a use can fail to
+land for reasons that have nothing to do with our health — refused, preempted by a stronger cast,
+lost to a zone — and latching on the projection turns a burst that was *interrupted* into one that
+spent health it never spent: the ledger clears a moment later, the bar reads exactly where it always
+did, and the job sits waiting to climb back to a resume point it never fell from. The projection
+decides whether to fire the next use; where health *is* is a question only the bar can answer.
+
+The pair is kept in order in both directions by the setters and again on read, because a resume
+point *below* the floor is worse than the oscillation `RestStateConfig` guards its own pair against:
+it is a latch that could never clear. Set the two equal to get the old single-threshold behaviour
+back.
+
+**Only the floor is about safety, and the gap is skipped where there is no rest to protect**
+(2026-08-20). The gap buys one thing — a sit long enough for the out-of-combat regen bonus to be
+worth having — so waiting it out while standing in a fight is not caution, it is mana not taken at
+the one moment mana is being spent, and it leaves a shaman cannying once a fight and then watching
+the group run out of heals. Standing in a fight the floor becomes the only line, and the character
+trades down to it, takes a heal, and trades down to it again. The floor itself is asked
+unconditionally, which is what keeps the bypass from being a hole in the safety number.
+
+Sitting is asked rather than assumed from the fight (`Me.State`), because `restcombat` lets a
+character med through a fight it has not joined and a rest that is really happening is worth
+protecting. Both readings are the world's: the fight is Combat's published fact, the posture is the
+client's — no state is read, and whose sit it is is neither asked nor this state's business, since
+a character that is sitting is a character getting the bonus. There is no setting for any of it,
+because there is nothing to choose between: the latch goes on being maintained throughout, so the
+pass the fight ends is the pass the gap starts applying again.
+
+What each use costs is still read off the spell (`Spells.HealthCost` / `ManaGain`) and is on the
+page beside every slot, so the floor is set by somebody who can see that this slot costs six
+thousand hit points and that one costs fifty. It buys one behaviour as well, and only one:
+**nothing is fired that costs more health than the character is carrying.** That is not a policy
+and has no dial next to it — a manastone carries no safeguard of its own, and clicking one once too
+often is the classic way to die to one. A slot that cannot be paid for is *passed over* rather than
+ending the walk, so an expensive AA at the top of the list and a cheap spell under it does the right
+thing at both ends of a health bar.
+
+**Some of these cannot be used while anything is fighting us, and the server is the only one who
+will say so** (2026-08-20, found in game). A manastone is the case: its click effect (spell 940,
+*Mana Convert*) carries `can_cast_in_combat = false` in the spell data, and `Mob::DoCastSpell`
+refuses it whenever the caster's **aggro count** is anything but zero — which is neither our
+engagement nor the group's fight, but the number of NPCs holding this character on their hate list.
+A shaman standing untouched in the middle of a pitched battle has an aggro count of zero and can
+click all it likes; one add peeling onto it stops that dead. The cannibalize line, the AA and the
+modulation rods all carry the flag set, so they are unaffected.
+
+**The flag is read off the spell** (`Spells.CombatRestriction`), and the slot is skipped before
+anything is spent. Both flags are consulted, not just one: the ordinary spell carries both set and
+the server refuses only in the two lopsided cases, so `not CanCastInCombat` on its own would bar
+every spell whose data has both clear. The gate is `Combat.GetHaterIds` — the client's side of
+exactly the number the server checks, the whole `Auto Hater` list rather than the subset coming for
+us most — so a manastone is used freely in a pitched battle nothing has noticed us in.
+
+Reading it needed **two members added to `MQ2SpellType`** (`CanCastInCombat`, `CanCastOutOfCombat`,
+2026-08-20). The client has always kept them in `SPELL` — beside `CanMGB`, which was already
+exposed — but no MQ build surfaced them, so the read goes through a `pcall`: a member the running
+build does not carry is **absent**, not a member that answers nil, and reading it raises. Guarding
+the returned value instead of the access is what broke this page on the first attempt, and the
+symptom named neither the member nor the file's real fault — the error was raised inside the
+per-slot draw, which runs inside ActionUI's child region, so the overlay reported `Missing
+EndChild()`. Before the rebuild `Spells.CombatRestriction` answers `nil` and the state falls back to being told: the four refusal lines are cast outcomes
+(`CastOutcome.inCombat` / `outOfCombat`, spell and ability wordings both directions) and the slot
+that earns one is remembered. That memory is the one thing in this state kept without an expiry,
+because it is a property of the *thing* rather than a state of ours. Both paths end in the same
+place; one of them costs a click per thing.
+
+Either way the slot is **passed over rather than ending the walk**, like one that cannot be paid
+for, so a barred manastone is no reason not to reach the cannibalize under it. The page and
+`/ccanni` both say which slots carry the restriction, because a slot that works between pulls and
+silently does not during them is otherwise a puzzle.
+
+**A slot that leaves something on the bar is not fired again while it is there.** Death Bloom
+converts over a duration rather than on the spot, and that difference is a duration read rather than
+a different kind of slot: read off the spell, confirmed against our own buff bar (and the song
+window) every pass, with the same two-second evidence window the dps rotation keeps for the beat
+between a cast reporting success and the bar catching up.
+
+The last control is `cannicombat`, on by default, and it reads `Combat.IsGroupFighting` rather
+than our own engagement — the character it matters most to is a healer, which holds no target for
+the length of a fight it is standing in the middle of, so a gate on `IsEngaged` would read "no fight
+here" and quietly never fire.
+
+What this state deliberately does **not** do is keep a lich up. The necromancer and shadow knight
+lines that drain health for mana over ten minutes (Call of Bones, Demi Lich, Arch Lich, Deathly
+Temptation) are buffs by every measure that matters — cast once, kept, wanted at full mana as much
+as at empty — and the buff state is where a buff belongs. This is the on-demand half of the family:
+fired because the bar is low, and stopped because it is not.
+
+`canni`, `cannicombat` and `canniaction` are the commands, `/ccanni` reports what it is doing, what
+each slot trades and why one is not firing. Registered by the twelve classes that have a mana bar;
+the four without one (WAR, MNK, ROG, BER) have nothing to convert to, and the state says so rather
+than trusting a percentage — `MaxMana` of zero is the reading, since a warrior sits at 0% mana
+forever.
 
 ## The two dps states
 
@@ -2699,6 +2969,19 @@ The whole cycle is `Combat.GetUnderAttackIds` read fresh every pass, and nothing
   peel is the taunt.
 - **It does not wait on there being a fight.** With `autoengage` off a beating is a beating nobody
   agreed to, and the pet is the answer to it this state has.
+- **A mezzed mob is skipped, and the world is what says so.** A mez does not take a mob off our hate
+  list — it takes the mob off *us* — so a mezzed add sits in that 100% aggro list exactly as it did
+  while it was swinging, and the peel would be aimed at the one thing in the camp that is already
+  handled. It is also an order the world refuses: a pet will not attack a mezzed mob, and the server
+  answers `/pet attack <id>` with *"&lt;pet&gt; tells you, 'I am unable to wake &lt;mob&gt;,
+  master.'"* — the only *no* any of these words ever gets. Unheard, that is the ordinary retry
+  pacing turned into the whole group's chat window full of the same line until the mez breaks, with
+  the pet standing on the mob it was already killing (found in game 2026-08-16, and with two mobs of
+  a name in the camp it reads as a pet complaining about the mob it is standing on). So the line is
+  read: the mob is left alone until the world takes the refusal back, by **moving or turning** (a
+  mez holds a mob perfectly still, which is `Mobs.MarkPose`/`MovedFrom`), by the **awakened line**
+  naming something of its name (the mob mezzed where it stood that wakes without taking a step),
+  or by **dying**. No timer, and nothing is concluded from a silence — this is the world speaking.
 
 While the pet is peeling, **the job outranks the dials on two switches**: taunt on, because taunt is
 the only thing a pet does that takes a mob off somebody and a peel that will not hold what it takes

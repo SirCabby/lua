@@ -30,12 +30,14 @@ local Spells = require("cabby.actions.spells")
 local Character = {
     key = "Character",
     primaryMeleeAbilities = {},
+    primaryMeleeBackups = {},
     secondaryMeleeAbilities = {},
     meleeAbilities = {},
     _ = {
         isInit = false,
         signature = nil,
-        lastCheckMs = 0
+        lastCheckMs = 0,
+        baseInnates = {}
     }
 }
 
@@ -49,20 +51,104 @@ local function DebugLog(str)
     Debug.Log(Character.key, str)
 end
 
+---Effects that make every reading about a shape we are wearing rather than about us:
+---`SPA_CHANGE_FORM` (58) is what an illusion is made of and `SPA_PERM_ILLUSION` (238) is the one
+---that outlives death.
+local illusionSPAs = { 58, 238 }
+
+---How many short-duration slots are looked at alongside the buff window. The buff window's count
+---comes from the client (`MaxBuffSlots`); the short window has no such reading, so this is a
+---bound rather than an answer -- the same one `cabby.curing` walks, for the same reason.
+local shortBuffSlots = 30
+
+---@param buff any a slot from either window
+---@return boolean wearsIt whether this buff is what is putting a shape on us
+local function isAShape(buff)
+    local spell = buff.Spell
+    if spell == nil or spell.ID() == nil then return false end
+
+    for _, spa in ipairs(illusionSPAs) do
+        if spell.HasSPA(spa)() == true then return true end
+    end
+    return false
+end
+
+---@return boolean isIllusioned whether the character is wearing some other race right now
+---
+---Both windows are walked and each occupied slot is asked what its *spell* does, rather than
+---handing the client a predicate to search with: reading a buff's spell is the surface the rest
+---of cabby already lives on (`cabby.curing`, `cabby.pet`), and it is the one this client is
+---known to answer. Paid a few times a minute out of `Pulse`, never per frame.
+function Character.IsIllusioned()
+    local buffSlots = tonumber(mq.TLO.Me.MaxBuffSlots()) or shortBuffSlots
+    for slot = 1, buffSlots do
+        local buff = mq.TLO.Me.Buff(slot)
+        if buff.ID() ~= nil and isAShape(buff) then return true end
+    end
+
+    for slot = 1, shortBuffSlots do
+        local song = mq.TLO.Me.Song(slot)
+        if song.ID() ~= nil and isAShape(song) then return true end
+    end
+
+    return false
+end
+
+---What the *character* has, as opposed to what the shape they are wearing has.
+---
+---An illusion is a race change, and the client rebuilds its innate abilities out of the race it
+---is showing -- so a troll wearing a gnoll has no Slam and `Me.Ability` says so, honestly and
+---about the gnoll. That reading cannot tell "this character never had it" from "not in this
+---shape", which is the same trap as reading an empty buff cache: taken at face value it deletes
+---an order nobody withdrew. So the answer is taken while nothing is worn -- where the client is
+---describing us -- and held across the stretch where no such view exists. It is un-set by the
+---next un-illusioned reading, never by a clock, and never written while a shape is on.
+local function updateBaseInnates()
+    if Character.IsIllusioned() then return end
+
+    for _, skill in ipairs(Skills.innate) do
+        Character._.baseInnates[skill:Name()] = skill:HasAction()
+    end
+end
+
+---@param skill Skill
+---@return boolean belongs whether this ability is the character's rather than the shape's
+local function belongsToCharacter(skill)
+    if skill:HasAction() then return true end
+    if not skill:Innate() then return false end
+
+    -- Innate, absent, and therefore only absent from whatever is being worn. Answer with what an
+    -- un-illusioned look found, and if there has never been one -- cabby started under an
+    -- illusion -- keep offering it: an unknown is not a no, and being wrong costs one dead entry
+    -- in a picker rather than an order silently thrown away.
+    return Character._.baseInnates[skill:Name()] ~= false
+end
+
 local function loadAbilities()
     -- Primary Melee Abilities
     Character.primaryMeleeAbilities = {}
     for _, skill in ipairs(Skills.primary) do
-        if skill:HasAction() then
+        if belongsToCharacter(skill) then
             Character.primaryMeleeAbilities[#Character.primaryMeleeAbilities+1] = skill
         end
     end
     Character.primaryMeleeAbilities[#Character.primaryMeleeAbilities+1] = Skills.none
 
+    -- What a primary melee ability falls back to while it is not ours to use. Only abilities no
+    -- illusion can reach, because an innate going away is the whole reason a backup exists --
+    -- one that vanishes with the same shape change is no backup at all.
+    Character.primaryMeleeBackups = {}
+    for _, skill in ipairs(Skills.primary) do
+        if not skill:Innate() and skill:HasAction() then
+            Character.primaryMeleeBackups[#Character.primaryMeleeBackups+1] = skill
+        end
+    end
+    Character.primaryMeleeBackups[#Character.primaryMeleeBackups+1] = Skills.none
+
     -- Secondary Melee Abilities (Monk)
     Character.secondaryMeleeAbilities = {}
     for _, skill in ipairs(Skills.secondary) do
-        if skill:HasAction() then
+        if belongsToCharacter(skill) then
             Character.secondaryMeleeAbilities[#Character.secondaryMeleeAbilities+1] = skill
         end
     end
@@ -71,10 +157,19 @@ local function loadAbilities()
     -- Melee Abilities
     Character.meleeAbilities = {}
     for _, skill in ipairs(Skills.melee) do
-        if skill:HasAction() then
+        if belongsToCharacter(skill) then
             Character.meleeAbilities[#Character.meleeAbilities+1] = skill
         end
     end
+end
+
+---@return string fingerprint of the innate half of the lists, as they would be built right now
+local function innatesFingerprint()
+    local parts = {}
+    for _, skill in ipairs(Skills.innate) do
+        parts[#parts+1] = skill:Name() .. "=" .. tostring(belongsToCharacter(skill))
+    end
+    return table.concat(parts, ",")
 end
 
 ---What each part of the signature stands for, and what re-reading it costs.
@@ -91,7 +186,13 @@ local function readSignature()
         book = Spells.Fingerprint(),
         -- a stand-in for "the bags changed": it moves when anything is picked up or put down,
         -- and misses a swap that trades one item for another, which is what /crefresh is for
-        freeInventory = tonumber(mq.TLO.Me.FreeInventory()) or 0
+        freeInventory = tonumber(mq.TLO.Me.FreeInventory()) or 0,
+        -- deliberately the *answer* about the innates rather than whether an illusion is on:
+        -- a troll's Slam is the troll's whatever shape is over it, so a clicky moves nothing and
+        -- nothing churns. What does move it is a human stepping into an ogre and gaining a Slam
+        -- they never had -- and stepping back out of it -- and the first un-illusioned look at a
+        -- troll that cabby started up already wearing something
+        innates = innatesFingerprint()
     }
 end
 
@@ -99,6 +200,10 @@ end
 ---@param parts? table which registries to re-read; nil means all of them
 function Character.Refresh(parts)
     parts = parts or { abilities = true, spells = true, aas = true, items = true }
+
+    -- before anything reads an ability, so the lists are built against the freshest answer to
+    -- "is this ours or the shape's"
+    updateBaseInnates()
 
     if parts.abilities then
         Disciplines.Refresh()
@@ -132,6 +237,8 @@ function Character.Pulse()
     if now - Character._.lastCheckMs < checkIntervalMs then return end
     Character._.lastCheckMs = now
 
+    updateBaseInnates()
+
     local previous = Character._.signature
     local current = readSignature()
     if previous == nil then
@@ -147,6 +254,11 @@ function Character.Pulse()
     if current.book ~= previous.book then parts.spells = true end
     if current.aaSpent ~= previous.aaSpent then parts.aas = true end
     if current.freeInventory ~= previous.freeInventory then parts.items = true end
+    if current.innates ~= previous.innates then
+        -- an illusion coming off is the usual way this moves: the client hands the innates back
+        -- and we have finally seen the character rather than a costume
+        parts.abilities = true
+    end
 
     if next(parts) == nil then
         Character._.signature = current

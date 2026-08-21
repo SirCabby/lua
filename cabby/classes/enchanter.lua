@@ -1,6 +1,7 @@
 local BaseClass = require("cabby.classes.baseClass")
 local Priorities = require("cabby.classes.priorities")
 
+local CanniState = require("cabby.states.canniState")
 local MezState = require("cabby.states.mezState")
 local PetDpsState = require("cabby.states.petDpsState")
 local PetSetupState = require("cabby.states.petSetupState")
@@ -32,6 +33,7 @@ local Enchanter = BaseClass.new({
     key = "Enchanter",
     shortName = "ENC",
     states = {
+        { state = CanniState, priority = Priorities.canni },
         { state = MezState, priority = Priorities.mez },
         { state = SpellDpsState, priority = Priorities.dps - 1 },
         { state = PetDpsState, priority = Priorities.dps - 2 },

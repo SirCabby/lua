@@ -28,6 +28,16 @@ function ActionType:EndCost()
     error("ActionType:EndCost() not implemented")
 end
 
+---Is this granted by the race being worn rather than by the character?
+---
+---Answered `false` by default, because almost nothing is: a spell is scribed, a disc is trained,
+---an AA is bought, and none of them care what shape the character is in. Only a race innate --
+---Slam -- comes and goes with an illusion, and only `Skill` has a reason to say otherwise.
+---@return boolean
+function ActionType:Innate()
+    return false
+end
+
 ---Is this worth using right now? Cooldowns, resources, and whether the target it would be used
 ---on can actually be reached.
 ---@param request? table who it would be used on: `{ targetId }`. Skills and disciplines ignore

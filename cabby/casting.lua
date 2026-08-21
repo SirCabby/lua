@@ -8,6 +8,7 @@ local ChelpDocs = require("cabby.commands.chelpDocs")
 local Commands = require("cabby.commands.commands")
 local Priorities = require("cabby.classes.priorities")
 local SlashCmd = require("cabby.commands.slashcmd")
+local Speak = require("cabby.commands.speak")
 local UserInput = require("cabby.utils.userinput")
 
 ---Cabby side wiring for the reusable casting service in `utils/Casting`.
@@ -113,7 +114,13 @@ function CabbyCasting.Init(stateMachine)
     local ftkey = Global.tracing.open("Casting Setup")
 
     CastingConfig.Init()
-    Casting.Init({ movementArbiter = buildMovementArbiter(stateMachine) })
+    Casting.Init({
+        movementArbiter = buildMovementArbiter(stateMachine),
+        -- the same expander every other registration path in cabby uses. Without it none of the
+        -- casting service's outcome lines is ever heard on a client that stamps its chat, since
+        -- they all begin with literal text -- see ARCHITECTURE.md, "Chat timestamps"
+        listenPatterns = Speak.GetListenPatterns
+    })
     stateMachine:RegisterService(Casting)
     stateMachine:RegisterPriorityGate(Casting.GetPriorityFloor)
 

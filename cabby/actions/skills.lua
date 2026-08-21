@@ -9,6 +9,7 @@ local Skills = {
     facing = {},        -- Must be facing the target to use
     fear = {},          -- Inflicts fear
     hate = {},          -- Increases aggro / hate against target
+    innate = {},        -- Granted by race, so an illusion of another race takes it away
     melee = {},         -- Actions to perform while in melee combat (non-primary)
     primary = {},       -- Primary Melee actions
     push = {},          -- Pushes target
@@ -64,6 +65,13 @@ Skills.tailrake, Skills.tigerclaw)
 
 -- setAttribute("hate",
 -- Skills.taunt)
+
+-- Race grants these, not a class or a level. The client rebuilds its innate abilities out of
+-- whatever race it is showing, so one of these reads absent for as long as an illusion of another
+-- race is worn -- which is not the same fact as the character not having it. `cabby.character`
+-- is where the two are told apart.
+setAttribute("innate",
+Skills.slam)
 
 setAttribute("melee",
 Skills.disarm, Skills.intimidation)

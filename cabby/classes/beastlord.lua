@@ -1,6 +1,7 @@
 local BaseClass = require("cabby.classes.baseClass")
 local Priorities = require("cabby.classes.priorities")
 
+local CanniState = require("cabby.states.canniState")
 local HealState = require("cabby.states.healState")
 local MeleeState = require("cabby.states.meleeState")
 local PetDpsState = require("cabby.states.petDpsState")
@@ -17,6 +18,7 @@ local Beastlord = BaseClass.new({
     key = "Beastlord",
     shortName = "BST",
     states = {
+        { state = CanniState, priority = Priorities.canni },
         { state = HealState, priority = Priorities.heal + 5 },
         { state = SpellDpsState, priority = Priorities.dps - 1 },
         { state = MeleeState, priority = Priorities.dps },

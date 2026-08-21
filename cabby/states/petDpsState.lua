@@ -8,7 +8,9 @@ local ChelpDocs = require("cabby.commands.chelpDocs")
 local Combat = require("cabby.combat")
 local CommandQueue = require("cabby.commandQueue")
 local Commands = require("cabby.commands.commands")
+local Event = require("cabby.commands.event")
 local Menu = require("cabby.ui.menu")
+local Mobs = require("cabby.mobs")
 local Pet = require("cabby.pet")
 local PetDpsStateConfig = require("cabby.configs.petDpsStateConfig")
 local PetDpsStateMenu = require("cabby.ui.states.petDpsStateMenu")
@@ -92,6 +94,12 @@ local orderTtlMs = 15000
 ---(`autoTaunt` below), and the answer is enforced through exactly the same reading, flipping and
 ---hand-grace as a dial set by hand. It ships as "leave alone" like the rest.
 ---
+---**The world says no to exactly one of these orders, and it is heard.** A pet will not attack a
+---mezzed mob: the order goes out by id and the server answers it by name -- *"<pet> tells you, 'I am
+---unable to wake <mob>, master.'"* -- and the pet stays exactly where it was. That line is the only
+---refusal any of the words in `cabby.pet` ever gets, so it is the one case where repeating the order
+---is not pacing but shouting at a closed door, and it is read rather than talked over (`mezzed`).
+---
 ---**Not every pet is listening, and that is read rather than assumed.** An enchanter's animation is
 ---a pet in every way except the one this state is made of: it takes no orders at all, and the only
 ---thing that changes that is the `Animation Empathy` alternate ability, whose ranks say which words
@@ -109,7 +117,9 @@ local orderTtlMs = 15000
 local PetDpsState = {
     key = "PetDpsState",
     eventIds = {
-        attack = "petattack"
+        attack = "petattack",
+        cannotWake = "petcannotwake",
+        awakened = "petawakened"
     },
     _ = {
         isInit = false,
@@ -134,6 +144,9 @@ local PetDpsState = {
         ---{ [switch] = where it stood before the protect job borrowed it }, for the switches this
         ---state was told to leave alone and takes anyway while something is on us
         borrowed = {},
+        ---{ [id] = { name, pose } } for a mob the world has said the pet will not be sent at.
+        ---Keyed by *mob* and so deliberately not in `forget`: a new pet faces the same held mobs
+        mezzed = {},
         ---what is on us that the pet should be taking off us, worked out once a pass
         protectId = nil,
         ---an order to send the pet in now, held as the time it stops standing
@@ -192,6 +205,53 @@ local function refreshPet()
     return id
 end
 
+---------------- What the world will not let the pet do --------------------
+
+---Is this mob one the world has told us the pet will not be sent at?
+---
+---**A mez does not take a mob off our hate list -- it takes the mob off *us*.** That is the whole
+---reason this reading has to exist here at all: what is on us is the extended target window's 100%
+---aggro entries, and a mezzed add sits in that list exactly as it did while it was swinging. Read
+---without this, the protect job goes on choosing it, the order goes out every second and a half,
+---and the server answers every one of them in front of the whole group until the mez breaks --
+---while the pet stands on the mob it was already killing. With two mobs of one name in a camp, one
+---held and one being killed, that reads in game as a pet complaining about the mob it is standing
+---on, which is what put this here.
+---
+---And the peel was never right in the first place: **a mezzed mob is not coming for us.** Crowd
+---control has already done what the pet would have been sent to do, better and without handing
+---anything the aggro.
+---
+---**Dropped the moment the world contradicts it**, never on a clock. A mez holds a mob *perfectly*
+---still -- the reading `Mobs.MarkPose`/`MovedFrom` exists for -- so a mob that has moved or turned
+---since the refusal is not held any more, whatever else is true. What that cannot see is a mob
+---mezzed where it stood that breaks free without taking a step, and the awakened line is what
+---covers it (see Init).
+---@param id number
+---@return boolean isMezzed
+local function isMezzed(id)
+    local record = PetDpsState._.mezzed[id]
+    if record == nil then return false end
+
+    if Mobs.MovedFrom(id, record.pose) then
+        DebugLog("[" .. record.name .. "] has moved since it would not be woken -- it is loose")
+        PetDpsState._.mezzed[id] = nil
+        return false
+    end
+
+    return true
+end
+
+---Drop what the world has taken back: an id only means anything while its spawn stands, and the
+---next spawn to wear a dead one's number would inherit its refusal. Bounds the table too -- a
+---night's camp otherwise holds an entry for every mob the group ever mezzed in front of us.
+local function sweepMezzed()
+    for id in pairs(PetDpsState._.mezzed) do
+        local spawn = mq.TLO.Spawn("id " .. tostring(id))
+        if spawn.ID() == nil or spawn.Dead() then PetDpsState._.mezzed[id] = nil end
+    end
+end
+
 ---------------- Sending it in, and calling it back --------------------
 
 ---@param targetId number what to send the pet at
@@ -201,6 +261,14 @@ end
 local function sendIn(targetId, why, urgent)
     local spawn = mq.TLO.Spawn("id " .. tostring(targetId))
     if spawn.ID() == nil or spawn.Dead() then return false end
+
+    -- a fact about the mob and so asked beside its death, before anything about this fight: the
+    -- world has already answered this order and the answer was no. Nothing outranks it -- an order
+    -- from a person cannot make the pet wake something either
+    if isMezzed(targetId) then
+        PetDpsState._.holdReason = "it is mezzed -- the pet will not wake it"
+        return false
+    end
 
     -- aggro management, and the only setting this state has about *this* fight: a pet in before
     -- the tank has a hold of the mob is a pet with the mob on it. It answers one question -- when
@@ -289,9 +357,10 @@ local function protectTarget()
 
     for _, id in ipairs(ids) do
         -- the window is a beat behind a corpse hitting the ground, and sending a pet at one is an
-        -- order the world will not answer
+        -- order the world will not answer. A mob the world has refused is skipped for the stronger
+        -- reason: it is mezzed, which means it is not coming for us and there is nothing to peel
         local spawn = mq.TLO.Spawn("id " .. tostring(id))
-        if spawn.ID() ~= nil and not spawn.Dead() then
+        if spawn.ID() ~= nil and not spawn.Dead() and not isMezzed(id) then
             if id == on then return id end
             if id == fightId then
                 fightIsOnUs = true
@@ -722,6 +791,71 @@ function PetDpsState.Init()
         set = PetDpsState.SetEnabled
     })
 
+    -- The only *no* an order to a pet ever gets, and it arrives one round trip after the order it
+    -- refuses. Paired with what we said by the name it carries: the order named an id, the answer
+    -- names that mob, and with two of a name in the camp the one we asked about is the only one
+    -- this can be about.
+    local cannotWakeDocs = ChelpDocs.new(function() return {
+        "(petcannotwake) Notices the world refusing to send the pet at a mob, and stops asking",
+        " -- A pet will not attack a mezzed mob. The server says so once per order, so an order",
+        "    repeated on its usual pacing is the whole group's chat window full of it until the",
+        "    mez breaks.",
+        " -- The mob is left alone until it moves or turns (a mez holds a mob perfectly still), or",
+        "    until the world says something of that name woke up.",
+        " -- The peel was never right either: a mezzed mob is not coming for us."
+    } end )
+    local function event_CannotWake(_, petName, mobName)
+        if petName == nil or mobName == nil then return end
+
+        -- our own pet, answering our own last order: anything else is somebody's hand on their own
+        -- pet button, and nothing this state said
+        if Pet.GetName() ~= tostring(petName) then return end
+
+        local id = PetDpsState._.sentTargetId
+        if id == nil then return end
+
+        local spawn = mq.TLO.Spawn("id " .. tostring(id))
+        if spawn.CleanName() ~= tostring(mobName) then return end
+
+        DebugLog("[" .. tostring(mobName) .. "] (" .. tostring(id) ..
+            ") is mezzed -- the pet will not be sent at it")
+        PetDpsState._.mezzed[id] = { name = tostring(mobName), pose = Mobs.MarkPose(id) }
+
+        -- and the order did not take, so the record of what this fight put the pet on is not true:
+        -- left standing it would have this state calling the pet off a mob it never reached
+        PetDpsState._.sentTargetId = nil
+        PetDpsState._.sentAtMs = nil
+    end
+    Commands.RegisterEvent(Event.new(PetDpsState.eventIds.cannotWake,
+        "#1# tells you, 'I am unable to wake #2#, master.'", event_CannotWake, cannotWakeDocs))
+
+    -- The other half of the refusal: what takes it back when the mob broke free without moving.
+    -- A mob mezzed where it stood -- in melee range, already facing whoever it was hitting -- can
+    -- wake and go straight back to swinging without changing a coordinate or a degree of heading,
+    -- and that is precisely the mob this job exists to peel off us. The line is a mez being
+    -- *broken*, which is the common way for one to end mid-fight; one that simply runs out is
+    -- silent, and there the mob's first step or turn is what frees it.
+    local awakenedDocs = ChelpDocs.new(function() return {
+        "(petawakened) Notices a mez breaking and lets the pet be sent at that mob again",
+        " -- The line names the mob and not its id, so every refusal of that name is dropped.",
+        " -- Being wrong that way costs one order, which the world refuses again and which writes",
+        "    the refusal back -- being wrong the other way is a pet that never peels the mob that",
+        "    just woke up on top of us."
+    } end )
+    local function event_Awakened(_, name)
+        if name == nil then return end
+        name = tostring(name)
+
+        for id, record in pairs(PetDpsState._.mezzed) do
+            if record.name == name then
+                DebugLog("[" .. name .. "] (" .. tostring(id) .. ") may be the one that woke")
+                PetDpsState._.mezzed[id] = nil
+            end
+        end
+    end
+    Commands.RegisterEvent(Event.new(PetDpsState.eventIds.awakened,
+        "#1# has been awakened by #2#.", event_Awakened, awakenedDocs))
+
     local cpetdpsDocs = ChelpDocs.new(function() return {
         "(/cpetdps) Report what the pet is fighting, and how it is set up to fight",
         " -- Usage: /cpetdps",
@@ -794,6 +928,15 @@ function PetDpsState.Init()
             print(" -- sent in once what we are fighting is at or below " .. tostring(sendPct) .. "%")
         end
 
+        -- What the world has refused, said as what we were told rather than as what is true now:
+        -- the reading that would settle it is the one that drops the record, and a report must not
+        -- be the thing that changes what this state believes
+        for id, record in pairs(PetDpsState._.mezzed) do
+            print(" -- " .. record.name .. " (" .. tostring(id) ..
+                ") is mezzed: the pet would not wake it, and it is left alone until it moves or" ..
+                " something of that name is heard waking")
+        end
+
         for _, facts in ipairs(PetDpsState.DescribeToggles()) do
             local dial = PetDpsStateConfig.GetPostureDisplay(facts.want)
             if facts.want == PetDpsStateConfig.postures.Auto.value or facts.taken
@@ -824,6 +967,10 @@ end
 ---@diagnostic disable-next-line: duplicate-set-field
 function PetDpsState.Go()
     local petId = refreshPet()
+
+    -- before anything reads it, and only when there is something to read: what the world refused
+    -- is about mobs, and mobs die whether or not this state got a frame while they did
+    if next(PetDpsState._.mezzed) ~= nil then sweepMezzed() end
 
     local state = mq.TLO.Me.State()
     if state == "DEAD" or state == "HOVER" then

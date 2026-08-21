@@ -113,6 +113,16 @@ function MeleeStateMenu.BuildMenu(meleeState)
         ImGui.SameLine()
         ---@type boolean
         local clicked, result
+        result, clicked = ImGui.Checkbox("Root Tank", MeleeStateConfig.GetRootTank())
+        if clicked then
+            MeleeStateConfig.SetRootTank(result)
+        end
+        ImGui.SameLine()
+        CommonUI.HelpMarker("A mob that is rooted cannot reach whoever it hates most, so it swings at whoever is standing in its reach instead. While this character holds the group's Main Tank role, it closes inside the nearest other player standing near a rooted target -- as far in as zero if that is what being nearest takes -- and relaxes back to melee range once it is the nearest body. Every player body counts, not just group members, because a mob does not check the group window before it swings. Nothing happens on an ordinary mob, or for anyone who is not the tank. The other half is on the Standoff page, where everyone else backs off to behind the tank.")
+
+        ImGui.SameLine()
+        ---@type boolean
+        local clicked, result
         result, clicked = ImGui.Checkbox("Auto-Engage", CombatConfig.GetAutoEngage())
         if clicked then
             CombatConfig.SetAutoEngage(result)
@@ -273,17 +283,48 @@ function MeleeStateMenu.BuildMenu(meleeState)
         ImGui.SameLine()
 
         ImGui.SetNextItemWidth(100)
-        local primaryMeleeAbility = MeleeStateConfig.GetPrimaryCombatAbility():Name()
+        ---@type ActionType
+        local primaryAbility = MeleeStateConfig.GetPrimaryCombatAbility()
+        local primaryMeleeAbility = primaryAbility:Name()
         if ImGui.BeginCombo("Primary Melee Skill##foo7", primaryMeleeAbility) then
             for _, skill in ipairs(Character.primaryMeleeAbilities) do
                 ---@type Skill
                 skill = skill
+
+                -- An innate the shape we are wearing does not have is still ours to pick -- it
+                -- comes back the moment the illusion drops. Greyed rather than hidden, so it is
+                -- obvious why nothing is happening with it selected instead of the entry simply
+                -- vanishing out from under the choice.
+                local wearingIt = skill:HasAction()
+                if not wearingIt then ImGui.PushStyleColor(ImGuiCol.Text, .55, .55, .55, 1) end
                 local _, pressed = ImGui.Selectable(skill:Name(), primaryMeleeAbility == skill:Name())
+                if not wearingIt then ImGui.PopStyleColor() end
+
                 if pressed then
                     MeleeStateConfig.SetPrimaryCombatAbility(skill)
                 end
             end
             ImGui.EndCombo()
+        end
+
+        if primaryAbility:Innate() then
+            ImGui.SameLine()
+            ImGui.SetNextItemWidth(100)
+            local backupMeleeAbility = MeleeStateConfig.GetBackupCombatAbility():Name()
+            if ImGui.BeginCombo("Backup##foo9", backupMeleeAbility) then
+                for _, skill in ipairs(Character.primaryMeleeBackups) do
+                    ---@type Skill
+                    skill = skill
+                    local _, pressed = ImGui.Selectable(skill:Name(), backupMeleeAbility == skill:Name())
+                    if pressed then
+                        MeleeStateConfig.SetBackupCombatAbility(skill)
+                    end
+                end
+                ImGui.EndCombo()
+            end
+
+            ImGui.SameLine()
+            CommonUI.HelpMarker("The selected Primary Melee Skill comes from your race, and an illusion of a race that does not have it takes it away until the illusion drops. This is swung instead for as long as that is true. The choice of primary is left alone either way.")
         end
 
         if mq.TLO.Me.Class.ShortName() == "MNK" then

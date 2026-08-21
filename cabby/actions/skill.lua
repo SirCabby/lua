@@ -49,6 +49,15 @@ function Skill:Fear()
     return self._.fear
 end
 
+---Race grants this rather than a class or a level, which means an illusion of another race takes
+---it away and hands it back when the illusion drops. The client is honest about that -- it
+---rebuilds the innates out of whatever race it is showing -- so `HasAction` below reads false
+---while the shape is worn. See `cabby.character` for how a picker survives that.
+---@return boolean
+function Skill:Innate()
+    return self._.innate == true
+end
+
 ---@return boolean
 function Skill:Primary()
     return self._.primary

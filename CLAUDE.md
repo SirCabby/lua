@@ -73,6 +73,27 @@ the band travelling with the request (`Travel.Drive(priority)` → the movement 
 the arbitration). The smell to notice: a priority comparison that resolves to `nil` and treats that
 as the weakest thing there is, when what it actually means is "I could not find out".
 
+Buffs were cast over buffs on everyone in a group we had just joined (2026-08). Another player's
+bar is readable only out of the client's cache, the cache is filled only when they are targeted,
+and **an empty cache is what "never looked at" and "carrying nothing" both look like** — so every
+reading in `cabby/states/buffState.lua` answered "they need it" about people who needed nothing,
+at the one moment we knew least about them. The fix was to make the unknown a first-class answer:
+nothing is cast at a bar nobody has shown us (`buffsKnown`), and the pass with nothing to cast
+spends itself on the look instead. The same smell as the entry above, one layer down — a reading
+that cannot be taken must not be spent as though it had been.
+
+An illusion deleted a troll's Slam from the melee picker, and then from the saved config
+(2026-08). An illusion is a race change: the client rebuilds its innate abilities out of the race
+it is *showing*, so `Me.Ability("Slam")` answers about the gnoll rather than about the troll
+wearing it. `cabby/character.lua` spent that reading as a fact about the character, dropped Slam
+out of `primaryMeleeAbilities`, and `cabby/configs/meleeStateConfig.lua` — finding the saved name
+no longer in the list — rewrote the order to None. **A shape worn for two minutes destroyed an
+order permanently.** Same smell as the two entries above: the innate answer is now taken while
+nothing is worn (where the client is describing *us*), held across the stretch with no such view,
+and un-set only by the next un-illusioned reading — never by a clock, never while a shape is on.
+The other half is a backup ability that takes the swings while the primary is not ours to use,
+because an order that will be right again in two minutes is not an order to throw away.
+
 ## Verifying changes
 
 - Syntax: `luac -p <files>`.

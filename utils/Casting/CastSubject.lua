@@ -229,8 +229,29 @@ end
 
 ---How long the cast bar will be up, in milliseconds. Zero for anything instant, which is the
 ---signal that there will be no cast bar to watch at all.
+---
+---**A clicky's cast time belongs to the item, not to the effect it fires**, and the two disagree
+---constantly: a Manastone clicks instantly while the spell behind it is a three second cast. The
+---item's number is the one that decides -- it is the field the client draws the bar from and the
+---number the server is handed to cast with, where only a negative means "ask the spell" -- so a
+---readable zero there is the item saying *instant*, not the item saying nothing.
+---
+---Read off the effect instead and an instant click is described as a three second cast: the
+---character is pinned still for a click that needs no stillness, and everything then waits for a
+---bar that was never going to be drawn until its deadline runs out and calls the use lost. A click
+---that worked, reported as a failure, once every second and a half -- which is what a health for
+---mana trade looked like before this read the item.
 ---@return number castTimeMs
 function CastSubject:CastTimeMs()
+    if self._.kind == CastSubject.kinds.item then
+        local item = findItem(self)
+        -- only an item we cannot read at all falls through to its effect below
+        if item.ID() ~= nil then
+            local clickTime = asNumber(item.CastTime(), -1)
+            if clickTime >= 0 then return clickTime end
+        end
+    end
+
     local spell = self:Spelldata()
     if spell == nil then return 0 end
 

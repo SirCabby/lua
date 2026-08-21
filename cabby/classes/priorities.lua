@@ -28,12 +28,29 @@ local Priorities = {
     -- in combat --
     mez = 59,        -- add control, above dps so a new add is handled before the next swing
     tank = 69,       -- taunt / grab aggro
+    -- Trading health for mana: a shaman's cannibalize, the rods a magician summons, a manastone.
+    -- Above the rotations deliberately, because mana is what everything below this band is spent
+    -- out of -- a beat spent filling the bar buys back every cast that would otherwise not happen,
+    -- and a caster that nukes down to empty and then stands there is the failure this band exists
+    -- to prevent. Below every job that *is* the fight, equally deliberately: a heal, a mez or a
+    -- taunt is never worth trading for mana, and each of them is somebody about to die if it waits.
+    -- It is self-limiting in a way its neighbours are not, which is what makes it safe up here: the
+    -- mana ceiling stops it, so it takes frames from the rotation only until the bar is full again
+    canni = 74,
+
     -- melee and spell rotations. SpellDpsState registers at `dps - 1`, the melee classes declare
     -- MeleeState at `dps`, and every other class picks melee up from the common states at
     -- `dps + 5`: the melee state reports busy for as long as it is engaged, so a rotation below it
     -- would never get a frame, while a rotation above it only takes one when it actually casts.
     -- That is also why a caster's melee sits below `dps` rather than at it
     dps = 79,
+
+    -- Where to stand when a mob cannot come to you. Below every job in the fight, deliberately:
+    -- anything with work in hand is busy above this, so the only characters that ever reach it are
+    -- the ones with nothing to do -- which is exactly the list of people who should not be standing
+    -- in a rooted mob's reach. Above follow and anchor, also deliberately, because where to stand is
+    -- contested with the traveling core and the chain is what settles that
+    standoff = 84,
 
     -- out of combat --
     -- what corpses dropped: AdvLootState answers the loot window's rolls here, and CorpseState
