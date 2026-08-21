@@ -203,7 +203,8 @@ local BuffState = {
         buffing = "buffing",
         buffGroup = "buffgroup",
         buffPets = "buffpets",
-        buffCombat = "buffcombat",
+        -- `buffcombat` was here, and is retired: what may be cast in a fight is decided by what
+        -- the cast would cost the fight (`castableNow`), which leaves nothing for a switch to say
         buffAction = "buffaction",
         -- not orders: the world's own death notices, which void the buff records held for
         -- whoever they name
@@ -715,12 +716,48 @@ end
 
 ---------------- Choosing a buff --------------------
 
+---Is this character in a fight?
+---
+---`IsEngaged` rather than `IsGroupFighting`, deliberately: what the answer decides is what may be
+---done with *our* cast bar and *our* target, and both of those are only at stake when we are the
+---one fighting. A healer standing in the middle of a group fight with nothing engaged has neither
+---at stake and buffs normally, exactly as it always has.
+---@return boolean isFighting
+local function inAFight()
+    return Combat.IsEngaged()
+end
+
+---Would casting this cost the fight anything?
+---
+---Three ways it could, and what may be cast in a fight has to answer no to all three:
+---
+---- **A bar.** Seconds of cast time are seconds the rotation does not get, and a thirty minute
+---  buff landing two seconds before the mob dies was mana the healing wanted. Instant, and there
+---  is no bar to draw.
+---- **The target.** Casting at somebody takes the client's target off what is being fought, and
+---  the melee state spends the next half second putting it back. Aimed at nobody -- at us, at our
+---  pet, at the group -- and the target never moves.
+---- **A gem.** An unmemorized spell is memorized before it is cast, which takes a gem out of the
+---  rotation for as long as that takes. Items and AAs have no gem to take; a spell has to be on
+---  the bar already.
+---
+---Mana is deliberately not on the list. What is being asked is what the *fight* pays, and a slot
+---the user put on the page is a slot they meant to have up.
+---@param subject CastSubject
+---@return boolean isFree
+local function costsTheFightNothing(subject)
+    if not subject:IsInstant() then return false end
+    if subject:NeedsTarget() then return false end
+    return subject:IsMemorized()
+end
+
 ---Can this be cast the way we are standing right now?
 ---
----The one question movement asks, and it is asked of what is being cast rather than of the state:
----whether the character is pinned down by a cast is a property of the spell, the item or the
----ability, and the casting service is where that fact lives. A bard's songs and anything instant
------ most clickies and AAs -- are cast on the run; everything with a bar to lose is not.
+---Two questions, and both are asked of what is being cast rather than of the state: what a cast
+---puts at risk is a property of the spell, the item or the ability, and the casting service is
+---where that fact lives. A bard's songs and anything instant -- most clickies and AAs -- are cast
+---on the run; everything with a bar to lose is not. In a fight it is the fight rather than our
+---feet that would pay, and the test is the narrower one above.
 ---
 ---Asked here, while choosing, rather than left to the casting service: a slot that could not get
 ---off the ground should be passed over for one that can, not sent down to sit holding a target and
@@ -728,8 +765,9 @@ end
 ---@param subject CastSubject
 ---@return boolean canStart
 local function castableNow(subject)
-    if not mq.TLO.Me.Moving() then return true end
-    return not subject:RequiresStillness()
+    if inAFight() and not costsTheFightNothing(subject) then return false end
+    if mq.TLO.Me.Moving() and subject:RequiresStillness() then return false end
+    return true
 end
 
 ---@param subject CastSubject
@@ -1191,20 +1229,35 @@ end
 
 ---What the way we are standing says about this pass, in the order it is worth reporting.
 ---
----`fighting` stops the pass outright, and also means "and stop what you are already doing": a buff
----landing two seconds before the mob dies is mana the healer wanted, and the cast holds the target
----away from what is being fought while it runs.
+---Neither code stops the pass on its own. Both **narrow** it -- see `castableNow` -- because in
+---each case only some casts care.
 ---
----`moving` does not stop it. It **narrows** it -- see `castableNow` -- because only some casts
----care: a buff with a bar to lose sits holding a target and a gem until the group stops, and this
----is a state that can afford to ask again later, but an instant clicky or AA is over in the frame
----it started and a bard's songs never needed standing still at all. Holding those back too was
----refusing casts that movement was never going to cost anything.
+---`fighting` narrows it hardest, and also means "and stop what you are already doing" about the
+---casts it excludes: a buff landing two seconds before the mob dies is mana the healer wanted, and
+---the cast holds the target away from what is being fought while it runs. What it does *not*
+---exclude is a cast the fight would never notice -- an instant clicky or AA aimed at nobody -- and
+---that is the whole of the change: holding those back was refusing casts a fight was never going
+---to pay for, and a warrior whose entire buff list is instant clickies could not keep one up in a
+---fight at all.
+---
+---**There is no switch on this, and there used to be.** `buffcombat` was a page-wide "buff during
+---combat", off by default, and every reason it gave for being off was a *cost* -- the mana, the
+---target, the buff that lands as the mob dies. `castableNow` now excludes all three by
+---construction, so what the switch was left gating was the casts a fight does not pay for, which
+---is not a preference anybody holds: it only ever answered no to a free thing. A single slot that
+---should sit a fight out says so on its own row, which is where a per-slot exception belongs.
+---
+---It also says which driver owns the pass: while it is `fighting` the buff band is starved by the
+---states that *are* the fight, and `BuffState.InFight` takes the turn from above them instead.
+---
+---`moving` narrows it less: a buff with a bar to lose sits holding a target and a gem until the
+---group stops, and this is a state that can afford to ask again later, but an instant clicky or AA
+---is over in the frame it started and a bard's songs never needed standing still at all.
 ---@return string|nil code
 ---@return string|nil reason in words
 local function holdReason()
-    if Combat.IsEngaged() and not BuffStateConfig.GetInCombat() then
-        return "fighting", "not while we are fighting"
+    if inAFight() then
+        return "fighting", "anything the fight would pay for, until it is over"
     end
 
     if mq.TLO.Me.Moving() then
@@ -1372,7 +1425,14 @@ end
 ---@param code string|nil the hold code this pass, if any
 ---@return string|nil reason to call it off, nil to let it finish
 local function reasonToAbandon(code)
-    if code == "fighting" then return "a fight started" end
+    -- A fight has started over a cast the fight would pay for. The same judgment `castableNow`
+    -- makes before choosing one, made again about the one already going: seconds of cast time are
+    -- seconds the rotation does not get, the mob may well be dead before the buff lands, and the
+    -- target is held away from what is being fought the whole time. Asked of the casting service
+    -- because it is the cast in the air that answers it -- and an instant clicky, which is over in
+    -- the frame it was fired, is left alone: calling off something already fired that costs the
+    -- fight nothing is a buff thrown away and nothing bought.
+    if code == "fighting" and Casting.IsHoldingStill() then return "a fight started" end
 
     -- We have started moving with a cast up that cannot survive it. The same judgment `castableNow`
     -- makes before choosing one, made again about the one already going: the group is on its way and
@@ -2373,19 +2433,6 @@ function BuffState.Init()
         set = BuffStateConfig.SetBuffPets
     })
 
-    ToggleCommand.Register({
-        key = BuffState.key,
-        phrase = BuffState.eventIds.buffCombat,
-        summary = "Turns buffing during a fight on or off",
-        about = {
-            "Off by default: buffing mid-fight spends the mana the healing needs and holds the",
-            "target away from what is being fought.",
-            "Off also calls off a buff that is in the air when a fight starts."
-        },
-        get = BuffStateConfig.GetInCombat,
-        set = BuffStateConfig.SetInCombat
-    })
-
     ActionCommand.Register({
         key = BuffState.key,
         phrase = BuffState.eventIds.buffAction,
@@ -2452,8 +2499,7 @@ end
 ---good for; all three are dropped the moment they stop being true -- a request's next name is
 ---re-checked against the world every pass, and dropped where it stands if they have gone.
 ---@return boolean isBusy
----@diagnostic disable-next-line: duplicate-set-field
-function BuffState.Go()
+local function pass()
     local code, hold = holdReason()
     BuffState._.holdReason = hold
 
@@ -2495,10 +2541,8 @@ function BuffState.Go()
         return false
     end
 
-    -- only a fight stops the pass. Moving narrows what may be picked (`castableNow`) rather than
-    -- putting the whole state down, so the casts that never needed standing still still go off
-    if code == "fighting" then return false end
-
+    -- Neither code stops the pass. Both narrow what may be picked (`castableNow`), so the casts
+    -- that the way we are standing was never going to cost anything still go off.
     if Time.current_time() < BuffState._.nextLookMs then return false end
 
     prune()
@@ -2536,6 +2580,78 @@ function BuffState.Go()
     end
 
     return startBuff(pick)
+end
+
+---@return boolean isBusy
+---@diagnostic disable-next-line: duplicate-set-field
+function BuffState.Go()
+    -- A fight belongs to the driver below: it is the same job, taking its turn from a band the
+    -- fight cannot starve. Running the pass here as well would be running it twice in a frame.
+    if inAFight() then return false end
+    return pass()
+end
+
+---The same buff job, taking its turn from above the rotations.
+---
+---**Why there is a second driver at all.** The band a job sits at is what decides whether it is
+---ever asked, and the buff band is below every state that *is* a fight -- the melee state reports
+---busy for as long as it is engaged, so from the first swing to the last, nothing at or below it
+---is asked anything. That is right for buffing as it is normally meant: a bar cast mid-fight
+---spends the mana the healing wanted and holds the target away from what is being fought. It is
+---wrong for the half of buffing a fight does not pay for -- an instant clicky or AA aimed at
+---nobody -- and for a warrior, whose whole buff list is clickies and AAs, it meant a fight could
+---never re-click anything at all.
+---
+---A job that has to keep running under somebody's cut belongs at a different band; that is the
+---rule, and this is it being followed rather than worked around. The same shape as `cabby.travel`
+---being driven by the follow state and the flee state at two bands: one job, one set of records,
+---two turns in the chain, and no state reading another.
+---
+---**Why it is safe up here.** It is never busy. It takes a turn above the rotations and hands it
+---straight back on the same pass, so nothing below it loses a frame to it and the fight it is
+---standing in front of is never suppressed for a single pass. What the band actually buys is two
+---things: being *asked* while the fight holds the frames below, and being starved by the casting
+---floor whenever something stronger has a cast in the air, which is exactly when a buff has no
+---business going off.
+---
+---And the cast it asks for is asked for at `BuffState.priority` -- the buff band, not this one --
+---because the frame and the character are two different things. Up here to be asked; down there
+---when it asks, so a buff can never preempt a heal, a mez or a nuke, and anything in the fight
+---that wants the cast bar takes it straight back off us.
+---@class BuffCombatState : BaseState
+BuffState.InFight = {
+    key = "BuffCombatState"
+}
+
+---@return boolean isBusy always false; see the notes on this state
+---@diagnostic disable-next-line: duplicate-set-field
+function BuffState.InFight.Go()
+    if not inAFight() then return false end
+    pass()
+    return false
+end
+
+---@diagnostic disable-next-line: duplicate-set-field
+function BuffState.InFight.Init()
+    -- idempotent, and called from here as well so this driver does not depend on being registered
+    -- after the buff band one
+    BuffState.Init()
+end
+
+---One switch for one job: buffing is on or it is off, and where in the chain the job was standing
+---when it was asked is not something anybody should have to switch separately. Deliberately not
+---registered with the menu for the same reason -- it shares the Buff State page and the `buffing`
+---command, and a second page for the same list of slots would be a second place to get it wrong.
+---@return boolean isEnabled
+---@diagnostic disable-next-line: duplicate-set-field
+BuffState.InFight.IsEnabled = function()
+    return BuffStateConfig.IsEnabled()
+end
+
+---@param isEnabled boolean
+---@diagnostic disable-next-line: duplicate-set-field
+BuffState.InFight.SetEnabled = function(isEnabled)
+    BuffState.SetEnabled(isEnabled)
 end
 
 ---@return boolean isEnabled

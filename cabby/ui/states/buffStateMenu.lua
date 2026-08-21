@@ -159,12 +159,7 @@ function BuffStateMenu.BuildMenu(buffState)
         end
 
         ImGui.SameLine()
-        local inCombat, inCombatClicked = ImGui.Checkbox("Buff during combat", BuffStateConfig.GetInCombat())
-        if inCombatClicked then
-            BuffStateConfig.SetInCombat(inCombat)
-        end
-        ImGui.SameLine()
-        CommonUI.HelpMarker("Off, nothing is buffed while this character is fighting, and a buff already in the air is called off when a fight starts.")
+        CommonUI.HelpMarker("There is no switch for buffing during a fight, because what may be cast in one is not a preference: anything the fight would pay for -- a cast bar, a target taken off the mob, a gem memorized -- is barred in a fight, and what is left costs the fight nothing and is kept up in one exactly as it is out of one. A single slot that should sit a fight out gets a condition of its own on its row.")
 
         ImGui.TableNextRow()
         ImGui.TableNextColumn()

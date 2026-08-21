@@ -91,6 +91,16 @@ local BaseClass = { key = "BaseClass" }
 ---Registering it is not the same as doing it here either: the slot list starts empty and buffing
 ---an empty list is nothing at all, so what a warrior gains is the page, not a new habit.
 ---
+---It is the one job registered **twice**, and the second entry is the reason the first one can
+---stay where it is. At `Priorities.buff` the job is below every state that *is* a fight, so from
+---the first swing to the last it is not asked anything -- right for a buff with a cast bar, which
+---mid-fight spends the mana the healing wanted and holds the target away from what is being
+---fought; wrong for the half of buffing a fight does not pay for. `BuffState.InFight` is that
+---half, at `Priorities.upkeep` above the rotations, casting only what is instant and aimed at
+---nobody and never once reporting busy. A job that has to keep running under somebody's cut
+---belongs at a different band, and that is what this is -- the same shape as `cabby.travel` being
+---driven by two states at two bands. See the notes on the state.
+---
 ---A class that wants one of these somewhere else in its chain declares it itself: a profile
 ---entry naming the same state wins over the common one, priority and all. That is exactly how the
 ---melee classes keep their melee at `dps`.
@@ -100,6 +110,9 @@ local function CommonStates()
         -- first of all, deliberately: travel mode is nothing but taking the frame away from the
         -- states under it, so it has to be above them
         { state = FleeState, priority = Priorities.passive },
+        -- above the rotations on purpose, and never busy: the buff job's other half, which is the
+        -- only way anything of its keeps going while a fight holds every frame below
+        { state = BuffState.InFight, priority = Priorities.upkeep },
         { state = MeleeState, priority = Priorities.dps + 5 },
         { state = StandoffState, priority = Priorities.standoff },
         { state = AdvLootState, priority = Priorities.loot },

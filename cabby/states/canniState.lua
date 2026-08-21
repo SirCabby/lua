@@ -85,14 +85,24 @@ local burstQuietMs = 1000
 ---reading rather than a mode -- there is nothing here that can go stale, and nothing that needs
 ---rescuing if it does. What it buys is a burst of trading followed by a rest worth sitting through.
 ---
----**The gap is skipped where there is no rest to protect**, which is: in a fight, on our feet. The
----floor is the safety number and is asked whatever else is true; the gap above it is an efficiency
----device for medding and nothing else, so waiting it out mid-fight is not caution -- it is mana not
----taken at the one moment mana is being spent, and it would leave a shaman cannying once a fight
----and then watching the group run out of heals. Standing in a fight, the floor is the only line and
----the character trades down to it, takes a heal, and trades down again. Sitting is asked rather than
----assumed from the fight, because `restcombat` lets a character med through a fight it has not
----joined, and a rest that is really happening is worth protecting. See `restIsWorthWaitingFor`.
+---**The gap is skipped where there is no rest to protect**, which is: on our feet, in a fight or
+---out of one. The floor is the safety number and is asked whatever else is true; the gap above it
+---is an efficiency device for medding and nothing else, and the thing it actually buys is that
+---this state never *fragments* a rest -- stand up, spend a tick's worth of trade, sit back down,
+---and the sitting bonus never applies for long enough to matter. A trade taken while the character
+---is already standing fragments nothing: the sit that follows it is one sit and a longer one, not
+---two. So the trade belongs on the way *into* a rest rather than in the middle of one, and the
+---wait is owed to a sit that is happening rather than to one that might.
+---
+---Standing in a fight that means the floor is the only line and the character trades down to it,
+---takes a heal, and trades down again -- canni-dancing, and the job this state exists for.
+---Standing *after* one it means the latch that dance left behind is not cashed in as a long med:
+---the character comes out of the fight at 92% health with an empty bar, and the trade it has every
+---reason to take before it sits down is taken then, rather than waited out and lost to the regen
+---that was going to happen anyway. Leaving a fight is only where that shows up most -- a run to
+---the next pull, a zone line, the player standing the character up are all the same fact. Sitting,
+---the wait is owed whatever else is true, including a fight being medded through (`restcombat`
+---allows exactly that). See `restIsWorthWaitingFor`.
 ---
 ---**The floor is where trading stops, not a budget for each use.** It is asked before the use and
 ---not after it, which is the only reading that leaves the expensive half of the family usable: the
@@ -450,26 +460,36 @@ end
 ---
 ---The gap between the floor and the resume point buys exactly one thing: a sit long enough for the
 ---out-of-combat regen bonus to be worth having. **It is not a safety margin** -- the floor is the
----safety number and is checked whatever this answers -- so where there is no rest to protect, the
----gap is not caution, it is mana left on the table at the one moment mana is being spent.
+---safety number and is checked whatever this answers -- so the only thing the gap can ever protect
+---is a rest that is actually under way, and the posture is the whole of that reading.
 ---
----In a fight, on our feet, there is no rest to protect: nothing is regenerating at the sitting
----rate, the character is standing anyway, and waiting for a number it will not reach until the
----fight is over means a shaman that cannis once and then watches its group run out of heals. So the
----floor becomes the only line, and the character trades down to it, takes a heal, and trades down
----to it again -- which is canni-dancing through a fight, and is the job this state exists for.
+---**On our feet it is not owed, in a fight or out of one.** What the gap stops is this state
+---*fragmenting* a rest: stand up, spend a tick's worth of trade, sit down again, and the sitting
+---bonus never applies for long enough to be worth having. A trade taken by a character that is
+---already standing fragments nothing -- the sit after it is one sit and a longer one, not two --
+---so the trade belongs on the way into the rest rather than in the middle of it.
 ---
----**Sitting is asked and not assumed from the fight**, because a fight this character has not
----joined is one it can legitimately be medding through (`restcombat` allows exactly that). A rest
----that is actually happening is worth protecting whether or not somebody nearby is swinging.
+---Read the other way round, that is the bug this answers: the latch is set by the trading itself
+---and does not care where the character was standing when it happened, so a dance through a fight
+---leaves one behind, and the moment the fight ends it turns into a long med nobody chose. The
+---character stands there at 92% health with an empty bar waiting to reach a resume point for the
+---sake of a rest it has not started -- and the trade it should have taken on the way into that
+---rest is spent on regen instead. Leaving a fight is where it shows up most and it is not the only
+---place: a run to the next pull, a zone line, the player standing the character up are the same
+---fact, and all of them are read here as the one thing they have in common.
 ---
----Both halves are the world's: the group's fight is Combat's published fact, the posture is the
----client's. Whose sit it is, and whether anybody means to keep it, is neither asked nor this
+---**Sitting, the wait is owed whatever else is true**, which includes a fight this character has
+---not joined and is legitimately medding through (`restcombat` allows exactly that). A rest that is
+---really happening is worth protecting whether or not somebody nearby is swinging, and standing out
+---of one is the cost the gap exists to refuse.
+---
+---The reading is the client's and is taken fresh every pass, both edges, with nothing remembered
+---and nothing timed: the wait is owed while the character is sitting and stops being owed the frame
+---it is not. Whose sit it is, and whether anybody means to keep it, is neither asked nor this
 ---state's business -- a character that is sitting is a character getting the bonus, and that is the
 ---whole of the fact in play.
 ---@return boolean worthWaiting
 local function restIsWorthWaitingFor()
-    if not Combat.IsGroupFighting() then return true end
     return tostring(mq.TLO.Me.State() or "") == "SIT"
 end
 

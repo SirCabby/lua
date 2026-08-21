@@ -83,6 +83,8 @@ This is a **priority-chain cooperative scheduler**: state order = priority; `Go(
 | 49 | Pulling | 109 | Following |
 | 59 | Mez (in combat) | 119/129 | Buff / Rest (misc) |
 | 69 | Tank / grab aggro | | |
+| 74 | Canni (health for mana) | | |
+| 75 | Upkeep (the buffs a fight does not pay for) | | |
 
 **The cure band is reserved and nothing registers at it.** Curing landed inside the heal state
 instead (see Curing below): a cure and a heal are the same character choosing what to cast with one
@@ -471,8 +473,8 @@ which is where this codebase already prints it — printing in both places would
 twice and still leave the checkbox as the one path that says nothing. MeleeState registers `melee`,
 `stick`, `tanking`, and `bashoverride` for characters that can bash; Combat registers `autoengage`
 and `callassist`; HealState
-registers `healing`, `healgroup` and `healpets`; BuffState registers `buffing`, `buffgroup`,
-`buffpets` and `buffcombat`; MezState registers `mezzing` and the Mobs service registers
+registers `healing`, `healgroup` and `healpets`; BuffState registers `buffing`, `buffgroup`
+and `buffpets`; MezState registers `mezzing` and the Mobs service registers
 `mobsweep`. Switches that have to call off work in progress
 rather than only stopping new work go through the *state* rather than the config, so the
 checkboxes get the same behavior: `melee off` resets the state, `stick off` releases the stick
@@ -2660,6 +2662,53 @@ clicky, which is exactly the buff a group on the move wants (a run buff lapses m
 follower that could only click it back on from a standstill is a follower that never gets another
 one — it is behind, so it never parks). None of the `- 1` band juggling the two dps states needed:
 what may be done on the run is a question about the cast, and the cast is what answers it.
+
+**In a fight it gets no frames at all, so the job is registered twice.** The buff band is below
+every state that *is* a fight, and the melee state reports busy for as long as it is engaged — so
+from the first swing to the last, nothing at or below `Priorities.buff` is asked anything. That is
+right for a buff with a cast bar: seconds of cast time are seconds the rotation does not get, the
+mob may be dead before a thirty minute buff lands, and the client's target is held away from what is
+being fought the whole time. It is wrong for the half of buffing a fight would never notice — an
+instant clicky or AA aimed at nobody — and for a warrior, whose entire buff list is clickies and
+AAs, it meant a fight could never re-click a thing.
+
+A job that has to keep running under somebody's cut belongs at a different band, so that half sits
+at one: `BuffState.InFight`, registered by `BaseClass` for every class at `Priorities.upkeep` (75),
+above the rotations and below the heal, the mez and the canni. It is the same module, the same slot
+list and the same records — one job with two turns in the chain, the shape `travel.lua` already has
+with the follow state and the flee state driving it at two bands — so no state is reading another.
+Whichever of the two drivers the fight says owns the pass runs it, and the other returns false
+immediately; they never both run it in a frame.
+
+Three things keep it honest up there:
+
+- **It is never busy.** It takes its turn above the rotations and hands it straight back on the same
+  pass, so the fight it stands in front of is not suppressed for a single frame. That is what makes
+  the band safe rather than a hole cut in somebody's suppression: a state that suppresses nothing is
+  not an exemption.
+- **It asks for the cast at `Priorities.buff`, not at its own band.** The frame and the character
+  are two different things. Up here to be *asked*; down there when it *asks*, so a buff can never
+  preempt a heal, a mez or a nuke, and anything in the fight that wants the cast bar takes it
+  straight back off us.
+- **The casting floor still starves it.** Being registered at 75 is what makes a stronger cast in
+  the air stop it, which is exactly when a buff has no business going off.
+
+What it may cast is the narrowing, and it is asked of the subject the way the movement one is
+(`costsTheFightNothing`): **instant**, so there is no bar to draw; **aimed at nobody** — at us, our
+pet, the group — so the target never leaves what is being fought; and **already on the bar**, so no
+gem is memorized out of the rotation. Mana is deliberately not on that list: what is being asked is
+what the *fight* pays, and a slot on the page is a slot the user meant to have up.
+
+**There is no switch on any of it, and there used to be.** `buffcombat` was a page-wide "buff
+during combat", off by default, and every reason it gave for being off was a cost — the mana, the
+target held away from the mob, the thirty minute buff landing two seconds before the mob dies. All
+three are excluded by construction now, so what the switch was left gating was the casts a fight
+does not pay for, which is not a preference anybody holds: it only ever answered no to a free
+thing. It is retired, and `initAndValidate` clears the saved key rather than reading it — every
+copy on disk held `false`, and honouring those would have gone on barring the free casts for ever.
+A single slot that should sit a fight out says so with a condition on its own row, which is where a
+per-slot exception belongs. What holds unconditionally either way: nothing with a cast bar is cast
+in a fight, and one in the air when a fight starts is called off.
 
 ### Requests — `buff <type>` (`actions/buffTypes.lua`)
 

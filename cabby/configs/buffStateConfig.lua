@@ -74,10 +74,15 @@ local function initAndValidate()
         taint = true
     end
 
-    if configRoot.in_combat == nil then
-        -- off: buffing mid-fight targets away from what is being fought, spends the mana the
-        -- healer needs, and lands a thirty minute buff two seconds before the mob dies
-        configRoot.in_combat = false
+    if configRoot.in_combat ~= nil then
+        -- Retired. It was a page-wide "buff during combat", off by default, and every reason it
+        -- gave for being off was a cost: the mana, the target held away from what is being fought,
+        -- the thirty minute buff landing two seconds before the mob dies. The state excludes all
+        -- three by construction now (`castableNow`), so what the switch was left saying no to was
+        -- a cast the fight does not pay for -- and nobody wants that answered no. Cleared rather
+        -- than read, because every saved copy of it holds `false`, and honouring those would go on
+        -- barring the free casts for ever
+        configRoot.in_combat = nil
         taint = true
     end
 
@@ -154,18 +159,6 @@ function BuffStateConfig.SetBuffPets(enable)
     getConfigSection().buff_pets = enable == true
     Global.configStore:SaveConfig()
     print("BuffState buffs pets: [" .. tostring(enable) .. "]")
-end
-
----@return boolean inCombat whether buffing carries on while this character is fighting
-function BuffStateConfig.GetInCombat()
-    return getConfigSection().in_combat
-end
-
----@param enable boolean
-function BuffStateConfig.SetInCombat(enable)
-    getConfigSection().in_combat = enable == true
-    Global.configStore:SaveConfig()
-    print("BuffState buffs during combat: [" .. tostring(enable) .. "]")
 end
 
 ---@return table actions the buff slots, in the order they are tried

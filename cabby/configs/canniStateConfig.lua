@@ -27,10 +27,12 @@ local ActionType = require("cabby.actions.actionType")
 ---
 ---**Only the first of the pair is about safety.** `min_hp_pct` is the number that decides whether a
 ---bad pull kills the character and is asked whatever else is true; the gap above it exists to make a
----*sit* worth sitting through, so the state skips it wherever there is no sit to protect -- in a
----fight, on its feet. There is no setting for that, because there is nothing to choose: waiting out
----a number the character will not reach until the fight is over is not caution, it is mana not taken
----at the moment it is being spent, and the floor is still underneath it either way.
+---*sit* worth sitting through, so the state skips it wherever there is no sit to protect -- which is
+---whenever the character is on its feet, in a fight or out of one. There is no setting for that,
+---because there is nothing to choose: the gap is there to stop a trade breaking a rest in half, and
+---a trade taken standing breaks nothing -- the rest that follows it is one rest and a longer one. So
+---waiting it out on our feet is not caution, it is mana not taken at the moment it is wanted, and
+---the floor is still underneath it either way.
 ---
 ---None of them is a give-up timer in disguise. All are re-read from the world every pass, and the
 ---moment health comes back or mana drops the answer changes with it.
@@ -95,8 +97,9 @@ local function initAndValidate()
         -- a bonus that applies for one tick between two stands is not a bonus. It is deliberately
         -- not 100 -- the last few percent of a health bar are the slowest to come back, and waiting
         -- for them would trade the thrash for a character that meds forever and never cannis again.
-        -- Safe to set high, because it is only ever waited out where a rest is actually possible:
-        -- standing in a fight the floor is the only line, and this is not consulted at all
+        -- Safe to set high, because it is only ever waited out where a rest is actually happening:
+        -- on its feet -- coming out of a fight as much as standing in one -- the floor is the only
+        -- line and this is not consulted at all
         configRoot.resume_hp_pct = 95
         taint = true
     end
@@ -192,8 +195,8 @@ end
 ---Health to come back to before trading starts again, once it has been taken below the floor.
 ---
 ---The other half of the floor, and the half that makes sitting worth anything -- which is also why
----the state stops consulting it in a fight it is standing up in, where nothing is sitting and there
----is nothing for it to be worth. Never below the floor, whatever is stored: read that way round the
+---the state stops consulting it whenever the character is on its feet, where nothing is sitting and
+---there is nothing for it to be worth. Never below the floor, whatever is stored: read that way round the
 ---latch in the state could never clear, so a hand-edited config is answered here rather than
 ---wedging the job.
 ---@return number pct

@@ -38,6 +38,18 @@ local Priorities = {
     -- mana ceiling stops it, so it takes frames from the rotation only until the bar is full again
     canni = 74,
 
+    -- The buffs a fight does not pay for: an instant clicky or AA aimed at nobody, which is over
+    -- in the frame it is fired and never takes the client's target off what is being fought. The
+    -- buff job proper sits at `buff`, far below, and is starved for whole fights by the states
+    -- that *are* one -- correctly, because a bar cast mid-fight spends the mana the healing wanted
+    -- and holds the target away while it runs. A free one costs neither, and a warrior whose whole
+    -- buff list is instant clickies would otherwise never keep one up in a fight at all.
+    --
+    -- The driver here is **never busy**, which is what makes this band safe: it suppresses
+    -- nothing, so what it actually buys is a turn above the rotations and a cast floor that
+    -- starves it while anything stronger is casting. See `BuffState.InFight`
+    upkeep = 75,
+
     -- melee and spell rotations. SpellDpsState registers at `dps - 1`, the melee classes declare
     -- MeleeState at `dps`, and every other class picks melee up from the common states at
     -- `dps + 5`: the melee state reports busy for as long as it is engaged, so a rotation below it
