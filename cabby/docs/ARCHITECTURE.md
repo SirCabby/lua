@@ -23,9 +23,14 @@ cabby.lua
        ├─ CabbyCasting.Init  — registers the casting service, its priority gate + /ccast
        ├─ CabbyMovement.Init — registers the movement service + /cmove
        ├─ CabbyGiving.Init   — registers the giving service + /cgive
+       ├─ CabbySwapping.Init — registers the swapping service + /cswap, and picks up any gear
+       │                       an earlier run was still holding (persisted, see below)
        ├─ Character.Init     — registers the discovery service + /crefresh
        ├─ Roles.Init         — registers /croles (who holds which job in the group)
        ├─ Combat.Init        — registers the engagement service, /cattack + the attack order
+       ├─ Jobs.Init          — the errands: each job registered as a service *and* a priority
+       │                       gate, plus /job. Class-independent, so wired here and not by a
+       │                       class profile
        ├─ ClassSetup         — this character's class module assembles + registers its states
        ├─ HotbarsUI.Init()   — ImGui shell for the hotbar windows
        └─ Menu.Init()        — ImGui shell (must be last)
@@ -57,7 +62,7 @@ gaining a level, an AA or a bag of clickies and re-reads what it can do — and 
 out of a picker or out of a saved order; **Combat**
 (`combat.lua`), which holds what we are fighting for the several states that fight it; **Mobs**
 (`mobs.lua`), which holds what is *in* the fight — a wider question than Combat's and one several
-jobs need the same answer to, assembled from four angles including a sweep that has to be paced;
+jobs need the same answer to, assembled from five angles including a sweep that has to be paced;
 **Giving** (`utils/Giving`, wired by `giving.lua`), which walks the four commands and three
 waits that put an item in somebody else's hands, because a state that walked them itself would
 leave a give window standing open with an item in it the first time a fight took the frame away;
@@ -77,14 +82,19 @@ This is a **priority-chain cooperative scheduler**: state order = priority; `Go(
 | Priority | State | Priority | State |
 |---|---|---|---|
 | 1 | My commands / Task / DZ | 79 | DPS (melee/spells) |
-| 19 | Flee (travel mode) / passive | 84 | Standoff (out of a rooted mob's reach) |
-| 29 | Cure *(reserved, see below)* | 89 | Looting |
-| 39 | Heal | 99 | Anchor |
-| 49 | Pulling | 109 | Following |
-| 59 | Mez (in combat) | 119/129 | Buff / Rest (misc) |
+| 19 | Flee (travel mode) / passive | 84 | Melee, for a class that is not one (dps + 5) |
+| 24 | Standoff (out of a rooted mob's reach) | 89 | Looting |
+| 29 | Cure *(reserved, see below)* | 99 | Anchor |
+| 39 | Heal | 109 | Following |
+| 49 | Pulling | 119/129 | Buff / Rest (misc) |
+| 59 | Mez (in combat) | | |
 | 69 | Tank / grab aggro | | |
 | 74 | Canni (health for mana) | | |
 | 75 | Upkeep (the buffs a fight does not pay for) | | |
+
+**Band 0 is not a state's.** It is the floor a running **job** holds the whole chain at — an
+errand the player switched on, which is not in the chain at all and suppresses every band in it
+while it works. See Jobs below.
 
 **The cure band is reserved and nothing registers at it.** Curing landed inside the heal state
 instead (see Curing below): a cure and a heal are the same character choosing what to cast with one
@@ -203,8 +213,9 @@ cabby/
   character.lua       service: what this character has, discovered and kept current
   combat.lua          service: what this character is fighting; every state that fights reads it
   mobs.lua            service: what is *in* the fight -- the engagement, the extended target
-                      window, the group's defend reports and a sweep for anything in combat
-                      stance nearby, merged into one roster that records which angle saw what.
+                      window, the group's defend reports, anything a state says it is holding
+                      still, and a sweep for anything in combat stance nearby, merged into one
+                      roster that records which angle saw what.
                       Also samples each mob's pose, and publishes which of them are rooted --
                       read off the live debuff view of whatever this client is targeted on, and
                       un-read by the mob taking a step
@@ -257,6 +268,10 @@ cabby/
   states/             baseState, fleeState, followState, mezState, meleeState, spellDpsState,
                       petDpsState, healState, buffState, petSetupState, advLootState, corpseState,
                       standoffState, canniState, restState
+  jobs/               job (the contract), jobs (the registry + /job), and one module per job:
+                      tradeskillJob. A job is an errand rather than a responsibility -- not in
+                      the chain, pulsed as a service, and holding the whole chain at
+                      `Priorities.job` while it runs
   classes/            priorities (the bands), baseClass (assembly), classes (the registry),
                       and one profile per EQ class
   commands/           the chat-command bus (see below), incl. the toggle/action command factories
@@ -268,8 +283,9 @@ cabby/
                       somebody and what would take it off, told apart by the sign of one base
                       value; and rezzes, every corpse-aimed cast carrying SPA_RESURRECT, ordered by
                       the experience its base value hands back
-  ui/                 ImGui menu shell + per-domain panels (states/, actions/, hotbars)
-  utils/ (sibling)    Movement/, Casting/ and Giving/ (see below), Time/Timer/StopWatch, Config,
+  ui/                 ImGui menu shell + per-domain panels (states/, jobs/, actions/, hotbars)
+  utils/ (sibling)    Movement/, Casting/, Giving/ and Swapping/ (see below), Bags/ (getting at an
+                      item inside a bag — read it before writing any pick-up), Time/Timer/StopWatch, Config,
                       Debug/FlowTracer, FileSystem, Json, PriorityQueue (unused), Stack,
                       StringUtils, TableUtils
 ```
@@ -579,6 +595,15 @@ Design rules that matter when adding a caller:
 - Tasks are best-effort straight-line movers with stuck detection, *not* pathfinding. Follow
   works around corners because it replays the trail the target actually walked. Real navmesh
   pathing remains out of scope (that is MQ2Nav's job).
+- **A `Follow` is also what chases a runner, and that is not a follow order.** The two movers are
+  not "one for group members and one for mobs" — they are a route replay and a straight line, and
+  which is right is a question about the *mob*, not about who it is. A stick is the line at where
+  something is standing, which is correct while it is standing there and is the wrong thing entirely
+  the moment it rounds a corner; a mob that has turned and run is chased along the route it walked,
+  the same way anybody is (`MeleeState.ChaseCurrentTarget`, below). What the chase changes about a
+  follow's shape is only what melee needs: melee range with no buffer (the room a follow leaves a
+  group member to move around in is a swing missed here) and `requireSight`, since being inside reach
+  of something we cannot see is not having caught it.
 - **Follow holds a buffer zone, sticks and moves do not.** `Follow` takes two ranges — it closes
   to `distance` (13 for `followme`/`followtarget`, about melee range: close enough to feel like a
   group) and then holds until the target is `resumeDistance` away (23), rather than re-closing the moment
@@ -856,9 +881,17 @@ in it the first time something above it took the frame away mid-sequence.
 
 ```
 Giving.lua          the service: one hand-off at a time, request + poll by id
-  GiveTask.lua      the sequencer: validate → pick up → target → offer → hand over
+  GiveTask.lua      the sequencer: validate → open bag → pick up → target → offer → hand over
 GiveStatus.lua      idle | preparing | giving | succeeded | failed
 ```
+
+**The bag is opened before the pick-up, and that step is not optional** — see `utils/Bags`. It was
+added on 2026-08-24 after a latent fault of the same age as this file killed the script: picking an
+item out of a *shut* bag makes the client fall back to moving it directly, and that fallback faults
+in a way no `pcall` can catch. It stayed hidden for as long as it did because the common case never
+reaches the pick-up at all — a summoned item arrives on the cursor, so `validate` skips straight
+past it. The path that found it was the retry after a give that did not land: by then the item has
+been stowed into a bag, and the second attempt has to pick it up.
 
 Rules that matter when adding a caller:
 
@@ -892,6 +925,91 @@ Rules that matter when adding a caller:
 `/cgive <item name> [targetid|<#>]` drives it by hand and reports the outcome when it lands;
 `/cgive` alone reports what giving is doing and `/cgive off` cancels it. Callers today are `/cgive`
 and the pet state.
+
+## Swapping (`utils/Swapping/`, wired by `cabby/swapping.lua`)
+
+Gear put on for a moment and taken off again. The client has no command that equips anything, so
+putting a ring on is three commands with a wait after each — pick it up, click the finger, stow
+whatever comes back — which is the same reason casting, moving and giving are services. What is
+different here is the second half:
+
+**What it puts on, it owes taking off.** A hand-off is over when the item lands; a swap is only
+half over then, because the player's own gear is sitting in a bag they did not put it in. The
+obligation lives in the service, in one record, and is discharged on the service's own pulse —
+which is what makes the whole thing safe to use from a state at `buff - 1` that is starved by
+nearly everything. A state that owned the restore would leave somebody's epic in a bag the first
+time a fight took the frame away, which is the same failure Giving was written to avoid one layer
+down.
+
+```
+Swapping.lua        the service: one swap at a time, plus the standing obligation
+  SwapTask.lua      the sequencer: per move, pick up → click the slot → stow what came back
+SwapStatus.lua      idle | preparing | swapping | succeeded | failed
+```
+
+Rules that matter when adding a caller:
+
+- **The hold ends when the reason for it does, and the reason is the caller's to answer.** `Wear`
+  takes a `keepWhile` — a question the service asks on *every pulse*, not a duration anybody
+  guessed at. Asked on the pulse precisely because the caller may be starved: a promise to come
+  back and say "you can take it off now" is a promise a starved state cannot keep, and a question
+  the service asks itself always gets an answer. A hold with no `keepWhile` stands until `Release`,
+  which is what `/cswap wear` wants.
+- **Slots are chosen, not configured, and an empty one wins.** A swap that displaces nothing has
+  nothing to put back, so an item that fits a free slot goes there; failing that it takes the first
+  slot the item lists. A slot already claimed by an earlier item in the same plan is not offered to
+  a later one — two focus items that both want `ranged` is a real configuration, and the honest
+  answer is that the second cannot go on, said in those words.
+- **A restore never fights the player.** Every restore move carries the item it expects to find in
+  the slot (`onlyIfHolds`), and a slot holding something else is left exactly as it is: their hand
+  is the more recent statement about their own gear. An *empty* slot is not a decision anybody
+  made, so that one is filled back in.
+- **A restore that cannot be made is not forgotten.** A full bag, a cursor the player has loaded, a
+  slot that will not answer: the obligation stands and is retried on a pace until it is discharged
+  or `/cswap forget` drops it. That pace is the only clock in the service that is not an evidence
+  window.
+- **The obligation is written to the config file** (`SwappingHold`), by `cabby/swapping.lua`
+  through the service's `onHoldChanged` hook, from the moment the plan exists rather than when the
+  first move lands. The service survives everything except *not running*, and a `/lua stop` or a
+  crash between the gear going on and the cast landing is exactly when it is not running. Adopted
+  on the next `Init` and released at once; safe to adopt because every move is still conditional on
+  the slot holding what we left there.
+- **Nothing runs while the client is not `INGAME`.** Every reading a swap is built on is empty for
+  the whole of a loading screen. A swap in flight is abandoned at the line; the obligation is the
+  same obligation on the far side.
+
+- **An item is only pickable up while its bag is open**, and getting that wrong does not fail — it
+  kills the script. `utils/Bags` carries the full account and both callers share it; `openBag` opens
+  the bag and `finishUp` closes it again, only ones we opened. `tradeskillJob` opens containers the
+  same way and for the same reason.
+
+  Established by hand on 2026-08-24 after five script deaths: the identical pick-up command works
+  with the bag open and kills the script with it shut. The *addressing form* is a red herring —
+  `#<id>` and the quoted name both die shut and both work open. What those deaths cost was chasing
+  the form instead of the window.
+
+That last point is the general lesson and not a footnote about one command: **a client command this
+codebase has not issued before is a script-killing hazard, not a "verify in game later" item.** The
+fault it raises is a C++ one — MQ prints `Abnormal exception thrown from coroutine!` from the
+`catch (...)` in `LuaCoroutine::Run` — so it unwinds past every `pcall` in the script,
+`runServices`' crash barrier never sees it, and nothing reaches `<Name>-errors.log`. Two things
+exist because of that:
+
+- Every command the swap issues goes through `fire()`, which logs a line either side of it. The
+  command that killed the script is the one with a `->` and no `<-`, and with a fault lua cannot
+  catch that pair is the only instrument there is.
+- The persisted obligation carries an attempt count, written to disk *before* the restore is tried,
+  and after two failed runs `Adopt` refuses and says which slot holds what. A record still on disk
+  at startup is by definition one the last run did not finish, so without the brake a
+  script-killing restore is reissued a second after every login — a game nobody can log in to play.
+
+Verified working on this client: `/itemnotify <wornslot> leftmouseup`, `/autoinventory`,
+`/itemnotify pack<N> rightmouseup`, and `/itemnotify "<name>" leftmouseup` **with the bag open**.
+
+`/cswap` reports what is swapped in and what it displaced, `/cswap off` puts it back, `/cswap wear
+<item name>` puts something on by hand, and `/cswap forget` drops the obligation without
+discharging it. Callers today are `/cswap` and the pet setup state's focus list.
+
 
 ## Action system (`actions/`)
 
@@ -1369,7 +1487,7 @@ exists for. It is a service rather than a table inside the one state that needed
 "which mobs are in this fight" is a fact a puller's leash and a tank's add sweep will want the same
 answer to, and a second copy of it assembled from scratch is a second copy to be wrong.
 
-**Four angles, merged, and each entry records which of them saw it** — because *how* we know is
+**Five angles, merged, and each entry records which of them saw it** — because *how* we know is
 what says how far a reader may lean on it:
 
 | Source | Where it comes from | Can it be wrong? |
@@ -1377,6 +1495,7 @@ what says how far a reader may lean on it:
 | `engaged` | `Combat.GetTargetId` | no — somebody chose it |
 | `hater` | the extended target window's `Auto Hater` entries (`Combat.GetHaterIds`) | no — the client saying "this is fighting you" |
 | `defend` | the standing `defend` reports (`Combat.GetDefendIds`) | no, but it needs somebody else running cabby |
+| `held` | a state saying it is holding this one still (`Mobs.Hold`) | no — we did it ourselves |
 | `nearby` | a sweep for NPCs in combat stance within reach | **yes** — see below |
 
 The first three are free (Combat has already paid for them) and are re-read every pulse; only the
@@ -1398,6 +1517,32 @@ is the question a reader asks when being wrong is expensive — an AE mez aimed 
 unconfirmed mobs is the classic way a camp pulls the room, so that is exactly what MezState's AE
 safety switch is built on, while a single-target mez spent on a mob that was not coming for us
 anyway just reads off `GetIds`.
+
+**`held` is the angle that exists because the other four all ask one question.** `engaged`,
+`hater`, `defend` and `nearby` are four ways of asking *who is this mob fighting*, and crowd control
+is the one job that makes that question answer wrongly about the mob it is surest of. A mez on this
+server carries a memory blur — `Enthrall` is SPA 31 (Mez) plus SPA 63 (Memblur), and the server's
+own chance formula (`Mob::GetMemoryBlurChance`: `min(CHA/10, 15) + level modifier + base`) puts it
+near a coin toss at ordinary levels. Where it fires the mob's hate list is wiped, and every angle
+goes dark at once: it leaves every extended target window, nobody reports it, and the server clears
+its combat stance (`PlayerState::Aggressive`) so the sweep loses it too. A mob off the roster is
+never a candidate, so **the mez is never refreshed and the mob comes round in the middle of camp
+with nothing watching the clock.**
+
+So the holder says so — `Mobs.Hold(id)` when a mez is known to have landed, `Mobs.Release(id)` when
+the record that justified it goes — and the roster keeps the mob while it is still a mob (the same
+alive/hostile/targetable check every other angle gets) **and a player is still standing within
+`hold_radius` of it** (straight-line 3D, default 50, sat in the middle of this server's own
+`npc_types.aggroradius` values, since what is really being asked is whether anybody will be inside
+the mob's reach when it comes back to its senses — the mob's own radius is server-side data the
+client is never sent). Past that it is let go, and that is the point: a blurred mob that will wake
+up where nobody is standing is the outcome the blur is *for*.
+
+The hold is **sticky rather than re-asserted each pass**, for the same reason the pose sampling
+lives in this service — the holder is a state, and a state the chain is starving cannot promise a
+cadence. It is not a timer: the proximity is re-derived every pulse, and the holder drops it when
+its own belief goes. It only has to bootstrap one refresh, because a mez is a detrimental spell and
+lands the caster back on the mob's hate list, which puts the ordinary angles back in play.
 
 **It also samples where each mob is and which way it is facing**, every 250 ms, and publishes when
 each last moved (`Mobs.LastMovedMs`, `Mobs.StillForMs`). That lives here rather than in the state
@@ -1433,6 +1578,19 @@ targeted. Both readers are asking whether to *move*, and standing still is the r
 knowing. `/cmobs` marks the mobs that read rooted, which is the thing to look at before believing
 any of it on a given server.
 
+**It also publishes whether a mob has turned and run** (`Mobs.IsRunning`), which is three readings
+because no one of them is the fact. `Spawn.Fleeing` looks like the flag and is not one: MQ's
+`IsMobFleeing` is pure geometry — the mob's heading inside a wide arc of *away from me* — so a rogue
+standing behind a tanked mob reads yes for the whole fight. It is asked with `Moving`, the honest
+half with no geometry in it (a mob in melee with anybody stands still), and with **the mob being
+outside its own reach of us** (`MaxRangeTo`), which is what the other two cannot say between them: a
+mob jockeying for position in melee is moving, and to anybody in its rear arc it is pointed away.
+Reach is the honest line between a shuffle and a run — inside it we can hit the mob, so wherever it
+is standing it has not got away from anybody. It is a live read every time rather than a sample,
+since all three are readings the client keeps current on its own. Two readers: `states/meleeState.lua`
+chases on it, and `states/spellDpsState.lua`'s **once it runs** timing fires a snare on it (that one
+used to carry its own `Moving and Fleeing` copy, without the gap).
+
 **It decides nothing and says nothing** — no engaging, no targeting, no chat — which is also what
 makes it safe to read from an ImGui callback. Zoning empties it (spawn ids do not survive one) and
 so does a flee (the fight the group ran from is not a fight). `mobsweep` is the switch, its reach is
@@ -1460,15 +1618,28 @@ and moves the way its job says: the tank moves in until it is nearest, everybody
 until they are not. Nobody reads anybody's state, nobody is told a number, and there is nothing to
 keep in agreement — two positions and a subtraction answer it every pass.
 
-**The tank closes** (`meleeState.lua`, `roottank`). While any other player is standing nearer to the
-mob than the tank's hold, the hold moves inside them; it relaxes straight back to melee range the
-moment nobody is. Every *player* body near the mob counts — found by a spawn search rather than off
-the group window, because a mob does not check the group window before it swings, and the raid member
-from another group, the box with the switch off and the stranger in the camp are all bodies in its
-reach. **There is no floor**: it will stand at zero if that is what being nearest takes, since
-somebody standing *on* a rooted mob is the case this exists for and there is no distance at which
-letting them wear it is better. The only ceiling is melee range. Everyone is measured by coordinates
-rather than asked: there is no reading another player's distance to a third spawn.
+**The tank closes** (`meleeState.lua`, `roottank`). While any other body is standing nearer to the
+mob than the tank's hold, the hold moves inside it; it relaxes straight back to melee range the
+moment nothing is. Every body near the mob counts — found by a spawn search rather than off the group
+window, because a mob does not check the group window before it swings, and the raid member from
+another group, the box with the switch off and the stranger in the camp are all bodies in its reach.
+**There is no floor**: it will stand at zero if that is what being nearest takes, since somebody
+standing *on* a rooted mob is the case this exists for and there is no distance at which letting them
+wear it is better. The only ceiling is melee range. Everyone is measured by coordinates rather than
+asked: there is no reading another player's distance to a third spawn.
+
+**Pets are bodies too, and they are the half of this that never comes the other way** (`pcpet`, charm
+included; a mob's own pet is on the other side of the fight and is not a body being arranged). Two
+spawn searches rather than one, because the client's spawn types are exclusive — a pet's type is
+*pet*, so the `pc` search never returned one and the measurement was blind to every pet in the camp.
+It matters more than the count of missing bodies suggests: a player standing inside the tank walks
+himself out and lets the hold relax, while a pet holds its own melee range on the mob for the whole
+fight and is not going to be steered off its target to fix where it is standing — that would be
+undoing an order its owner gave. So on a pet **the tank gives all the ground and more of it**, since
+a small body stands well inside where a person would have stood and there is nothing meeting it from
+the other side. The lead is the same two units it always was: "nearest" is one comparison whoever the
+body belongs to, and what costs the extra ground is where the pet is standing, not a rule about
+pets.
 
 **Reach is the gate, not the target** (`Mobs.Reach`). A mob's reach is a body against a body — MQ's
 own `GetMeleeRange` adds the two melee radii, takes three quarters, floors at 14 and adds the height
@@ -1490,15 +1661,27 @@ the group once — on the pass the stick happened to start — and then stand at
 decided for the rest of the fight.
 
 **Everyone else opens out** (`standoffState.lua`, `standoff`), and *who* "everyone else" is nobody
-has to write down. At `Priorities.standoff` the state sits below every job in the fight, so the only
-characters that ever reach it are the ones with nothing in hand: the healer between heals, the caster
-out of mana, the hybrid whose swing is off. A melee character in there swinging is busy above it and
-is never moved. The main tank is the one explicit exception, since being nearest is its job.
+has to write down: the state reads whether this character is already standing there on purpose --
+`Me.Combat`, the client's own attack toggle, which nothing in cabby turns on but the melee state, or
+a stick running, which is that same job on its way in and not yet swinging -- and stands down if it
+is. The main tank is the third exemption and the only one named, since being nearest is its job.
+What is left over is the healer between heals, the caster out of mana, the hybrid whose swing is off.
 
-It sits **above follow and anchor** deliberately: where to stand is contested with the traveling core,
-and the chain is what settles a contest. A retreat therefore holds the frame while it runs, because
-the movement service takes one task at a time and the follow below would start its own over the top
-of ours. It is a short walk, and nothing below it is starved for longer than that.
+**The band moved up in 2026-08**, from below the rotations to `Priorities.standoff` = 24, just under
+the passive band and above the healing. Below the rotations the "who" above was free — a state with
+work in hand was busy higher up and the pass never got this far — and it was free at the wrong price.
+A healer *is* reached down there, between casts; but a heal in flight starves everything weaker than
+it (the casting floor) *and* outranks the walk already running, so every retreat a healer began was
+cancelled by their own next heal, and a retreat that ends short marks the spot as one with no room
+left, which stops the pass after that from trying. The character taking the worst of a rooted mob was
+the one guaranteed never to step out of it. Up here the step back outranks the cast instead: the
+movement task carries band 24, so the heal waits out the walk rather than ending it.
+
+A retreat **holds the frame** while it runs, which costs more up here than it did below — a heal is
+among the things starved for the second or two of walking. It is not optional: the movement service
+carries one task and gives it to whoever asked last, so the follow below would start its own walk
+over the top of ours the moment we yielded. And a heal cannot be cast on the move anyway, so what the
+held frame costs is a wait the movement arbitration was already going to impose.
 
 **Sight is what stops it, and it is read by walking.** There is no asking the world what can be seen
 from a spot we are not standing on, so the retreat is watched rather than planned: it aims straight
@@ -1515,6 +1698,58 @@ first resolves it for both — a tank that closes inside a caster has already pu
 and a caster that backs out has already let the tank relax. Which is also the answer to why backing away from a mob is allowed here at all
 when `Stick:ShouldMoveBack` refuses it — a mob that can take the ground back turns a retreat into a
 fight walked across the zone a step at a time, and a rooted one cannot.
+
+## Chasing a mob that runs (`states/meleeState.lua`)
+
+**A stick is a straight line at where the mob is standing, and a runner stops standing anywhere.**
+Holding station is what a stick is for and it is right for the whole of an ordinary fight; the moment
+a mob turns and runs round a corner the same line goes through the wall, the character presses into
+it, and the stick spends its unsticker flailing at the corner while the mob leaves. A headless
+corridor harness (a room, a doorway, a hall turning west behind it) puts numbers on it: chasing a mob
+slightly faster than the character, the stick aimed at a point it could not walk to on **96% of its
+driving pulses**, never left the room, and gave up with *could not reach the stick target*.
+
+**So a mob that has run is chased the way anybody is followed** — `Movement.Follow`, the breadcrumb
+replay of the route it actually walked, which is the one route known walkable. In the same harness
+the chase aimed through a wall on **none** of its pulses in any speed case and followed the mob out
+every time. Nothing about the follow machinery is new; what the melee state supplies is the two
+numbers that make it a melee chase rather than a travel one: **melee range with no buffer**, and
+**`requireSight`**.
+
+**One task at a time is the movement service's rule, so this is a choice and never a blend**, and it
+is re-derived from the world every pass (`holdStationOn`). What makes the pair settle instead of
+trading the character back and forth is that the two directions ask **different questions**, rather
+than one question with slack around it:
+
+| | The reading | Why that one |
+|---|---|---|
+| Stick → chase | `Mobs.IsRunning` — moving, pointed away, outside its reach of us | leaving is the whole of the reason to walk a route instead of a line |
+| Chase → stick | in reach, **in sight**, and **not moving** | what a chase carries is the route, and a fresh `Follow` carries none |
+
+**Range on its own is the wrong hand-back**, and it is the mistake worth naming: a mob the character
+is keeping pace with crosses the reach line at every stride, so handing back on range would start a
+fresh chase — with an empty trail — several times a second, and the one chase that most needs its
+route banked would never bank one. Requiring the mob to have *stopped* is what makes the hand-back
+rare; requiring **sight** is the same corner from the other side, since a stick's line at a mob we
+cannot see is exactly the line nobody should be inventing (which is why starting one has always been
+gated on sight). And the hand-back is made cheap on purpose rather than merely rare: it can only fire
+with the mob in front of us at arm's length, which is precisely where starting a chase over again
+costs nothing, because its first breadcrumb lands where the mob is standing.
+
+**Sight is the other half of having caught it, and it rides in the follow rather than in the state**
+(`requireSight` → `Follow:ClosingForSight`). Being numerically inside melee range of something behind
+a corner is not being on it — the swing needs a view of it as much as the reach — so the chase keeps
+walking the mob's route until it has both. The bounds that keep that from becoming a shove are the
+follow's own: what it walks is only ever the route the mob walked, so their route run out ends it,
+and an unreadable `LineOfSight` reads as seen.
+
+**A chase is started only inside the engage ring** — the same gate the stick has always had, so
+nothing takes off after a mob that was never in reach of this fight — and once running it is not
+re-gated on distance. A mob that runs is one the character is already committed to, and a leash that
+let go halfway would leave it standing in the corridor the mob ran down. There is no timer anywhere
+in it: the chase ends when the mob is caught, when the fight ends, or when the follow runs out of
+route, and never because it has been going on a while. The `stick` switch governs both movers, since
+both are the same order — close on what we are fighting.
 
 ## Mez state (`states/mezState.lua`)
 
@@ -2889,6 +3124,33 @@ the service pulse (see Giving). The state asks for one hand-off and polls it, an
 while it runs — the sequence owns the target and the cursor, and anything below that targets
 somebody else would take them out from under it.
 
+**What the pet is made of includes what we were wearing.** A magician's pet focus — the "Minion of
+Air" and "Enhanced Minion" lines, `SPA_FOCUS_PET` (167) — is not on the summon; it is on a piece of
+gear, and the client reads it off the character at the moment the pet is made. So the Focus tab is a
+list of *items to be wearing for the cast*: they go into their slots just before the summon is
+started, the summon is cast, and they come off when it lands. A focus put on afterwards did nothing
+at all, which is why that ordering is not negotiable — and why the swap happens only once a summon
+has been picked *and found ready*, never speculatively.
+
+Taking it off again is deliberately **not** this state's promise to keep. At `buff - 1` it is
+starved by a fight, a follow, a heal — and a restore it owned would put somebody's own gear in a bag
+and leave it there. `utils/Swapping` owns both halves and discharges the second on its own pulse
+(see Swapping). All this state hands over is the *reason*: `PetSetupState.KeepFocusWorn`, a question
+the service asks every pulse, answered out of the summon in the air rather than out of a clock.
+There is one clock — `focusCastWindowMs`, an evidence window for the beat between the gear going on
+and the cast starting, since a stretch with the focus on and no summon of ours anywhere is the world
+saying that cast is not going to happen. It is re-armed by every pass that still means to cast, so
+it only runs while nothing at all is happening, and the worst it does when it is wrong is take the
+gear off and put it back on.
+
+**A focus that will not go on is not a reason to skip the summon.** A full bag, an item left in the
+bank, a slot the client will not answer for: each of those makes the next pet a rank weaker, and
+none of them makes it better to have no pet. Every ending except "still moving gear" lets the cast
+go ahead, with the reason kept on the row (`DescribeFocusItem`) and the swap paced so the same
+hopeless attempt is not made every pass. `petfocus` is the switch; the picker offers only items
+actually in the bags that carry the effect, and never an augment — its focus belongs to whatever it
+is in, and there is no wearing one.
+
 **`petgear` is the same work for somebody else's pet.** Every other class's pet arrives bare and a
 magician is the one carrying the spell that fixes it, so the group says `petgear` and whoever has a
 gear list walks it once for the asker's pet: same list, same per-slot counts, same conjure-then-hand
@@ -2907,9 +3169,10 @@ space (`petgearing off` arrives as this phrase plus `ing off`) is somebody else'
 dropped. That works only because this one takes no arguments; a command that did could not be named
 this way.
 
-`petkeeping`, `petsummoning`, `petgearing` and `petsetupcombat` are the switches, `summonpet`,
-`gearpet` and `petgear` the orders, `petaction` switches slots on either list, and `/cpet` reports
-what the pet has been given (`/cpet off`, `/cpet gear`, `/cpet summon` as well). The names are the
+`petkeeping`, `petsummoning`, `petgearing`, `petsetupcombat` and `petfocus` are the switches,
+`summonpet`, `gearpet` and `petgear` the orders, `petaction` switches slots on either action list,
+and `/cpet` reports what the pet has been given and where the focus is (`/cpet off`, `/cpet gear`,
+`/cpet summon` as well). The names are the
 ones this state had when it was the only pet state; `petsetupcombat` is the one that changed, because
 "pet" and "combat" in one word now reads like the other state's master switch and is not it.
 
@@ -3344,6 +3607,19 @@ and `stand_at_pct`, both 100 by default, which is "sit for anything short of ful
 nothing is". The pair is kept in order by the setters, because standing at less than we sit at is
 the one combination that oscillates — sit, read as rested on the next pass, stand, repeat.
 
+A third, `resume_below_pct` (97), decides when sitting is worth starting *again*, and it is a
+different question from the first. The reading at the top of a bar is not steady — a server tick
+shows health a point or two above where it really is and the next one puts it back — so "everything
+is at the stand point" and "something is below the sit point" are both true within a second of each
+other, and answered literally that is a sit and a stand per tick over health that was never lost.
+Reaching the stand point therefore latches the character **topped up**, and only a pool below the
+resume point un-latches it: the reading has to leave the band before sitting is worth doing again.
+A Schmitt trigger, the same shape as the health latch in `canniState` and there for the same reason
+— a threshold on its own has no memory of which way the bar was crossed, and that is exactly what
+is being asked. Both edges are re-read from the world every pass and neither is timed, so health
+that genuinely goes is sat down for on the pass it drops; set equal to the stand point the band is
+zero and the behaviour is what it was before the number existed.
+
 What holds it back, in the order it reports:
 
 1. **Being engaged.** A character in a fight has a fight to be in, whatever the settings say.
@@ -3366,8 +3642,8 @@ hovering dead), so it only ever sits a standing character and stands a sitting o
 waits on a short settle window after the character stops moving, because a group that pauses
 mid-run is not a rest and sitting for it buys a stand-up on the next step.
 
-`resting` and `restcombat` are the switches, `/crest` reports what it is doing and what each pool
-reads. Switching resting off stands the character up if it was resting — pushed through
+`resting` and `restcombat` are the switches, `/crest` reports what it is doing, what each pool
+reads, and whether it is sitting out the topped-up band. Switching resting off stands the character up if it was resting — pushed through
 `CommandQueue`, since the menu checkbox calls the same setter and a game command from inside a
 render callback is the crash hazard the movement service is built around.
 
@@ -3449,6 +3725,133 @@ on by accident, so `Init` says so at startup.
 The passive band is shared with the global pause that does not exist yet; when it lands it is this
 same shape with an empty exemption set.
 
+## Jobs (`jobs/`) — errands above the chain
+
+A **state** is a standing responsibility, weighed against the character's others every pass by its
+position in the chain. A **job** is the other thing: a whole activity the player sends the
+character off to carry out. Standing at a forge making the same combine two hundred times is not a
+responsibility to re-weigh forty times a second — it is what this character is doing, instead of
+everything else, until it is done or somebody says stop. The contract is written out in
+`jobs/job.lua`; `jobs/jobs.lua` is the registry, and `Setup` wires it because a job belongs to no
+class.
+
+**A job is not in the chain.** It is registered twice, and both halves are machinery that already
+existed:
+
+- as a **service**, so it is pulsed every frame whatever the chain is doing. It has to be: while it
+  works the chain is starved, so there is nobody left to drive it. It picks up the service crash
+  barrier with that — three faults in a row pause that job alone, with an alert saying so.
+- as a **priority gate**, which is how a service is busy at a band. A running job returns
+  `Priorities.job` (0) and every state is starved exactly as if a state at that band had returned
+  busy; an idle job returns `nil` and holds nothing, the way the casting gate holds nothing with no
+  cast in the air. A floor cuts a contiguous tail and can never punch a hole, so a job that wanted
+  something below it to keep running would be a job at the wrong band — not a reason for a new
+  mechanism.
+
+Holding the chain is not the same as holding the character, so a job takes the character too: it
+stops whatever the movement service is carrying when it starts. A follow task already in flight
+would otherwise keep walking, because the state that owns it is starved from that moment on and
+never gets the frame to call it off.
+
+**Three things are different from a state, and each one is the same difference:**
+
+1. **Running is never persisted.** A state's enabled switch is a fact about the character and
+   survives a restart. A job is an errand, and one that resumed by itself when the script came back
+   up would be a character quietly walking off to a forge nobody sent it to this time. The *setup*
+   persists — which container, which materials, which limits — and the run switch does not, so every
+   job starts off, every time. `/job` and the Jobs section of the menu show running, not configured.
+2. **A job ends.** It has limits, it reaches one, and it switches itself off with a reason. That
+   reason is the whole output of a job that ran while nobody was watching, so it is kept and shown
+   on the page rather than printed once into chat scroll.
+3. **The player is not fought.** A job takes the character when it starts and hands it back when it
+   stops; what the player does by hand while it runs is an instruction. Closing the container a job
+   is combining in stops the job — it is not reopened.
+
+Everything else a state owes, a job owes for the same reasons: `Pulse()` never blocks, one command
+per pulse at most, progress read out of the world rather than counted off a clock, and the only
+timers an evidence window on a command it fired plus a pace on re-firing it.
+
+### Tradeskill job (`jobs/tradeskillJob.lua`)
+
+Fill the container, press Combine, put the results away, again.
+
+**The container is the whole of it, and the server's two rules about it decide the design.** A
+tradeskill container takes one item per slot, and `ZoneDatabase::GetTradeRecipe` matches a recipe by
+*which slots hold what* — it counts occupied slots, not stack depth. Then, the moment a recipe
+resolves, `Object::HandleCombine` **deletes every slot** before it works out whether the combine
+succeeded. So:
+
+- **two of a material means two slots**, which is what the count on a material row is, and each one
+  is picked up singly — `/ctrlkey` on the pick-up, which is what the client reads as "one off this
+  stack" (`PickupItem`: `moveItem.count = isCtrl ? 1 : 0`). A whole stack of twenty flasks dropped
+  in would combine once and destroy the other nineteen;
+- **the container emptying is the world saying the combine happened.** A refused combine — no such
+  recipe, not skilled enough, wrong class, a recipe that must be learnt, a lore conflict — leaves
+  the container untouched, and those refusals are a dozen different sentences, several composed by
+  the server rather than sent as a string id. So nothing is decided by recognizing them. One
+  `/combine` goes out, the container is watched, and whichever refusal was heard is read only to
+  *explain* a stop already decided on.
+
+Every other step is answered the same way: the cursor holding the item says the pick-up took, the
+container's own count says the material went in, the cursor going empty says the products are away.
+
+**Cursor discipline is load-bearing rather than tidy, and every command means something different
+with a full cursor.** `/itemnotify` is a click: the same command that picks an item up *puts one
+down* when the cursor is full, so a pick-up attempted with something in hand would post it into
+whatever slot was aimed at. And the client refuses a combine outright while anything is held ("You
+cannot combine items when your hands are full!"). So **each step looks at the hands in the frame it
+fires**, not one step earlier — nothing is picked up except from an empty cursor, the drop is only
+re-fired while the item is still in hand, and Combine tests the cursor in the same pass as the
+command under it.
+
+That last one is not fussiness. The fill step's own look at the cursor is a whole pass before
+Combine goes out, and the *previous* combine's product arrives on its own packet, separately from
+the one that empties the container — which the collect step has already moved on from, since it
+moves the moment the cursor reads empty. A long unattended run finds that gap (2026-08-22, in game:
+a run that had been going for some time stopped on the client's refusal). Testing at the fill would
+have narrowed the window; testing in the firing frame closes it, because there is no frame in
+between. The refusal is also *listened* for, and is the one refusal treated as recoverable rather
+than final: it is thrown client-side before anything is sent, so the container is untouched and no
+combine happened — the run puts the cursor down and presses again. That recovery is guarded on the
+container still holding the materials, since un-firing a combine that really did go through would
+have the step count the same emptiness twice.
+
+**Addressing.** A container in a bag is `pack<n>` and a container standing in the world is `enviro`;
+`/combine`, `/itemnotify`, `Window[]` and `InvSlot[]` all take both, which is why the job needs no
+second code path — `windowName`, `slotName` and `dropCommand` are the only three places the two
+differ. Whether a bag is a *tradeskill* container is not readable off the item (the client keeps a
+container type; no TLO hands it over), so the reading is the client's own **Combine button**
+(`Container_Combine`, `EQUI_Container.xml`), which only exists on a window that can combine. That
+window has to be open to read it, so a closed bag is offered by the picker with the answer left
+unknown and checked once it is opened — the picker never claims to know something it has not been
+shown. (Confirmed in game 2026-08-22: a brew barrel standing open in the world reports the button.)
+
+**What the world container will not tell you is how big it is.** `Item.Container` reports slots only
+for an item typed as a pack, and the one the client builds out of the object it was told to open is
+not typed that way — an open brew barrel answers **0**. The first in-game run stopped on that
+instantly, "no room left" on an empty barrel, because a zero was being spent as a real slot count.
+It is now a first-class unknown, exactly like the buff cache and the container type above it: an
+unreadable count falls back to the ten slots the client itself addresses (`enviro1..enviro10`), and
+the pre-flight "is this container big enough" check stands aside rather than refusing on a number
+nobody gave. Nothing gets aimed at a slot that may not exist by doing so, because filling always
+takes the *lowest empty* slot — a container smaller than ten is only overrun by a recipe that was
+already too big for it.
+
+**Stopping**, and every one of them is the world or the player rather than a clock:
+
+| what | how it is read |
+|---|---|
+| a skill level reached | `Me.Skill[<skill>]`, checked after each combine. **Which** skill is a reading, not a setting: left on Auto, the first "You have become better at X!" of the run names it — nothing else is acting while a job holds the chain, so that line is about this recipe. Until one arrives the answer is nil and the limit has not come due, which is right, since the line that would settle it is the line that could trip it. Filtered to the eleven tradeskills, so something else the character gains is not spent as an answer to a question it was not about. A baseline for every tradeskill is snapshotted at the start, because on Auto there is no way to know in advance which one will need one |
+| a number of combines | combines the server actually made, success or failure alike; a refused one is not counted, it stops the run |
+| a number of successes | only the ones that produced something. A separate limit rather than a mode, because the two answer different questions: attempts is how much material to spend, successes is how many of the thing to end up with, and a combine the server made and lost is one of the first and none of the second. Counted off the "You have fashioned..." lines |
+| the recipe going trivial | the server says so on every over-trivial combine; only a stop if the player asked for one |
+| out of materials | `FindItemCount` for a material the container is short of, minus what is already staged in it when the container is a bag (a bag is *in* inventory, and counting it twice would make the run think it had one more than it does) |
+| the container closed | its window, checked every pulse — the same reading for a bag, a forge, a zone line, and a container a combine consumed |
+| Stop | the page's button, `tradeskill off`, `/ctradeskill off` |
+
+A bag is opened once when the run starts and never again, which is what makes "closed" an
+instruction rather than a fault.
+
 ## Config model
 
 - `utils/Config/Config.lua`: **shared mutable store** keyed by file path — every
@@ -3472,8 +3875,11 @@ same shape with an empty exemption set.
 ## UI model
 
 `ui/menu.lua` owns the ImGui window ("Cabby Menu", toggled by `/cmenu`, persisted
-`isMenuOpen`): left nav tree of registered Configs and States, right pane renders the
-selection's `BuildMenu()`. Domains register themselves (`Menu.RegisterConfig/RegisterState`).
+`isMenuOpen`): left nav tree of registered Configs, States and Jobs, right pane renders the
+selection's `BuildMenu()`. Domains register themselves (`Menu.RegisterConfig/RegisterState/
+RegisterJob`). States are listed in priority order and jobs in registration order, since jobs do
+not compete with one another; both draw a name in brackets while they are off, which for a job
+means "not running" rather than "disabled".
 Panels live with their domain (`ui/states/meleeStateMenu.lua`, `ui/actions/*`,
 `ui/hotbarButtonEditor.lua`). UI code still reaches into other modules' `_` privates in places
 (e.g. `MeleeState._.currentAction`, the Help tab's `Commands._.registrations`) — a coupling to

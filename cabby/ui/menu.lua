@@ -16,7 +16,8 @@ local Menu = {
             comms = {},
             slashcmds = {},
             events = {},
-            states = {}
+            states = {},
+            jobs = {}
         }
     }
 }
@@ -181,6 +182,36 @@ Menu.OpenMainMenu = function()
                     end
                     ImGui.TreePop()
                 end
+
+                -- Jobs are the errands, listed apart from the states because they are not in the
+                -- chain at all: one that is running holds the whole of it (see `cabby/jobs/job.lua`)
+                indexBase = indexBase + #Menu._.registrations.states
+                if ImGui.TreeNode("Jobs") then
+                    for i, job in ipairs(Menu._.registrations.jobs) do
+                        ---@type Job
+                        job = job
+                        local isSelected = selectedIndex == i + indexBase
+
+                        local jobLabel = job.key:sub(1, -4)
+                        if not job.IsEnabled() then
+                            jobLabel = "(" .. jobLabel .. ")"
+                        end
+
+                        if ImGui.Selectable(jobLabel, isSelected) then
+                            selectedIndex = i + indexBase
+                            if job.BuildMenu == nil then
+                                selectedMenu = PageDne
+                            else
+                                selectedMenu = job.BuildMenu
+                            end
+                        end
+
+                        if isSelected then
+                            ImGui.SetItemDefaultFocus()
+                        end
+                    end
+                    ImGui.TreePop()
+                end
             end
             ImGui.EndChild()
 
@@ -200,6 +231,13 @@ end
 ---@param config BaseConfig
 Menu.RegisterConfig = function(config)
     table.insert(Menu._.registrations.configs, config)
+end
+
+---Register a job for its own section of the tree. Unlike states there is no order to keep them
+---in: jobs do not compete with each other, and one that is running is the only thing happening.
+---@param job Job
+Menu.RegisterJob = function(job)
+    table.insert(Menu._.registrations.jobs, job)
 end
 
 ---Register a state, keeping the list in priority order -- strongest first, the order the state

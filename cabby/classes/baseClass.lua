@@ -57,13 +57,13 @@ local BaseClass = { key = "BaseClass" }
 ---in never defaulting `enabled`, so the state stays off until it is switched on -- what a caster
 ---gains here is the option and the Melee State page, not a new habit.
 ---
----Standing out of a rooted mob's reach is the fifth, and it is here because the chain is what
----decides who does it. A mob that cannot move hits whoever is standing in its reach, so everyone
----but the main tank backs out of it -- and "everyone but the main tank" is not a list anybody has
----to write down: at `Priorities.standoff` this sits below every job in the fight, so the only
----characters that ever reach it are the ones with nothing in hand. A melee character swinging is
----busy above it and is never moved. The other half of the same idea lives in MeleeState, which
----closes the tank inside the group on the same mob.
+---Standing out of a rooted mob's reach is the fifth. A mob that cannot move hits whoever is standing
+---in its reach, so everyone but the main tank backs out of it -- and "everyone but the main tank" is
+---not a list anybody has to write down: the state reads whether this character is already standing
+---there on purpose (swinging, or being walked in to swing) and stands down if it is. It sits high,
+---at `Priorities.standoff` just under the passive band, because the step out of the reach has to
+---outrank the healing of what standing in it costs -- see the note on the band. The other half of
+---the same idea lives in MeleeState, which closes the tank inside the group on the same mob.
 ---
 ---Minding the loot window is the sixth: with somebody else controlling the group's loot, every
 ---member passes on whatever roll nobody has answered, so the looter alone deals with the items
@@ -110,11 +110,13 @@ local function CommonStates()
         -- first of all, deliberately: travel mode is nothing but taking the frame away from the
         -- states under it, so it has to be above them
         { state = FleeState, priority = Priorities.passive },
+        -- above the healing on purpose: a body in a rooted mob's reach is being hit for as long as
+        -- it stands there, and the step back has to outrank the cast that answers what that costs
+        { state = StandoffState, priority = Priorities.standoff },
         -- above the rotations on purpose, and never busy: the buff job's other half, which is the
         -- only way anything of its keeps going while a fight holds every frame below
         { state = BuffState.InFight, priority = Priorities.upkeep },
         { state = MeleeState, priority = Priorities.dps + 5 },
-        { state = StandoffState, priority = Priorities.standoff },
         { state = AdvLootState, priority = Priorities.loot },
         { state = CorpseState, priority = Priorities.loot + 5 },
         { state = FollowState, priority = Priorities.follow },

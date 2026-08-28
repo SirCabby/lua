@@ -14,11 +14,35 @@
 ---
 ---@class Priorities
 local Priorities = {
+    -- Above everything the chain does: a job the player switched on by hand -- a whole activity
+    -- the character has been sent off to carry out rather than a responsibility it weighs against
+    -- its others (see `cabby/jobs/job.lua`). A job is not registered as a state at all; it holds
+    -- the chain from outside it with a floor, and this is the floor, so nothing in the chain runs
+    -- while one is working. Standing at a forge is not something to be interrupted by a follow
+    -- order or a sit-down: the player asked for the combines, and the combines are what happens
+    -- until a limit trips or they say stop
+    job = 0,
+
     -- orders given to this character, and anything the client itself is waiting on
     commands = 1,
 
     -- the global pause: everything below it is starved while it is on
     passive = 19,
+
+    -- Where to stand when a mob cannot come to you. Above every job that answers being hit, because
+    -- standing out of a rooted mob's reach is what decides whether there is anything to answer: a
+    -- body in there takes a beating for as long as it stands there, and no amount of healing it is
+    -- a substitute for the step backward that ends it.
+    --
+    -- It sat below the rotations once, on the reasoning that only a character with nothing in hand
+    -- should ever be walked anywhere -- and the character that reasoning starved was the healer, the
+    -- one it was written for. A cast in flight cut the band off (the casting floor) *and* outranked
+    -- the walk already running, so every retreat a healer began was cancelled by their own next
+    -- heal; a walk that ends short marks the spot as one with no room left, so the pass after that
+    -- would not even try. Up here the step back is what outranks the cast, and the heal waits out
+    -- the second or two of walking instead of ending it. Who "everybody else" is stopped being the
+    -- chain's answer with that move and became a reading of the world -- see `standoffState.lua`
+    standoff = 24,
 
     cure = 29,
     heal = 39,
@@ -56,13 +80,6 @@ local Priorities = {
     -- would never get a frame, while a rotation above it only takes one when it actually casts.
     -- That is also why a caster's melee sits below `dps` rather than at it
     dps = 79,
-
-    -- Where to stand when a mob cannot come to you. Below every job in the fight, deliberately:
-    -- anything with work in hand is busy above this, so the only characters that ever reach it are
-    -- the ones with nothing to do -- which is exactly the list of people who should not be standing
-    -- in a rooted mob's reach. Above follow and anchor, also deliberately, because where to stand is
-    -- contested with the traveling core and the chain is what settles that
-    standoff = 84,
 
     -- out of combat --
     -- what corpses dropped: AdvLootState answers the loot window's rolls here, and CorpseState

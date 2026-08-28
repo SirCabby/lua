@@ -55,24 +55,41 @@ local heldAtSlack = 5
 ---the furthest the tank's own hold ever relaxes to.
 ---
 ---The tank half is the mirror and lives where the tank's positioning already lives (`holdRange` in
----`states/meleeState.lua`): it measures the other players near that same mob and closes inside
----whoever is nearest, as far as zero if that is what it takes. Neither half reads the other. Both
+---`states/meleeState.lua`): it measures the other bodies near that same mob and closes inside
+---whichever is nearest, as far as zero if that is what it takes. Neither half reads the other. Both
 ---read bodies and a mob, which is all either of them needs.
 ---
----**The chain decides who "everybody else" is, and that is why this is a state and not a rule.**
----Anything with a job in the fight is busy at a band above this one -- a melee state is busy for as
----long as it is engaged, a rotation while it casts, a heal while it heals -- so the only characters
----that ever reach this band during a fight are the ones with nothing in hand: the healer between
----heals, the caster out of mana, the hybrid whose swing is off. Which is exactly the list of people
----who have no business standing in a mob's reach. Nobody is named, nothing is asked about anyone's
----class, and a melee character in there hitting things is never moved, because the chain never gets
----this far. The main tank is the one explicit exception, since being nearest is its job.
+---**A pet is a body over there with no half of its own here.** It stands in the reach and gets hit
+---like anybody, but it will not walk backwards: it holds its melee range on the mob until the fight
+---is over, and calling it off its target to move it would be undoing an order its owner gave. So the
+---pair does not settle from both ends on a pet the way it does on a person -- the tank gives all the
+---ground, and more of it, because a pet is standing closer than a person would have been.
 ---
----**Above follow and anchor, deliberately.** Where to stand is contested between this and the
----traveling core, and the contest is settled the way every contest here is -- by position in the
----chain. A retreat therefore holds the frame while it runs: the movement service takes one task at a
----time and the follow below would simply start its own over the top of ours. It is a short walk, and
----nothing below it is starved for longer than that.
+---**"Everybody else" is whoever is not already standing there on purpose, and the world is what
+---says so.** A character swinging at that mob belongs in its reach and this is the state that would
+---walk it out from under itself every pass, so two readings are taken before anything moves: the
+---client's own attack toggle (`Me.Combat`, the one thing that means "we are hitting something"),
+---and whether a stick is running, which is the same job a moment earlier, on its way in and not yet
+---swinging. The main tank is the third exemption and the only one named, since being
+---nearest is its job. Nothing is asked about anyone's class and nobody is listed: what is left over
+---is the healer between heals, the caster out of mana, the hybrid whose swing is off -- exactly the
+---people with no business standing in a mob's reach.
+---
+---**That answer used to come from the chain, for free, and it was free at the wrong price.** Down at
+---the old band below the rotations, a state with work in hand was busy above this one and the pass
+---never got this far -- which is a fine way to leave a melee alone, and a terrible one for the
+---healer the state was written for. A healer *is* reached down there, between casts, but a heal in
+---flight starves everything weaker than it (the casting floor) *and* outranks the walk already
+---running, so every retreat a healer began was cancelled by their own next heal -- and a retreat
+---that ends short marks the spot as one with no room left, which stops the pass after that from
+---trying. The character taking the worst of a rooted mob was the one character guaranteed never to
+---step out of it. At `Priorities.standoff` the step back is what outranks the cast instead.
+---
+---**A retreat holds the frame while it runs**, which costs more up here than it did below: a heal is
+---among the things starved for the second or two of walking. It is not optional. The movement
+---service carries one task and gives it to whoever asked last, so the follow below would start its
+---own walk over the top of ours the moment we yielded -- and a heal cannot be cast on the move
+---anyway, so what the frame costs is a wait the arbitration was already going to impose.
 ---
 ---**Sight is what stops it, and it is read by walking.** There is no asking the world what can be
 ---seen from a spot we are not standing on, so the retreat is watched rather than planned: while the
@@ -191,6 +208,31 @@ local function crowdingTankMob()
     return id, distance, line
 end
 
+---Is somebody already holding this character where it is standing?
+---
+---What the chain used to answer by never handing this band a frame during a fight. Two readings,
+---both of the world and neither of any state:
+---
+---**We are swinging.** `Me.Combat` is the client's own attack toggle and the only fact that says
+---"this character is hitting something"; a body in a mob's reach with its swing going is a body
+---doing a job in there, and backing it out is undoing the job rather than doing this one. Nothing
+---in cabby turns that toggle on but the melee state (through `Combat.SetAutoAttack`), so a caster
+---with no melee of its own reads false here and is still walked out, which is the whole point.
+---Deliberately not `Combat.IsEngaged`: a character can be in a fight and have no business in the
+---reach of the mob the tank is holding, and that is precisely who this state is for.
+---
+---**Or a stick is running.** The same job one moment earlier -- on its way in, inside the mob's
+---reach already and not yet close enough or turned enough for the swing to have started. Without it
+---a melee walking in is met halfway by a retreat, walked back out, and starts over. Which spawn the
+---stick is on is not asked: sticking to an add while standing in the rooted mob's reach is still a
+---job that put us here, and giving that ground would lose the add instead.
+---@return boolean isHeld
+local function standingOnPurpose()
+    if mq.TLO.Me.Combat() == true then return true end
+
+    return Movement.GetTaskType() == Movement.taskTypes.stick
+end
+
 ---Write down that a retreat from this mob ran out of room where we are standing.
 ---@param id number
 ---@param why string in words, for the page and the log
@@ -281,6 +323,14 @@ end
 local function standoff()
     -- Being nearest is the tank's job, and this is the state that would undo it every pass
     if Roles.IsMainTank() then
+        if StandoffState._.retreat ~= nil then release() end
+        return false
+    end
+
+    -- Already standing there on purpose: see the note on the band. Read here rather than left to
+    -- the chain, which said it for nothing while this sat below the rotations and says nothing at
+    -- all from above them.
+    if standingOnPurpose() then
         if StandoffState._.retreat ~= nil then release() end
         return false
     end
@@ -377,6 +427,7 @@ function StandoffState.Init()
             "backs behind it -- straight back, and only while the mob stays in sight. Only the",
             "tank's own target is looked at, and how far out is measured against where the tank",
             "is standing rather than set anywhere.",
+            "Pets have no half here: they hold their ground, so the tank closes inside them.",
             "It only ever reaches a character with nothing else to do in the fight: anything with",
             "a job in hand is busy at a band above this one and is never moved.",
             "The other half is the tank closing in (the Melee State page's roottank switch)."

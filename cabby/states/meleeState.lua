@@ -26,9 +26,11 @@ local sequentialActionDelayMs = 1500
 -- so, and repeating the command every frame in the meantime is nothing but spam
 local standRetryMs = 1000
 
--- How far inside the nearest other group member the main tank aims to stand on a rooted mob. Enough
--- to be unambiguously the nearest body after the client's own rounding, and no more: every unit of
--- it is a unit further into a mob that may have an ae.
+-- How far inside the nearest other body -- player or somebody's pet -- the main tank aims to stand
+-- on a rooted mob. Enough to be unambiguously the nearest body after the client's own rounding, and
+-- no more: every unit of it is a unit further into a mob that may have an ae. One number for both,
+-- because "nearest" is the same comparison whoever the body belongs to; what makes a pet cost more
+-- ground is that it is standing closer to begin with and will not move, not a different rule.
 local rootTankLead = 2
 -- How close it will get in the attempt. Zero, at the user's direction: being the nearest body is the
 -- job, somebody standing *on* a rooted mob is exactly when it matters most, and there is no distance
@@ -60,7 +62,7 @@ local MeleeState = {
         isInit = false,
         retargetTimer = nil,
         standTimer = nil,
-        stickTargetId = 0,
+        holdTargetId = 0,
         tauntTimer = Timer.new(sequentialActionDelayMs),
         hateTimer = Timer.new(sequentialActionDelayMs),
         -- the last measurement of where the rest of the group is standing relative to what we are
@@ -139,18 +141,66 @@ function MeleeState.GetSpawnMeleeRange(id)
     return math.min(14, reach - 3)
 end
 
----How close the nearest other player is standing to this mob.
+---The nearest body one spawn search turns up, measured to the mob and counted only if the mob could
+---actually hit it.
+---
+---Split out because a body on our side of the fight is two searches and not one -- the client's
+---spawn types are exclusive, so a `pc` search does not return anybody's pet -- and the two are the
+---same handful of reads over the same question.
+---@param search string a spawn search, already widened to cover the mob's reach from where we stand
+---@param mobY number
+---@param mobX number
+---@param mobZ number
+---@param reach number how far the mob can hit, so how far out a body still counts as in the way
+---@param myId number ours, which is the one body this measurement is not about
+---@param nearest number|nil the closest anything earlier found, carried through so the searches
+---compose into one answer rather than each having its own
+---@return number|nil nearest
+local function nearestInSearch(search, mobY, mobX, mobZ, reach, myId, nearest)
+    local count = tonumber(mq.TLO.SpawnCount(search)()) or 0
+    for index = 1, count do
+        local body = mq.TLO.NearestSpawn(index, search)
+        local id = tonumber(body.ID()) or 0
+        if id > 0 and id ~= myId then
+            local y, x, z = body.Y(), body.X(), body.Z()
+            if y ~= nil and x ~= nil and z ~= nil then
+                local distance = Geometry.Distance3D(y, x, z, mobY, mobX, mobZ)
+                if distance < reach and (nearest == nil or distance < nearest) then
+                    nearest = distance
+                end
+            end
+        end
+    end
+
+    return nearest
+end
+
+---How close the nearest other body on our side of the fight is standing to this mob.
 ---
 ---Measured between their coordinates and the mob's rather than asked of anybody: there is no reading
 ---another player's distance to a third spawn, and their own client is not something this one can
 ---interrogate. What can be had is two positions and a subtraction.
 ---
----**Every player body near the mob counts, and none of them is asked why it is there.** Not group
----members -- *players*, found by a spawn search, because a mob does not check the group window
----before it swings: the raid member from another group, the box with the switch off and the stranger
----who wandered into the camp are all bodies in its reach, and the one standing nearest is the one it
----hits. The search is centred on us and widened to cover the mob's whole reach from wherever we
----are standing, which is the closest the client comes to "everybody near that spawn".
+---**Every body near the mob counts, and none of them is asked why it is there.** Not group members
+---but *bodies*, found by a spawn search, because a mob does not check the group window before it
+---swings: the raid member from another group, the box with the switch off and the stranger who
+---wandered into the camp are all standing in its reach, and the one standing nearest is the one it
+---hits. The search is centred on us and widened to cover the mob's whole reach from wherever we are
+---standing, which is the closest the client comes to "everybody near that spawn".
+---
+---**A pet is one of those bodies, and it is the one that cannot be sent away.** Everybody else's
+---half of this is walking backwards (`states/standoffState.lua`); a pet does not do that. It holds
+---its own melee range on what it was sent at for as long as the fight lasts, and calling it off its
+---target to fix where it is standing is undoing an order its owner gave. So the whole of the fix
+---falls on this half, and the tank closes *further* for it than it ever would for a player -- a pet
+---is a small body that stands well inside where a person would have stood, and the hold has to get
+---inside that with nothing coming the other way to meet it.
+---
+---**Player-owned pets, which is `pcpet` and includes a charm** -- a mob's own pet is on the other
+---side of the fight, is somebody the group is trying to kill rather than a body it is arranging, and
+---is already in the roster as such. Two searches rather than one because the client's spawn types
+---are exclusive: a pet's type is *pet*, so `pc radius` never returned one and this measurement has
+---been quietly blind to every pet in the camp.
 ---
 ---Nil is "nobody else to measure": solo, or nobody else near the mob. It is not zero, and the caller
 ---must not read it as somebody standing on the mob.
@@ -176,25 +226,14 @@ local function nearestOtherDistance(targetId)
 
     -- Everyone within the mob's reach is within this of us, wherever we happen to be standing --
     -- the triangle inequality and nothing cleverer. Anybody it catches beyond that is filtered by
-    -- the reach test below, so the width costs a few reads rather than a wrong answer.
-    local search = "pc radius " .. tostring(math.ceil(myDistance + reach) + 1)
-
+    -- the reach test in the search, so the width costs a few reads rather than a wrong answer.
+    local radius = tostring(math.ceil(myDistance + reach) + 1)
     local myId = mq.TLO.Me.ID()
-    local count = tonumber(mq.TLO.SpawnCount(search)()) or 0
-    for index = 1, count do
-        local pc = mq.TLO.NearestSpawn(index, search)
-        local id = tonumber(pc.ID()) or 0
-        if id > 0 and id ~= myId then
-            local y, x, z = pc.Y(), pc.X(), pc.Z()
-            if y ~= nil and x ~= nil and z ~= nil then
-                local distance = Geometry.Distance3D(y, x, z, mobY, mobX, mobZ)
-                if distance < reach and (cache.distance == nil or distance < cache.distance) then
-                    cache.distance = distance
-                end
-            end
-        end
-    end
 
+    local nearest = nearestInSearch("pc radius " .. radius, mobY, mobX, mobZ, reach, myId, nil)
+    nearest = nearestInSearch("pcpet radius " .. radius, mobY, mobX, mobZ, reach, myId, nearest)
+
+    cache.distance = nearest
     return cache.distance
 end
 
@@ -205,11 +244,18 @@ end
 ---do -- so on one of those, the group's main tank being *nearest* is not a nicety, it is the job,
 ---and a caster who has drifted inside the tank is the one taking the hits.
 ---
----Closing is expressed against where the other players actually are rather than against a tighter
+---Closing is expressed against where the other bodies actually are rather than against a tighter
 ---number, because "nearest" is a comparison and nothing else: the answer moves as they move, it is
 ---re-derived every pass from where everybody is standing, and it relaxes straight back to melee
----range the moment nobody is inside it. Every player body near the mob counts, whatever it is doing
----and whoever it belongs to, because a mob does not check the group window before it swings.
+---range the moment nobody is inside it. Every body near the mob counts, whatever it is doing and
+---whoever it belongs to, because a mob does not check the group window before it swings.
+---
+---**Pets count, and they are the reason this ends up further in than it sounds.** A pet is a body
+---in the reach like any other, but it is the only one with no half of its own here: a player inside
+---the tank backs out (`states/standoffState.lua`) and the hold relaxes as they go, while a pet holds
+---its own melee range on the mob until the fight ends. Nothing meets this half coming the other way,
+---so the ground is all given by the tank -- and a pet stands closer than a person would, which is
+---exactly why closing inside one costs more of it.
 ---
 ---**There is no floor.** It will stand at zero if that is what being nearest takes -- somebody
 ---standing *on* a rooted mob is the case this exists for, and there is no distance at which giving
@@ -265,8 +311,119 @@ function MeleeState.StickToCurrentTarget(range)
     -- frame after the cast ends.
     if Casting.IsHoldingStill(MeleeState.priority) then return end
 
-    MeleeState._.stickTargetId = Combat.GetTargetId()
-    Movement.Stick(MeleeState._.stickTargetId, { distance = range, owner = MeleeState.key })
+    MeleeState._.holdTargetId = Combat.GetTargetId()
+    Movement.Stick(MeleeState._.holdTargetId, {
+        distance = range,
+        owner = MeleeState.key,
+        priority = MeleeState.priority
+    })
+end
+
+---Chase a mob that has turned and run, by walking the route it took.
+---
+---**A stick is a straight line at where the mob is standing, and a runner stops standing anywhere.**
+---That line is fine while the mob is in front of us and it is the wrong thing entirely the moment
+---the mob rounds a corner: the line goes through the wall, the character presses into it, and the
+---stick spends its unsticker flailing at the corner while the mob leaves. So a mob that has run is
+---chased the way a group member is followed -- `Movement.Follow`, the breadcrumb replay of the
+---route it actually walked, which is the one route known walkable (see `utils/Movement/Follow.lua`).
+---
+---**Sight is asked for** (`requireSight`), which is the other half of the corner. Being inside melee
+---range of something we cannot see is not having caught it -- the swing needs a view of it as much
+---as the reach -- so the chase keeps walking the mob's route until we have both, rather than parking
+---behind whatever is in the way. Exactly the reading `cabby/travel.lua` asks for while a fight is on,
+---and for the same reason.
+---
+---**Held at melee range with no buffer**, unlike a follow: the room a follow leaves a group member
+---to move around in would be a swing missed here.
+---
+---**Retuned rather than restarted while it is already ours.** A fresh `Follow` starts with no trail,
+---and a chase with no trail is the beeline this exists to stop -- so a chase already running is
+---adjusted in place, the same way a stick's distance is (`Movement.SetFollowHold`).
+---@param targetId number
+---@param range number
+function MeleeState.ChaseCurrentTarget(targetId, range)
+    if Movement.IsFollowing(targetId) and Movement.IsOwnedBy(MeleeState.key) then
+        Movement.SetFollowHold(MeleeState.key, range, range, true)
+        return
+    end
+
+    -- The same guard the stick has: a cast of ours we are level with is lost by walking, and
+    -- starting a beat later costs nothing here either -- the movement service holds the character
+    -- still for that cast whichever mover asked, and a held task records no route.
+    if Casting.IsHoldingStill(MeleeState.priority) then return end
+
+    MeleeState._.holdTargetId = targetId
+    Movement.Follow(targetId, {
+        distance = range,
+        resumeDistance = range,
+        requireSight = true,
+        owner = MeleeState.key,
+        priority = MeleeState.priority
+    })
+end
+
+---Is this mob standing somewhere the stick can hold it?
+---
+---**The question that ends a chase, and it is not the negative of the one that starts one.** What a
+---chase carries is the route the mob took, and a `Follow` started fresh carries none -- so handing
+---the character back is only right when the stick can honestly do the job: the mob is **in reach,
+---in sight, and no longer going anywhere.**
+---
+---Each of the three is there for its own failure. Range alone hands the stick a mob we are merely
+---keeping pace with, at every stride, and takes the route away each time -- so the one chase that
+---most needs its trail is the one that never banks one. Sight, because the stick's line at a mob we
+---cannot see is the line nobody should be inventing (the same gate that has always governed starting
+---one). And still, because a mob still travelling is a mob whose route we are about to want.
+---
+---Handing back is otherwise made cheap on purpose: it can only happen with the mob in front of us at
+---arm's length, which is exactly where a chase started over again costs nothing -- its first
+---breadcrumb lands where the mob is standing.
+---@param targetId number
+---@param distance number how far away it is, already read this pass
+---@param range number how close we hold station on it
+---@return boolean canHold
+local function stickCanHold(targetId, distance, range)
+    if distance > range then return false end
+    if not mq.TLO.Target.LineOfSight() then return false end
+    return mq.TLO.Spawn("id " .. tostring(targetId)).Moving() ~= true
+end
+
+---Get to what we are fighting, by whichever of the two movers the mob's own behaviour calls for.
+---
+---One task at a time is the movement service's rule, so this is a choice and never a blend: the
+---stick runs at the mob, the chase walks its route, and which of them holds the character is
+---re-derived here every pass off the world.
+---
+---**Leaving is what picks the chase** (`Mobs.IsRunning`), and **catching it is what gives the stick
+---the character back** (`stickCanHold`) -- two different questions rather than one with slack round
+---it, which is what keeps the pair from trading the character back and forth over a threshold.
+---
+---A chase is only ever *started* on something inside the engage ring, the same gate the stick has
+---always had, so nothing here takes off after a mob that was never in reach of this fight. Once
+---running it is not re-gated on distance: a mob that runs is a mob we are already committed to, and
+---a leash that let go halfway would leave the character standing in the corridor it ran down.
+---@param targetId number
+---@param distance number
+---@param range number
+local function holdStationOn(targetId, distance, range)
+    if not MeleeStateConfig.GetStick() then return end
+
+    local chasing = Movement.IsFollowing(targetId) and Movement.IsOwnedBy(MeleeState.key)
+    if chasing and not stickCanHold(targetId, distance, range) then
+        MeleeState.ChaseCurrentTarget(targetId, range)
+        return
+    end
+
+    local withinEngage = distance < MeleeStateConfig.GetEngageDistance()
+    if not chasing and withinEngage and Mobs.IsRunning(targetId) then
+        MeleeState.ChaseCurrentTarget(targetId, range)
+        return
+    end
+
+    if not Movement.IsSticking(targetId) and withinEngage and mq.TLO.Target.LineOfSight() then
+        MeleeState.StickToCurrentTarget(range)
+    end
 end
 
 ---@return number targetId what this state is fighting, which is whatever Combat says
@@ -350,8 +507,8 @@ local function melee()
     local targetId = Combat.GetTargetId()
     if targetId == 0 then
         -- let go of anything we were holding onto for a target that is gone
-        if MeleeState._.stickTargetId ~= 0 then
-            MeleeState._.stickTargetId = 0
+        if MeleeState._.holdTargetId ~= 0 then
+            MeleeState._.holdTargetId = 0
             Movement.StopFor(MeleeState.key)
         end
         -- The fight can be open with no target for a beat -- Combat is seeking the successor
@@ -421,11 +578,9 @@ local function melee()
         return true
     end
 
-    if MeleeStateConfig.GetStick() and not Movement.IsSticking(targetId) and distance < MeleeStateConfig.GetEngageDistance() and mq.TLO.Target.LineOfSight() then
-        MeleeState.StickToCurrentTarget(range)
-    end
+    holdStationOn(targetId, distance, range)
 
-    -- StickToCurrentTarget can yield too, so keep using the snapshot rather than re-reading
+    -- Starting a move can yield too, so keep using the snapshot rather than re-reading
     if distance < range then
         if not mq.TLO.Me.Combat() and Status:IsFacingTarget() then
             Combat.SetAutoAttack(true, "in melee range")
@@ -481,7 +636,7 @@ end
 function MeleeState.Reset()
     MeleeState._.retargetTimer = Timer.new(0)
     MeleeState._.standTimer = Timer.new(0)
-    MeleeState._.stickTargetId = 0
+    MeleeState._.holdTargetId = 0
     MeleeState._.nearestOther = { id = 0, atMs = 0, distance = nil }
     -- only our own stick; a higher priority behavior may have taken movement over since
     Movement.StopFor(MeleeState.key)
@@ -511,10 +666,13 @@ function MeleeState.Init()
         ToggleCommand.Register({
             key = MeleeState.key,
             phrase = MeleeState.eventIds.stick,
-            summary = "Turns sticking to the attack target on or off",
+            summary = "Turns closing on the attack target on or off",
             about = {
+                "On, a mob standing still is held at melee range by a stick, and one that has",
+                "turned and run is chased along the route it walked -- the same breadcrumb",
+                "follow used for followtarget, which is what gets round a corner.",
                 "Off holds position and only swings at what comes into reach.",
-                "Turning it off also releases a stick already running."
+                "Turning it off also releases a stick or a chase already running."
             },
             get = MeleeStateConfig.GetStick,
             set = MeleeState.SetStick
@@ -528,6 +686,8 @@ function MeleeState.Init()
                 "Only ever acts on the group's main tank, and only on a mob that reads as rooted.",
                 "A mob that cannot move hits whoever is standing in its reach, so the tank closes",
                 "until it is the nearest body and relaxes back to melee range once it is.",
+                "Pets count as bodies too, and they are the ones that never back off -- so closing",
+                "inside a pet is all on the tank, and goes as far in as zero.",
                 "The other half is everyone else standing off (the Standoff page)."
             },
             get = MeleeStateConfig.GetRootTank,
@@ -598,9 +758,12 @@ MeleeState.SetEnabled = function(isEnabled)
     end
 end
 
----Turn sticking on or off. The setting only governs whether a *new* stick is started, so turning
----it off releases the one in progress as well -- otherwise the character keeps chasing the target
----it was just told to stand off from.
+---Turn closing on the attack target on or off, both movers -- the stick that holds a mob standing
+---still and the chase that walks a runner's route are the same order, and the switch is over the
+---order rather than over one of its shapes.
+---
+---It governs whether a *new* one is started, so turning it off releases the one in progress as
+---well -- otherwise the character keeps chasing the target it was just told to stand off from.
 ---@param enable boolean
 function MeleeState.SetStick(enable)
     MeleeStateConfig.SetStick(enable)

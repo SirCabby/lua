@@ -65,6 +65,125 @@ local function DrawGearFields(liveAction, shownAction, petState)
     ImGui.TextDisabled(what .. " -- " .. tostring(facts.given) .. " of " .. tostring(facts.wanted) .. " handed over")
 end
 
+---One row of the focus list: which item, whether it is switched on, and where it is right now.
+---
+---Deliberately not an action row. Everything on the other two tabs is something that gets *used*
+----- a spell, an AA, a clicky -- and carries the whole apparatus that goes with that: a type, a
+---staged edit, a lua condition. A focus is none of those. It is a piece of gear that does its work
+---by being on the character while the summon lands, so the only two things worth saying about a
+---row are which item it is and whether it counts.
+---
+---Both controls write straight to the live entry rather than staging behind a Save, for the same
+---reason the Enabled switch on an action does: swapping the focus in is something you turn off
+---while watching a fight, not part of describing a configuration.
+---@param petState PetSetupState
+---@param entries table the focus list
+---@param entry table the row being drawn
+---@param index number
+local function DrawFocusRow(petState, entries, entry, index)
+    local childFlags = bit32.bor(ImGuiChildFlags.Border, ImGuiChildFlags.AutoResizeX)
+    if ImGui.BeginChild("petFocusChild" .. tostring(index), 623, 60, childFlags) then
+        local enabled, enabledPressed = ImGui.Checkbox("Enabled", PetSetupStateConfig.IsFocusItemEnabled(entry))
+        if enabledPressed then
+            PetSetupStateConfig.SetFocusItemEnabled(entry, enabled)
+        end
+
+        ImGui.SameLine()
+        ImGui.SetNextItemWidth(320)
+        if ImGui.BeginCombo("##petFocusName" .. tostring(index), entry.name or "") then
+            -- asked for here rather than kept up to date in the background: this is the only
+            -- thing that reads it, and an open combo is the only moment it is worth the walk
+            local carried = Items.PetFocusItems()
+
+            if #carried < 1 then
+                -- the honest answer, and the one that saves somebody hunting for a bug: nothing
+                -- in the bags carries one. An augment does not count -- there is no wearing one
+                ImGui.TextDisabled("Nothing you are carrying has a pet focus on it")
+            end
+
+            for _, item in ipairs(carried) do
+                local _, pressed = ImGui.Selectable(item.name .. "  --  " .. item.focus, entry.name == item.name)
+                if pressed then
+                    PetSetupStateConfig.SetFocusItemName(entry, item.name)
+                end
+            end
+            ImGui.EndCombo()
+        end
+
+        local atTop = index == 1
+        if atTop then ImGui.BeginDisabled() end
+        ImGui.SameLine()
+        if ImGui.Button("Up##petFocus" .. tostring(index), 40, 22) then
+            table.remove(entries, index)
+            table.insert(entries, index - 1, entry)
+            Global.configStore:SaveConfig()
+        end
+        if atTop then ImGui.EndDisabled() end
+
+        local atBottom = index == #entries
+        if atBottom then ImGui.BeginDisabled() end
+        ImGui.SameLine()
+        if ImGui.Button("Down##petFocus" .. tostring(index), 50, 22) then
+            table.remove(entries, index)
+            table.insert(entries, index + 1, entry)
+            Global.configStore:SaveConfig()
+        end
+        if atBottom then ImGui.EndDisabled() end
+
+        ImGui.SameLine()
+        if ImGui.Button("X##petFocus" .. tostring(index), 24, 22) then
+            table.remove(entries, index)
+            Global.configStore:SaveConfig()
+        end
+
+        local facts = petState.DescribeFocusItem(entry)
+        if entry.name == nil or entry.name == "" then
+            ImGui.TextDisabled("pick an item")
+        elseif facts.problem ~= nil then
+            ImGui.TextColored(1, 0.8, 0.2, 1, facts.problem)
+        else
+            ImGui.TextDisabled(tostring(facts.focus) ..
+                (facts.worn ~= nil and ("  --  worn now (" .. facts.worn .. ")") or "  --  in a bag"))
+        end
+    end
+    ImGui.EndChild()
+end
+
+---@param petState PetSetupState
+local function DrawFocusList(petState)
+    local swapping, swappingClicked = ImGui.Checkbox("Wear it to summon", PetSetupStateConfig.GetFocusSwapping())
+    if swappingClicked then
+        PetSetupStateConfig.SetFocusSwapping(swapping)
+    end
+    ImGui.SameLine()
+    CommonUI.HelpMarker("On, everything switched on below goes into its slot just before the summon is cast and comes back off when the cast lands -- whatever it displaced goes back where it was. Off, the summon is cast with whatever is already on. Off by default and worth turning on while you are watching: moving gear is the one thing here that clicks the client's inventory windows, and this has not yet been seen working on this client.")
+
+    ImGui.SameLine()
+    if ImGui.Button("Add##petFocusItem", 50, 23) then
+        PetSetupStateConfig.GetFocusItems()[#PetSetupStateConfig.GetFocusItems()+1] = {}
+    end
+
+    local problem = petState.GetFocusProblem()
+    if problem ~= nil then
+        ImGui.TextColored(1, 0.8, 0.2, 1, "last swap: " .. problem)
+    elseif petState.IsFocusWorn() then
+        ImGui.TextDisabled("the focus is on right now, and owed back")
+    end
+
+    local entries = PetSetupStateConfig.GetFocusItems()
+    for index, entry in ipairs(entries) do
+        if index % 2 == 0 then
+            ImGui.PushStyleColor(ImGuiCol.ChildBg, 0.1, 0.1, 0.1, 1)
+        else
+            ImGui.PushStyleColor(ImGuiCol.ChildBg, 0.15, 0.15, 0.15, 1)
+        end
+        ImGui.PushID(entry)
+        DrawFocusRow(petState, entries, entry, index)
+        ImGui.PopID()
+        ImGui.PopStyleColor()
+    end
+end
+
 ---@param petState PetSetupState
 ---@param actions table the list being drawn
 ---@param isGear boolean
@@ -241,6 +360,16 @@ function PetSetupStateMenu.BuildMenu(petState)
             availableActions.items = Items.all
 
             DrawList(petState, PetSetupStateConfig.GetGearActions(), true, availableActions)
+
+            ImGui.EndTabItem()
+        end
+
+        if ImGui.BeginTabItem("Focus") then
+            ImGui.TextDisabled("Worn for the summon and taken off again afterwards.")
+            ImGui.SameLine()
+            CommonUI.HelpMarker("A magician's pet focus -- the Minion of Air and Enhanced Minion lines -- makes the pet a rank stronger, and the game reads it off you at the moment the pet is made. So an item carrying one only has to be on for the one cast, which is what this does: it goes into a slot just before the summon, and what it pushed out goes back afterwards. An empty slot is preferred where the item fits one, so that nothing has to be displaced at all. Only items you are carrying are offered, and an augment is never offered -- its focus belongs to whatever it is in.")
+
+            DrawFocusList(petState)
 
             ImGui.EndTabItem()
         end

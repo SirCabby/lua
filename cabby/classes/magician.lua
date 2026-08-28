@@ -11,10 +11,13 @@ local SpellDpsState = require("cabby.states.spellDpsState")
 ---
 ---The pet states are the shared ones -- magician, necromancer, beastlord, shadow knight, shaman
 ---and the enchanter's animation all keep a pet the same way -- and this is the class they were
----built around, because a magician's pet is the only one that also has to be armed. Keeping it is
----`PetSetupState`, a band above buffing, so that a pet is standing there and holding what it is
----owed before anything is spent on buffing one; a pet buff cast on a pet that is about to be
----replaced is a wasted gem timer. Using it is `PetDpsState` at `dps - 2`, above the rotation for
+---built around, because a magician's pet is the only one that also has to be armed -- and the only
+---one whose *summon* is worth dressing for. Keeping it is `PetSetupState`, a band above buffing, so
+---that a pet is standing there and holding what it is owed before anything is spent on buffing one;
+---a pet buff cast on a pet that is about to be replaced is a wasted gem timer. That state's focus
+---list is this class's too in practice: a pet focus is read off the character at the moment the pet
+---is made, so the item carrying one goes on for the summon and comes back off afterwards.
+---Using it is `PetDpsState` at `dps - 2`, above the rotation for
 ---the reason everything above the melee state is: the swing starves what sits under it, and an
 ---order to the pet that waits for the next nuke to finish is a pet arriving after the mob has
 ---picked somebody.

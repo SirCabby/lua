@@ -259,7 +259,7 @@ function MezStateMenu.BuildMenu(mezState)
             MobsConfig.SetSweep(sweep)
         end
         ImGui.SameLine()
-        CommonUI.HelpMarker("The mob roster always reads what the client is told: what we are fighting, the extended target window, and the group's (defend) calls. This is the fourth angle -- a sweep of the zone for anything in combat stance nearby -- and it is the only one that can see the add on its way in or the mob chewing on somebody's pet. It is also the only one that can be wrong about whether the mob is fighting us, which is what the AE setting above guards against. /cmobs reports all four.")
+        CommonUI.HelpMarker("The mob roster always reads what the client is told: what we are fighting, the extended target window, and the group's (defend) calls. This is the fourth angle -- a sweep of the zone for anything in combat stance nearby -- and it is the only one that can see the add on its way in or the mob chewing on somebody's pet. It is also the only one that can be wrong about whether the mob is fighting us, which is what the AE setting above guards against. /cmobs reports them all.")
 
         if MobsConfig.GetSweep() then
             ImGui.SameLine()
@@ -276,6 +276,17 @@ function MezStateMenu.BuildMenu(mezState)
                 MobsConfig.SetZRadius(zradius)
             end
         end
+
+        ImGui.TableNextColumn()
+        ImGui.Text("Keep a mezzed mob in the fight within")
+        ImGui.SameLine()
+        ImGui.SetNextItemWidth(60)
+        local holdRadius, holdChanged = ImGui.DragInt("of a player", MobsConfig.GetHoldRadius(), 1, 10, 500)
+        if holdChanged then
+            MobsConfig.SetHoldRadius(holdRadius)
+        end
+        ImGui.SameLine()
+        CommonUI.HelpMarker("A mez here carries a memory blur, and when it fires the mob's hate list is wiped: it leaves every extended target window, nobody calls it, and the server drops its combat stance so the sweep loses it too. Every way the roster has of seeing a mob goes dark at once -- on the mob we are surest about -- and a mob off the roster is never refreshed, so it comes round in the middle of camp with nothing watching it. This keeps one we mezzed in the fight while a player is still standing this close to it. Past that it is let go, because a blurred mob that will wake up where nobody is standing is exactly what the blur is for.")
 
         ImGui.EndTable()
     end

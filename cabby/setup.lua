@@ -16,11 +16,13 @@ local CabbyGiving = require("cabby.giving")
 local GeneralConfig = require("cabby.configs.generalConfig")
 local HotbarConfig = require("cabby.configs.hotbarConfig")
 local HotbarsUI = require("cabby.ui.hotbarsUI")
+local Jobs = require("cabby.jobs.jobs")
 local Menu = require("cabby.ui.menu")
 local Mobs = require("cabby.mobs")
 local CabbyMovement = require("cabby.movement")
 local Rez = require("cabby.rez")
 local Roles = require("cabby.roles")
+local CabbySwapping = require("cabby.swapping")
 local Travel = require("cabby.travel")
 
 local Setup = {
@@ -145,6 +147,10 @@ function Setup:Init(configFilePath, stateMachine)
     CabbyCasting.Init(stateMachine)
     CabbyMovement.Init(stateMachine) -- states expect the movement service to exist before they register
     CabbyGiving.Init(stateMachine) -- handing an item to somebody, a sequence at a time
+    -- gear worn for a moment and taken off again, and the record of what is owed back.
+    -- Registered before anything that asks for a swap, because the putting back is this
+    -- service's own business and runs on the frames its caller is starved
+    CabbySwapping.Init(stateMachine)
     Character.Init(stateMachine) -- watches for level-ups, AA purchases and bag changes
     Roles.Init() -- who holds which job in the group; Combat and HealState both read it
     Combat.Init(stateMachine) -- what we are fighting; every state that fights reads it
@@ -162,6 +168,9 @@ function Setup:Init(configFilePath, stateMachine)
     -- client's confirmation box or as the Resurrect line on the respawn window we are hovering at
     Rez.Init(stateMachine)
     Travel.Init() -- the standing movement orders; the world's death messages end a follow here
+    -- the errands: whole activities the player switches on, which hold the state chain from
+    -- outside it while they run. Not a class's business -- anybody can stand at a forge
+    Jobs.Init(stateMachine)
     ClassSetup(stateMachine)
 
     HotbarsUI.Init()

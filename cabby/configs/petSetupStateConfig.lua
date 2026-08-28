@@ -99,6 +99,34 @@ local function initAndValidate()
         taint = true
     end
 
+    if configRoot.focus_swap == nil then
+        -- **Off until somebody turns it on, and that is not the usual reason for a default.**
+        -- Every other switch here defaults to whatever is right when the list below it is filled
+        -- in, because an empty list is what says "this character does not do this". This one
+        -- defaults off because putting gear on is the only thing this state does that talks to the
+        -- client's *inventory windows*, and a client command that faults there takes the whole
+        -- script down in a way no `pcall` in this codebase can catch -- it is a C++ fault, not a
+        -- lua error, so the state machine's crash barrier never sees it and the script simply
+        -- stops. Until the swap has been watched working on this client, the switch is the
+        -- deliberate act, not the default. See `petfocus` and the Focus tab.
+        configRoot.focus_swap = false
+        taint = true
+    end
+
+    if configRoot.focus_items == nil then
+        configRoot.focus_items = {}
+        taint = true
+    end
+
+    -- a row that was never given an item cannot be worn
+    for index = #configRoot.focus_items, 1, -1 do
+        local entry = configRoot.focus_items[index]
+        if entry == nil or entry.name == nil or entry.name == "" then
+            table.remove(configRoot.focus_items, index)
+            taint = true
+        end
+    end
+
     -- a slot that was never finished being filled in cannot be used
     for _, list in ipairs({ configRoot.actions, configRoot.gear_actions }) do
         for i = #list, 1, -1 do
@@ -185,6 +213,71 @@ end
 ---@return table actions the gear, in the order it is handed over
 function PetSetupStateConfig.GetGearActions()
     return getConfigSection().gear_actions
+end
+
+---------------- Pet focus gear --------------------
+
+---Whether a pet focus item is put on for the summon and taken off again afterwards.
+---@return boolean isSwapping
+function PetSetupStateConfig.GetFocusSwapping()
+    return getConfigSection().focus_swap
+end
+
+---@param enable boolean
+function PetSetupStateConfig.SetFocusSwapping(enable)
+    getConfigSection().focus_swap = enable == true
+    Global.configStore:SaveConfig()
+    print("PetSetupState wears its pet focus to summon: [" .. tostring(enable) .. "]")
+end
+
+---What to be wearing when the pet is summoned, as `{ name, enabled }` rows.
+---
+---Items rather than spells, and the one list here that is not actions: a focus is not something
+---anybody casts or clicks. It works by being *on the character* when the summon goes off, which
+---is the whole reason there is a swap to make -- a magician who keeps their pet focus in a bag the
+---rest of the time is the case this exists for.
+---
+---Order is the order they go on, and it matters only where two of them fit the same slot: the
+---first one takes it and the second says it could not go on, rather than quietly displacing the
+---first.
+---@return table entries
+function PetSetupStateConfig.GetFocusItems()
+    return getConfigSection().focus_items
+end
+
+---The rows that are switched on, in the shape the swapping service takes.
+---@return table items array of `{ name }`
+function PetSetupStateConfig.GetActiveFocusItems()
+    local wanted = {}
+
+    for _, entry in ipairs(PetSetupStateConfig.GetFocusItems()) do
+        if entry.enabled ~= false and entry.name ~= nil and entry.name ~= "" then
+            wanted[#wanted+1] = { name = entry.name }
+        end
+    end
+
+    return wanted
+end
+
+---A row that has never been switched off is on, the way an action slot's switch reads.
+---@param entry table
+---@return boolean isEnabled
+function PetSetupStateConfig.IsFocusItemEnabled(entry)
+    return entry.enabled ~= false
+end
+
+---@param entry table
+---@param enabled boolean
+function PetSetupStateConfig.SetFocusItemEnabled(entry, enabled)
+    entry.enabled = enabled == true
+    Global.configStore:SaveConfig()
+end
+
+---@param entry table
+---@param name string
+function PetSetupStateConfig.SetFocusItemName(entry, name)
+    entry.name = name
+    Global.configStore:SaveConfig()
 end
 
 ---Every action list this state owns, in the shape the shared action command and the menu both

@@ -294,6 +294,10 @@ end
 local function prune()
     local now = Time.current_time()
 
+    -- taken before the sweep below, since that is what drops the records this is measured against
+    local heldIds = {}
+    for id in pairs(MezState._.mezzed) do heldIds[id] = true end
+
     for key, until_ in pairs(MezState._.landed) do
         if now >= until_ then MezState._.landed[key] = nil end
     end
@@ -307,6 +311,13 @@ local function prune()
             if spawn.ID() == nil or spawn.Dead() == true then record[id] = nil end
         end
     end
+
+    -- The hold and the record that justifies it go together: what we told the roster was that we
+    -- had put a mez on this mob, and `mezzed` is where that belief lives. The roster drops a hold
+    -- on a dead or departed spawn itself, so this is only the case it cannot see -- our own record
+    -- going, and with it the reason we ever asked.
+    for id in pairs(MezState._.mezzed) do heldIds[id] = nil end
+    for id in pairs(heldIds) do Mobs.Release(id) end
 end
 
 ---Settle a break the world reported by name, now that the mobs have had a chance to give
@@ -1513,6 +1524,9 @@ function MezState.Go()
     if zoneId ~= 0 and zoneId ~= MezState._.zoneId then
         MezState._.zoneId = zoneId
         MezState._.landed = {}
+        -- the roster drops its own holds on a zone for the same reason; releasing here as well
+        -- keeps the two from disagreeing if this state zones on a different pass than the service
+        for id in pairs(MezState._.mezzed) do Mobs.Release(id) end
         MezState._.mezzed = {}
         MezState._.immune = {}
         MezState._.resisted = {}
@@ -1590,6 +1604,16 @@ function MezState.Go()
                             pose = Mobs.MarkPose(id),
                             healthPct = Status.HealthPct(mq.TLO.Spawn("id " .. tostring(id)))
                         }
+                        -- **This mez may have just taken the mob out of the roster.** A mez here
+                        -- carries a memory blur, and where it fires the mob's hate list is wiped:
+                        -- it leaves every extended target window, nobody reports it, and the
+                        -- server drops its combat stance so the zone sweep loses it too. Every
+                        -- angle the roster has goes dark on the one mob we are surest about, and
+                        -- a mob off the roster is never a candidate -- so the mez is never
+                        -- refreshed and it comes round in the middle of camp. Telling the roster
+                        -- we are holding it is what keeps it in the fight; the roster decides on
+                        -- its own whether anybody is still near enough for that to matter.
+                        Mobs.Hold(id)
                         -- it took, so whatever we knew about it waking is out of date
                         MezState._.awake[id] = nil
                         MezState._.suspect[id] = nil

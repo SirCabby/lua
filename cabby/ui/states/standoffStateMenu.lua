@@ -61,11 +61,18 @@ function StandoffStateMenu.BuildMenu(standoffState)
 
     ImGui.Spacing()
     ImGui.TextWrapped("The other half of this lives on the Melee State page and is the exact mirror: " ..
-        "the main tank measures the other players near that same mob and closes inside whoever is " ..
+        "the main tank measures the other bodies near that same mob and closes inside whichever is " ..
         "nearest (roottank), as far in as zero if that is what it takes, so that the body in reach " ..
         "is the one wearing the armour. Neither half reads the other -- they both read bodies and a " ..
         "mob -- and they cannot fight, because this one only ever moves back and that one only ever " ..
         "moves in.")
+
+    ImGui.Spacing()
+    ImGui.TextWrapped("Pets are counted over there but have no half of their own here: a pet holds " ..
+        "its melee range on the mob for the whole fight and is not going to walk backwards, and " ..
+        "calling it off its target to move it would be undoing an order its owner gave. So the tank " ..
+        "closes inside pets too, and further than it would for a person, since a pet is standing " ..
+        "closer to start with and nothing is coming the other way to meet it.")
 
     ImGui.Spacing()
     ImGui.TextWrapped("A mob only counts as rooted while the client is showing its debuffs, which " ..

@@ -1,6 +1,7 @@
 ---@diagnostic disable: undefined-field
 local mq = require("mq")
 
+local Bags = require("utils.Bags.Bags")
 local Debug = require("utils.Debug.Debug")
 local Time = require("utils.Time.Time")
 
@@ -54,6 +55,7 @@ local defaultReach = 20
 ---evidence windows and not give-ups: they only ever run while nothing at all has happened, and
 ---the thing they answer -- a command the client silently dropped -- has no other answer.
 local pickUpEvidenceMs = 1500
+local openBagEvidenceMs = 2500
 local targetEvidenceMs = 2500
 local windowEvidenceMs = 2500
 local handOverEvidenceMs = 3000
@@ -105,6 +107,10 @@ function GiveTask.new(item, options)
         startedMs = Time.current_time(),
         stepDeadlineMs = nil,
         pickedUpAtMs = nil,
+        openedAtMs = nil,
+        ---the bag this task opened to reach the item, closed again when it is done. Only one it
+        ---opened itself: a bag the player had open is theirs
+        openedPack = nil,
         targetedAtMs = nil,
         clickedAtMs = nil,
         notifiedAtMs = nil,
@@ -142,6 +148,25 @@ local function carried(self)
     -- exact first, so a bag of similarly named summoned gear cannot substitute one for another
     if mq.TLO.FindItem("=" .. tostring(self._.itemName)).ID() ~= nil then return true end
     return mq.TLO.FindItem(tostring(self._.itemName)).ID() ~= nil
+end
+
+---@return any|nil item the mq item TLO for what this task is handing over, as it sits right now
+---
+---The same three readings `carried` makes, handed back rather than counted: `openBag` needs to ask
+---the item where it is, which only the TLO itself can answer.
+local function findOurItem(self)
+    if self._.itemId ~= nil then
+        local byId = mq.TLO.FindItem(self._.itemId)
+        if byId.ID() ~= nil then return byId end
+    end
+
+    local exact = mq.TLO.FindItem("=" .. tostring(self._.itemName))
+    if exact.ID() ~= nil then return exact end
+
+    local loose = mq.TLO.FindItem(tostring(self._.itemName))
+    if loose.ID() ~= nil then return loose end
+
+    return nil
 end
 
 ---@return boolean isOpen whether the give window is up
@@ -250,7 +275,40 @@ local function validate(self)
         return finish(self, GiveStatus.failed, "we are not carrying " .. tostring(self._.itemName))
     end
 
-    return advance(self, self.PickUp, pickUpEvidenceMs)
+    return advance(self, self.OpenBag, openBagEvidenceMs)
+end
+
+---Open the bag the item is sitting in, if it is in one and it is shut.
+---
+---**Not a convenience: the pick-up below is fatal without it.** A shut bag has no inventory-slot
+---windows, the client falls back to moving the item directly, and that fallback takes the whole
+---script down in a way no `pcall` can catch. See `utils/Bags`, which carries the full account.
+---
+---This was a latent fault in giving from the day it was written, and it stayed hidden because the
+---common case never reaches here: a summoned item arrives *on the cursor*, so `validate` skips the
+---pick-up entirely. What finally found it was the retry after a give that did not land -- by then
+---the item has been stowed into a bag, and the second attempt has to pick it up (2026-08-24).
+local function openBag(self)
+    local pack = Bags.PackHolding(findOurItem(self))
+    local action = Bags.Progress(pack, self._.openedAtMs)
+
+    if action == "ready" then
+        return advance(self, self.PickUp, pickUpEvidenceMs)
+    end
+
+    if action == "open" and self._.openedAtMs == nil then
+        self._.openedAtMs = Time.current_time()
+        self._.openedPack = pack
+        DebugLog("Opening pack" .. tostring(pack) .. " to reach [" .. tostring(self._.itemName) .. "]")
+        mq.cmd(Bags.ToggleCommand(pack))
+    end
+
+    if expired(self) then
+        return finish(self, GiveStatus.failed,
+            "could not open the bag holding " .. tostring(self._.itemName))
+    end
+
+    return waiting(self, "opening pack" .. tostring(pack))
 end
 
 ---Get the item onto the cursor, which is the only place the client will give one from.
@@ -359,6 +417,7 @@ end
 -- Steps are held as methods so each one can name the next by identity, the way the casting
 -- sequencer and the cabby states name theirs
 GiveTask.Validate = validate
+GiveTask.OpenBag = openBag
 GiveTask.PickUp = pickUp
 GiveTask.AcquireTarget = acquireTarget
 GiveTask.Offer = offer
@@ -378,6 +437,14 @@ local function cleanUp(self)
 
     if windowOpen() then
         mq.cmdf("/notify %s %s leftmouseup", giveWindow, cancelButton)
+    end
+
+    -- and the bag, if this task is the one that opened it. Fired and forgotten: a bag that will
+    -- not shut is untidy rather than wrong, and there is nothing to hold the task open over
+    local pack = self._.openedPack
+    if pack ~= nil and Bags.IsOpen(pack) then
+        self._.openedPack = nil
+        mq.cmd(Bags.ToggleCommand(pack))
     end
 end
 
@@ -400,16 +467,17 @@ function GiveTask:Pulse()
     end
 
     -- run steps until one says it is waiting on the client. The guard is a runaway backstop and
-    -- nothing more: there are five steps and each only ever names a later one.
+    -- nothing more: there are six steps and each only ever names a later one.
     local guard = 0
-    while self._.step ~= nil and guard < 8 do
+    while self._.step ~= nil and guard < 10 do
         guard = guard + 1
         if not self._.step(self) then break end
     end
 
-    -- any ending but a hand-off that landed may have left the window standing open, whichever
-    -- step it ended on
-    if self._.status == GiveStatus.failed then
+    -- Any ending may have left something behind, whichever step it ended on: an open give window
+    -- if it failed, and a bag this task opened either way. `cleanUp` reads before it acts, so a
+    -- hand-off that landed cancels nothing -- its window is already shut.
+    if GiveStatus.IsTerminal(self._.status) then
         cleanUp(self)
     end
 

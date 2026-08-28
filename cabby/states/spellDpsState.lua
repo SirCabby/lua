@@ -10,6 +10,7 @@ local ActionCommand = require("cabby.commands.actionCommand")
 local Combat = require("cabby.combat")
 local Cons = require("cabby.cons")
 local Menu = require("cabby.ui.menu")
+local Mobs = require("cabby.mobs")
 local Roles = require("cabby.roles")
 local SpellDpsStateConfig = require("cabby.configs.spellDpsStateConfig")
 local SpellDpsStateMenu = require("cabby.ui.states.spellDpsStateMenu")
@@ -491,24 +492,6 @@ local function groupCoverage(candidates)
     return covered
 end
 
----Has this mob turned and run?
----
----There is no flag for it. The client's own `Fleeing` is pure geometry -- whether the mob is
----*facing* away from me -- and standing behind something the tank is holding answers yes for the
----whole fight. So it is asked together with the mob actually moving, which is what the two of them
----mean between them: a mob in melee with anybody stands still, and one that is moving while
----pointed away from us is going somewhere that is not us.
----
----Honest rather than perfect, and the ways it is wrong are the cheap ones. A mob that runs past
----us at somebody behind reads as running, and rooting that is not a bad thing to have done. What
----it will not do is read yes for the whole of a normal fight, which is the failure that would
----make the setting meaningless.
----@param spawn any mq spawn TLO
----@return boolean isRunning
-local function isRunning(spawn)
-    return spawn.Moving() == true and spawn.Fleeing() == true
-end
-
 ---Is this slot's moment now?
 ---
 ---Only ever narrows what the order and the numbers have already allowed, and is asked fresh every
@@ -531,7 +514,12 @@ local function timingAllows(slot, spawn)
     end
 
     if timing == SpellDpsStateConfig.timings.Fleeing.value then
-        return isRunning(spawn)
+        -- The roster's reading, not one of this state's own: "it has turned and run" is a fact
+        -- about a mob rather than about a rotation, and `states/meleeState.lua` chases on the same
+        -- one. It used to live here as `Moving and Fleeing`, which reads yes for a mob merely
+        -- shuffling in front of somebody standing in its rear arc; `Mobs.IsRunning` adds the gap
+        -- that tells a shuffle from a run, and is the same answer for anybody stood out of reach.
+        return Mobs.IsRunning(spawn.ID())
     end
 
     return true

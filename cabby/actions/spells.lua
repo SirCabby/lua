@@ -107,6 +107,12 @@ local spas = {
     ---SPA_POCKET_PET (151). Deliberately not SPA_PET_SWARM (152): a swarm is several pets for a
     ---few seconds, which is a rotation slot rather than a companion to keep up
     summonPet = { 33, 71, 106, 108, 151 },
+    ---SPA_FOCUS_PET (167): what makes a summoned pet a stronger one than the spell alone would
+    ---have made. It is never on the summon; it is on a *focus* -- the "Minion of Air" and
+    ---"Enhanced Minion" lines a magician's gear carries -- and it is read off the character at the
+    ---moment the pet is made, which is why an item carrying one is worth putting on for one cast
+    ---and taking off again. Nothing casts these: they are worn.
+    focusPet = { 167 },
     ---SPA_ENTHRALL (31): a mez. The one effect that holds a mob still and drops off the moment
     ---anything hits it, which is the whole of what a mez state has to manage. Unambiguous in a way
     ---the others here are not -- no spell carries a mez as a side effect of being something else
@@ -244,6 +250,19 @@ end
 function Spells.SummonsPet(spell)
     if spell == nil then return false end
     return hasSPA(spell, spas.summonPet)
+end
+
+---Does this spell make the next pet summoned a stronger one?
+---
+---Asked of an *item's* focus effect rather than of anything in the spellbook: this is the
+---magician's pet focus, and it works by being worn when the summon goes off. Read off the effect
+---for the same reason everything else here is -- the line runs from "Minion of Air" through
+---seventeen ranks of "Enhanced Minion" and is filed under headings that say nothing useful.
+---@param spell any mq spell TLO, or nil
+---@return boolean focusesPet
+function Spells.FocusesPet(spell)
+    if spell == nil then return false end
+    return hasSPA(spell, spas.focusPet)
 end
 
 ---Does this spell mesmerize?

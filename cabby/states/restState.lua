@@ -64,6 +64,16 @@ local holdSettleMs = 5000
 ---directions: sitting down when the answer turns yes, and standing up when it turns no -- because
 ---the pools came back, because a fight started, or because a cast is going out.
 ---
+---**Getting up for being full latches it, and only a real loss un-latches it.** The bar does not
+---read steadily at the top of its range -- a server tick can show health a point or two above where
+---it is and the next one takes it back -- so "everything is at the stand point" and "something is
+---short of the sit point" are both true within a second of each other, and answered literally that
+---is a sit and a stand per tick over health that was never lost. Reaching the stand point therefore
+---turns on a *topped up* latch that nothing but a pool below the resume point turns off, so the
+---reading has to leave the band between the two before sitting is worth doing again. Both edges are
+---read from the world every pass and neither is timed: a pool that really does fall away un-latches
+---it on the pass it falls.
+---
 ---**The one thing it remembers is whose sit this is**, because it is the one thing the world will
 ---not tell it. A sit this state did not sit down belongs to somebody else and is left alone: the
 ---reason for it is not readable from here, and the commonest reason -- the spellbook open on a
@@ -71,8 +81,8 @@ local holdSettleMs = 5000
 ---so a stand this state did not order buys a moment's grace before it sits back down. Answering
 ---the person playing the character on the very next frame is wrestling, not resting.
 ---
----What holds it back, in the order it reports them: a sit that is not ours, an open spellbook,
----having only just been stood up, being engaged (a character in a fight has a fight to be in),
+---What holds it back, in the order it reports them: an open merchant (which stops it both ways --
+---see the read), a sit that is not ours, an open spellbook, having only just been stood up, being engaged (a character in a fight has a fight to be in),
 ---being fought by something we never picked up (the world does not ask before swinging), a cast
 ---in the air, the movement service driving, and -- while the client says the fight is on and
 ---we are not in it -- the `in_combat` setting. That last one is the case worth naming: a caster
@@ -108,6 +118,11 @@ local RestState = {
         lastPosture = nil,
         sitIsOurs = false,
         lastStandNotOursMs = nil,
+        -- the pools reached the stand point and have not fallen below the resume point since.
+        -- The one thing the pools cannot answer on their own -- health sitting at 98% is "on the
+        -- way down, sit for it" or "just filled up, leave it" depending only on which edge was
+        -- crossed last -- and both of its edges are re-read every pass
+        toppedUp = false,
         -- when something last held us off sitting, so a reason that flickers cannot be answered
         -- with a posture change per flicker. nil means "nothing has held us back yet"
         lastHoldMs = nil,
@@ -173,6 +188,11 @@ end
 ---@param pools RestPool[]
 ---@return boolean needsRest whether anything is low enough to sit down for
 local function needsRest(pools)
+    -- Being topped up is the whole answer on its own. Everything came back, and whatever has
+    -- drifted off the top since has not drifted far enough to be worth a posture change -- see
+    -- updateToppedUp for why the sit threshold cannot decide that by itself
+    if RestState._.toppedUp then return false end
+
     local sitBelow = RestStateConfig.GetSitBelowPct()
     for _, pool in ipairs(pools) do
         if pool.pct < sitBelow then return true end
@@ -188,6 +208,52 @@ local function isRested(pools)
         if pool.pct < standAt then return false end
     end
     return true
+end
+
+---Read both edges of the topped-up latch.
+---
+---A Schmitt trigger and nothing cleverer, the same shape as the health latch in `canniState`: every
+---pool at the stand point turns it on, any pool below the resume point turns it off, and between
+---the two it holds whatever it was. Run every pass and ahead of everything else this state decides,
+---so it cannot drift out of step with bars that kept moving while something was holding us back.
+---
+---**This is the part the sit threshold cannot do**, however it is set. The reading at the top of a
+---bar wobbles -- a server tick shows health above where it really is and the next one puts it back
+----- so the pass after we stand up for being full reads a pool short of full, sits down for it,
+---reads full again and stands: a posture change per tick, over a percent that was never lost.
+---A threshold on its own has no memory of which way the bar was crossed, and that is exactly what
+---is being asked. The band between the two numbers is what the reading has to genuinely leave.
+---
+---Neither edge is timed and neither is a give-up: a pool that really does fall away un-latches this
+---on the pass it falls, whether that is a second after standing up or an hour.
+---
+---Nothing readable is not a reading, and an empty list would satisfy "every pool is up" only
+---because there is nothing in it to be short. Zoning takes the bars away for a moment, and latching
+---on that would spend an answer we were never given.
+---@param pools RestPool[]
+local function updateToppedUp(pools)
+    if #pools == 0 then return end
+
+    if isRested(pools) then
+        if not RestState._.toppedUp then
+            DebugLog("Pools are up -- nothing sits again until one is below " ..
+                tostring(RestStateConfig.GetResumeBelowPct()) .. "%")
+        end
+        RestState._.toppedUp = true
+        return
+    end
+
+    local resumeBelow = RestStateConfig.GetResumeBelowPct()
+    for _, pool in ipairs(pools) do
+        if pool.pct < resumeBelow then
+            if RestState._.toppedUp then
+                DebugLog("Down to " .. tostring(math.floor(pool.pct)) .. "% " .. pool.label ..
+                    " -- sitting is worth it again")
+            end
+            RestState._.toppedUp = false
+            return
+        end
+    end
 end
 
 ---Reasons not to be sitting, in the order they are worth reporting.
@@ -258,6 +324,23 @@ local postureWords = {
 ---@return boolean isOpen
 local function spellbookIsOpen()
     return mq.TLO.Window("SpellBookWnd").Open() == true
+end
+
+---Whether the player has this character in a merchant.
+---
+---The other end of the spellbook read and the same rule underneath both: a window the person
+---playing is working in is that person using this character, and posture is theirs for as long as
+---they are. The spellbook needs them sitting, so this state does not stand them up out of it; a
+---merchant is the opposite errand and sitting down closes it, so this state does not sit them down
+---into it -- and a bar that happened to dip while somebody was halfway through selling a bag is the
+---worst possible reason to take the window off them.
+---
+---Read both ways rather than only the one that closes the window. Standing a character up under an
+---open merchant costs nothing the client will complain about, but it is still this state moving a
+---character somebody else is using, and there is nothing resting wants badly enough to be worth it.
+---@return boolean isOpen
+local function merchantIsOpen()
+    return mq.TLO.Window("MerchantWnd").Open() == true
 end
 
 ---@param now number
@@ -401,8 +484,13 @@ function RestState.Init()
 
         print("Rest: " .. RestState.Describe() .. (RestState.IsEnabled() and "" or " (disabled)"))
         print(" -- sits below " .. tostring(RestStateConfig.GetSitBelowPct()) .. "%, stands at " ..
-            tostring(RestStateConfig.GetStandAtPct()) .. "%" ..
+            tostring(RestStateConfig.GetStandAtPct()) .. "%, sits again below " ..
+            tostring(RestStateConfig.GetResumeBelowPct()) .. "%" ..
             (RestStateConfig.GetInCombat() and ", during a fight as well" or ", never during a fight"))
+        if RestState._.toppedUp then
+            print(" -- topped up: waiting for a pool to drop below " ..
+                tostring(RestStateConfig.GetResumeBelowPct()) .. "% before sitting again")
+        end
         for _, pool in ipairs(RestState.GetPools()) do
             print(" -- " .. pool.label .. ": " .. tostring(math.floor(pool.pct)) .. "%")
         end
@@ -419,6 +507,7 @@ function RestState.Reset()
     RestState._.lastCommandKind = nil
     RestState._.lastPosture = nil
     RestState._.sitIsOurs = false
+    RestState._.toppedUp = false
     RestState._.lastStandNotOursMs = nil
     RestState._.lastHoldMs = nil
     RestState._.lastHoldReason = nil
@@ -439,13 +528,29 @@ function RestState.Go()
     local posture = tostring(mq.TLO.Me.State() or "")
     observePosture(now, posture)
 
+    -- Both edges of the topped-up latch, before anything is decided and whatever else is true.
+    -- The bars keep moving while a merchant is open or while a hold is in force, and a latch that
+    -- only updated on the passes this state acts on would be answering for a bar it stopped
+    -- watching. Bookkeeping, like the posture read above it, rather than a decision
+    local pools = RestState.GetPools()
+    updateToppedUp(pools)
+
+    -- Before anything is decided, and in both directions: the player is in a merchant, so the
+    -- posture is not this state's to change while they are. Deliberately not one of the reasons
+    -- below -- those are read both ways and answering an open merchant with a `/stand` would be
+    -- the same intrusion in the other direction. Ownership of the sit is still being tracked
+    -- above, so a window opened over a rest of ours is still a rest of ours when it closes.
+    if merchantIsOpen() then
+        RestState._.holdReason = "you have a merchant open"
+        return false
+    end
+
     local hold = holdReason()
     RestState._.holdReason = hold
     if hold ~= nil then
         RestState._.lastHoldMs = now
         RestState._.lastHoldReason = hold
     end
-    local pools = RestState.GetPools()
 
     if posture == "SIT" then
         RestState._.isResting = false

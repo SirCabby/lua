@@ -4,6 +4,7 @@ local mq = require("mq")
 local Casting = require("utils.Casting.Casting")
 local Debug = require("utils.Debug.Debug")
 local Giving = require("utils.Giving.Giving")
+local Swapping = require("utils.Swapping.Swapping")
 local Time = require("utils.Time.Time")
 
 local Action = require("cabby.actions.action")
@@ -12,6 +13,7 @@ local ChelpDocs = require("cabby.commands.chelpDocs")
 local Combat = require("cabby.combat")
 local Command = require("cabby.commands.command")
 local Commands = require("cabby.commands.commands")
+local Items = require("cabby.actions.items")
 local Menu = require("cabby.ui.menu")
 local Pet = require("cabby.pet")
 local PetSetupStateConfig = require("cabby.configs.petSetupStateConfig")
@@ -67,6 +69,22 @@ local summonOrderTtlMs = 15000
 ---to start -- which is also what a recovering gem looks like.
 local gearOrderIdleMs = 15000
 
+---How long the pet focus stays on with no summon of ours in the air.
+---
+---**An evidence window, and the only clock the focus swap has.** The gear goes on so that one
+---cast can be made, and the pass that makes it is the very next one this state is given -- so a
+---stretch with the focus on and no summon of ours anywhere is the world saying that cast is not
+---going to happen: refused every time it was tried, or this state starved out of the chain by
+---something that started in the beat between the swap and the summon. Either way the swap has
+---bought nothing, and the player is standing there with their own gear in a bag, which is the one
+---outcome worth a clock.
+---
+---Re-armed by every pass that still means to cast, so it only ever runs while nothing at all is
+---happening; and the worst it can do when it is wrong is take the focus off and put it back on.
+---Nothing about the *restore* is timed: that is the swapping service's standing obligation and it
+---is discharged whether this state ever runs again or not.
+local focusCastWindowMs = 8000
+
 ---Keeping the pet: summoning it, conjuring what it should be holding, and handing that over.
 ---
 ---One job in three steps, and the order between them is the whole of the logic: there is no
@@ -108,6 +126,22 @@ local gearOrderIdleMs = 15000
 ---visible end; holding nothing at all, it is kitted out. `gearpet` is the order that overrules
 ---either way of being wrong, and the page has the same button.
 ---
+---**What the pet is made of includes what we were wearing.** A magician's pet focus -- the
+---"Minion of Air" and "Enhanced Minion" lines -- is not on the summon, it is on a piece of gear,
+---and the client reads it off the character at the moment the pet is made. So an item carrying one
+---is worth *putting on for one cast and taking off again*, which is what the focus list is: the
+---gear goes on before the summon is started, the summon is cast, and the gear comes off. A pet
+---made a rank stronger is a pet that lasts the whole camp; a focus put on afterwards did nothing
+---at all, which is why the order here is not negotiable.
+---
+---**Taking it off again is not this state's promise to keep.** This state sits at `buff - 1` and
+---is starved by nearly everything: a fight, a follow, a heal. A restore this state owned would put
+---somebody's own gear in a bag and leave it there the first time one of those took the frame away.
+---So `utils/Swapping` owns both halves -- what went on, what it displaced, and the putting back --
+---and discharges the second on its own pulse, which runs whether or not this state ever gets
+---another frame. All this state hands over is the *reason*: `KeepFocusWorn`, a question the
+---service asks every pulse, answered from the summon in the air rather than from a clock.
+---
 ---**Handing an item over is not this state's own work.** It is four commands and three waits on
 ---the client, and a state that walked them itself would leave a give window standing open with an
 ---item in it the first time a fight took the frame away mid-sequence. `utils/Giving` owns the
@@ -147,6 +181,7 @@ local PetSetupState = {
         summoning = "petsummoning",
         gearing = "petgearing",
         combat = "petsetupcombat",
+        focus = "petfocus",
         action = "petaction",
         -- the one exception to that rule, and it is deliberate: `petgear` sits inside
         -- `petgearing`, so it hears every line the switch does. It is the word the group would
@@ -164,6 +199,18 @@ local PetSetupState = {
         castName = nil,
         ---whose gear list the cast in the air is for: our own pet's record, or a request's
         castRecord = nil,
+        ---the swap that puts the pet focus on, while it is being made
+        focusSwapId = nil,
+        ---while this stands, the focus is still wanted: the summon it went on for has either not
+        ---been started yet or is in the air. What `KeepFocusWorn` answers out of
+        focusWaitingUntilMs = nil,
+        ---why the focus could not be put on, when it could not. The row that failed says it, since
+        ---a page where everything looks picked and the pet comes out weak is otherwise silent
+        focusProblem = nil,
+        ---when a swap that would not go through is worth trying again. Pacing and nothing more:
+        ---the summon is cast either way, and this only stops a full bag being answered by a swap
+        ---attempt on every single pass
+        focusRetryAtMs = nil,
         ---the hand-off we asked the giving service for
         giveId = nil,
         giveSlot = nil,
@@ -544,6 +591,107 @@ local function chooseGear(pet)
     return nil, false
 end
 
+---------------- The pet focus --------------------
+
+---Is the pet focus still wanted?
+---
+---**The whole of what this state tells the swapping service about when to take the gear off**, and
+---it is asked on the service's pulse rather than reported from a pass of ours, which is the point:
+---at `buff - 1` this state can be starved for the length of a fight, and a promise to say "you can
+---take it off now" is a promise a starved state cannot keep. A question the service asks itself
+---always gets an answer.
+---
+---The answer is the summon: while the cast it went on for is in the air, the focus is doing its
+---job. Before the cast has been started, the window above stands in -- see `focusCastWindowMs` for
+---why that one clock is here and why it is the only one.
+---@return boolean keepIt
+function PetSetupState.KeepFocusWorn()
+    local castId = PetSetupState._.castId
+    if castId ~= nil and PetSetupState._.castJob == "summon" then
+        return Casting.GetResult(castId) == nil
+    end
+
+    local until_ = PetSetupState._.focusWaitingUntilMs
+    return until_ ~= nil and Time.current_time() < until_
+end
+
+---Get the focus onto the character, for the summon this pass is about to make.
+---
+---Called only once a summon has been picked and found ready, because that is the only moment
+---putting gear on is worth anything: the effect is read off the character when the pet is made,
+---so it goes on *before* the cast starts and comes off when the cast ends.
+---
+---**A focus that will not go on is not a reason to skip the summon.** A full bag, an item left in
+---the bank, a slot the client will not answer for -- each of those makes the next pet a rank
+---weaker, and none of them makes it better to have no pet at all. So every ending here except
+---"still moving gear" says the cast may go ahead, with the reason kept for the row to show.
+---@return boolean isBusy gear is being moved right now
+---@return boolean isReady the focus is on, or there is none to put on
+local function focusPass()
+    if not PetSetupStateConfig.GetFocusSwapping() then return false, true end
+
+    local wanted = PetSetupStateConfig.GetActiveFocusItems()
+    if #wanted < 1 then return false, true end
+
+    -- **Whether the focus is on is read off the character rather than off how the swap went**, so
+    -- there is no result to still be holding when this is asked. Either the swapping service is
+    -- holding it for us -- which is also what a partly successful swap looks like, one item on and
+    -- one still in the bank -- or the player simply wears it, which is nothing we will ever owe
+    -- back. In both cases this pass is the one that casts, so the reason to be wearing it is
+    -- renewed right here
+    if Swapping.IsHolding(PetSetupState.key) or Swapping.AllWorn(wanted) then
+        PetSetupState._.focusWaitingUntilMs = Time.current_time() + focusCastWindowMs
+        return false, true
+    end
+
+    local retryAt = PetSetupState._.focusRetryAtMs
+    if retryAt ~= nil and Time.current_time() < retryAt then return false, true end
+
+    -- armed before the request, because the service asks the question from the pulse and the
+    -- first one it asks comes before this state's next pass
+    PetSetupState._.focusWaitingUntilMs = Time.current_time() + focusCastWindowMs
+
+    local id, refused = Swapping.Wear(wanted, {
+        owner = PetSetupState.key,
+        label = "the pet focus",
+        keepWhile = PetSetupState.KeepFocusWorn
+    })
+
+    if id == nil then
+        PetSetupState._.focusWaitingUntilMs = nil
+        PetSetupState._.focusProblem = tostring(refused)
+        PetSetupState._.focusRetryAtMs = Time.current_time() + retryAfterFailureMs
+        DebugLog("Nothing of the pet focus could be put on: " .. tostring(refused))
+        return false, true
+    end
+
+    PetSetupState._.focusProblem = nil
+    PetSetupState._.focusSwapId = id
+    PetSetupState._.nextLookMs = 0
+    return true, false
+end
+
+---@param status string
+---@param reason string|nil
+local function recordFocusSwapFinished(status, reason)
+    PetSetupState._.focusSwapId = nil
+
+    if status == Swapping.status.succeeded then
+        PetSetupState._.focusProblem = nil
+        PetSetupState._.focusRetryAtMs = nil
+        PetSetupState._.lastResult = "put the pet focus on"
+    else
+        PetSetupState._.focusProblem = tostring(reason)
+        -- a swap that would not go through is not a reason to skip the summon -- a pet a rank
+        -- weaker is still a pet -- but it is a reason not to try the same thing on the next pass
+        PetSetupState._.focusRetryAtMs = Time.current_time() + retryAfterFailureMs
+        PetSetupState._.lastResult = "the pet focus did not go on: " .. tostring(reason)
+    end
+
+    DebugLog("Focus swap finished: " .. tostring(PetSetupState._.lastResult))
+    PetSetupState._.nextLookMs = 0
+end
+
 ---------------- Starting things --------------------
 
 ---@param pick table from chooseSummon
@@ -553,6 +701,11 @@ local function startSummon(pick)
 
     if castId == nil then
         DebugLog("Summon of [" .. pick.action:Name() .. "] was refused: " .. tostring(refused))
+        recordProblem(pick.slot, tostring(refused))
+        -- Held off rather than tried again next pass, which matters more since the focus swap:
+        -- a slot the casting service keeps refusing would otherwise have this state putting the
+        -- focus on, failing to cast, letting the window run out, taking it off and starting again
+        holdOff(pick.slot, retryAfterFailureMs)
         return false
     end
 
@@ -646,6 +799,14 @@ local function recordCastFinished(status, outcome, reason)
         PetSetupState._.lastResult = name .. " failed: " .. tostring(reason)
         recordProblem(slot, tostring(reason))
         holdOff(slot, retryAfterFailureMs)
+    end
+
+    if job == "summon" then
+        -- What the focus went on for is over, whichever way it went, so it comes off now rather
+        -- than when the window above runs out. Nothing is moved here: this only ends the reason,
+        -- and the swapping service does the putting back on its own pulse
+        PetSetupState._.focusWaitingUntilMs = nil
+        Swapping.Release(PetSetupState.key)
     end
 
     DebugLog("Cast finished: " .. tostring(PetSetupState._.lastResult))
@@ -891,6 +1052,12 @@ function PetSetupState.CallOff()
     if PetSetupState._.giveId ~= nil then
         Giving.StopFor(PetSetupState.key)
     end
+
+    -- the focus is a different kind of thing to call off: stopping the swap is only half of it,
+    -- and the half that matters is that the gear still owes a trip back to the slots it came out
+    -- of. `StopFor` says both
+    PetSetupState._.focusWaitingUntilMs = nil
+    Swapping.StopFor(PetSetupState.key)
 end
 
 ---------------- Status --------------------
@@ -906,6 +1073,12 @@ end
 
 ---@return string description of what this state is doing, for /cpet and the menu
 function PetSetupState.Describe()
+    -- gear of ours actually in motion, either way round. Only while a swap is running: the focus
+    -- merely sitting on the character is what "summoning a pet with ..." below already means
+    if Swapping.IsBusyFor(PetSetupState.key) then
+        return Swapping.Describe()
+    end
+
     if PetSetupState._.castId ~= nil then
         if PetSetupState._.castJob == "summon" then
             return "summoning a pet with " .. tostring(PetSetupState._.castName)
@@ -1026,6 +1199,53 @@ function PetSetupState.DescribeSlot(slot, isGear)
     end
 
     return facts
+end
+
+---@class PetFocusFacts
+---@field focus string|nil what the focus effect on it is called, once we can see the item
+---@field carried boolean whether it is on us or in our bags at all
+---@field worn string|nil the slot it is in right now, when it is on
+---@field problem string|nil why this row will do nothing
+
+---What a configured focus item amounts to, for whatever is showing it to a user.
+---
+---Read live rather than out of the registry a picker was filled from: that list is rebuilt when
+---the bags change, and a row can name something bought, banked or destroyed since. The focus
+---itself is the thing worth reporting -- a row naming an item with no pet focus on it is a swap
+---that will happen and buy nothing, which is worse than one that plainly cannot happen.
+---@param entry table a row from the focus list
+---@return PetFocusFacts facts
+function PetSetupState.DescribeFocusItem(entry)
+    local facts = { focus = nil, carried = false, worn = nil, problem = nil }
+
+    -- a row being filled in has nothing to report yet
+    if entry.name == nil or entry.name == "" then return facts end
+
+    local item = mq.TLO.FindItem("=" .. tostring(entry.name))
+    if item.ID() == nil then
+        facts.problem = "not on us or in our bags"
+        return facts
+    end
+
+    facts.carried = true
+    facts.worn = Swapping.WornSlotOf(tonumber(item.ID()))
+    facts.focus = Items.PetFocusName(item)
+
+    if facts.focus == nil then
+        facts.problem = "no pet focus on it"
+    end
+
+    return facts
+end
+
+---@return boolean isWorn whether the swapping service is holding the focus on for us right now
+function PetSetupState.IsFocusWorn()
+    return Swapping.IsHolding(PetSetupState.key)
+end
+
+---@return string|nil problem why the focus could not be put on, the last time it could not
+function PetSetupState.GetFocusProblem()
+    return PetSetupState._.focusProblem
 end
 
 ---------------- Init --------------------
@@ -1167,6 +1387,21 @@ function PetSetupState.Init()
         set = PetSetupStateConfig.SetInCombat
     })
 
+    ToggleCommand.Register({
+        key = PetSetupState.key,
+        phrase = PetSetupState.eventIds.focus,
+        summary = "Turns wearing the pet focus for a summon on or off",
+        about = {
+            "On, everything on the Focus tab goes on just before the summon is cast and comes",
+            "back off when it lands -- what it displaced goes back in its slot.",
+            "A magician's pet focus is read off the character at the moment the pet is made, so",
+            "it has to be worn for the cast and is worth nothing put on afterwards.",
+            "Off, the summon is cast with whatever is already on."
+        },
+        get = PetSetupStateConfig.GetFocusSwapping,
+        set = PetSetupStateConfig.SetFocusSwapping
+    })
+
     ActionCommand.Register({
         key = PetSetupState.key,
         phrase = PetSetupState.eventIds.action,
@@ -1257,6 +1492,29 @@ function PetSetupState.Init()
                     " handed over" .. (facts.lastProblem ~= nil and (" -- last try: " .. facts.lastProblem) or ""))
             end
         end
+
+        for _, entry in ipairs(PetSetupStateConfig.GetFocusItems()) do
+            local facts = PetSetupState.DescribeFocusItem(entry)
+            local line = " -- focus: " .. tostring(entry.name)
+
+            if not PetSetupStateConfig.IsFocusItemEnabled(entry) then
+                line = line .. " (switched off)"
+            elseif not PetSetupStateConfig.GetFocusSwapping() then
+                line = line .. " (not worn for summons -- `petfocus on`)"
+            elseif facts.problem ~= nil then
+                line = line .. " -- " .. facts.problem
+            else
+                line = line .. " -- " .. tostring(facts.focus) ..
+                    (facts.worn ~= nil and (", on now (" .. facts.worn .. ")") or ", in a bag")
+            end
+
+            print(line)
+        end
+
+        local focusProblem = PetSetupState.GetFocusProblem()
+        if focusProblem ~= nil then
+            print(" -- focus: last swap -- " .. focusProblem)
+        end
     end
     Commands.RegisterSlashCommand(SlashCmd.new("cpet", Bind_CPet, cpetDocs))
 
@@ -1320,6 +1578,36 @@ function PetSetupState.Go()
         return true
     end
 
+    -- The pet focus going on. Busy while it runs, because the cursor and a worn slot are the
+    -- character's hands, and called off for the same reasons a cast is -- a swap half made when a
+    -- fight starts is one the swapping service unwinds for us.
+    local swapId = PetSetupState._.focusSwapId
+    if swapId ~= nil then
+        local status, reason = Swapping.GetResult(swapId)
+
+        if status == nil then
+            local abandon = reasonToAbandon(code)
+            if abandon ~= nil then
+                DebugLog("Calling off the focus swap: " .. abandon)
+                PetSetupState._.lastResult = "the pet focus was called off: " .. abandon
+                PetSetupState._.focusWaitingUntilMs = nil
+                Swapping.StopFor(PetSetupState.key)
+            end
+            return true
+        end
+
+        -- Deliberately no `return` here, unlike the cast and the hand-off above. The pass that
+        -- finishes putting the focus on has to be the pass that fires the summon: the window the
+        -- gear is worn against is armed by that pass, and a spare pass in between is a pass in
+        -- which the swapping service can decide nobody wants it any more and take it off again
+        recordFocusSwapFinished(status, reason)
+    end
+
+    -- the focus coming back off. Busy while it actually runs and never called off: it is what we
+    -- owe rather than what we wanted, and the swapping service finishes it on its own pulse
+    -- whether this state is given another frame or not
+    if Swapping.IsBusyFor(PetSetupState.key) then return true end
+
     if hold ~= nil then
         -- an order does not go stale while we are held: what a TTL is for is an ask that has
         -- stopped meaning anything, and "we were in a fight for twenty seconds" is not that. The
@@ -1368,7 +1656,17 @@ function PetSetupState.Go()
             -- zone line is not worth waiting out
             if ordered or expected == nil or Time.current_time() >= expected then
                 local pick, isNeeded = chooseSummon()
-                if pick ~= nil and startSummon(pick) then return true end
+
+                if pick ~= nil then
+                    -- The focus goes on first, and only now that there is a summon ready to cast:
+                    -- what makes the pet stronger is read off the character at the moment the pet
+                    -- is made, so a focus put on afterwards is a focus that did nothing, and one
+                    -- put on for a summon that was never ready is gear moved for no reason
+                    local swapping, ready = focusPass()
+                    if swapping then return true end
+                    if ready and startSummon(pick) then return true end
+                end
+
                 if isNeeded then return false end
             end
         end

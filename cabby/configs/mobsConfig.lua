@@ -57,6 +57,17 @@ local function initAndValidate()
         taint = true
     end
 
+    if configRoot.hold_radius == nil then
+        -- What "near enough to still be this fight" means for a mob nothing is fighting -- see
+        -- `Mobs.Hold`. Sat in the middle of this server's own aggro radii (the common values in
+        -- `npc_types.aggroradius` are 35, 40, 45, 55, 70 and 100), because what is really being
+        -- asked is whether anybody will be inside the mob's reach when it comes back to its
+        -- senses. The mob's own radius is server-side data the client is never sent, so this is a
+        -- stand-in for it and not a reading of it.
+        configRoot.hold_radius = 50
+        taint = true
+    end
+
     if taint then
         Global.configStore:SaveConfig()
     end
@@ -115,6 +126,22 @@ end
 ---@param zradius number
 function MobsConfig.SetZRadius(zradius)
     getConfigSection().zradius = math.max(math.min(math.floor(zradius), 500), 5)
+    Global.configStore:SaveConfig()
+end
+
+---How close a player has to be to a mob nothing is fighting for it to still count as in the fight.
+---
+---Only ever asked of a mob some state says it is holding (`Mobs.Hold`); it widens nothing on its
+---own. A held mob further out than this is one that will wake up somewhere nobody is standing,
+---which is the outcome a memory blur is *for* -- so it is let go rather than chased.
+---@return number radius
+function MobsConfig.GetHoldRadius()
+    return getConfigSection().hold_radius
+end
+
+---@param radius number
+function MobsConfig.SetHoldRadius(radius)
+    getConfigSection().hold_radius = math.max(math.min(math.floor(radius), 500), 10)
     Global.configStore:SaveConfig()
 end
 

@@ -13,7 +13,9 @@ SHD, whose heal lists are how a pet is kept up and how the empathy line is spent
 companion pet summon it, gear it and send it in, and everyone
 buffs, follows, rests, flees, minds the loot window and loots its own corpse when told to). The casting and giving services and all five action
 types exist (Phase 3), so an action list can hold a spell, clicky or AA, `/ccast` can fire
-anything by hand and `/cgive` can hand anything over. Everything else below.
+anything by hand and `/cgive` can hand anything over. Beside the chain there is now a **jobs**
+layer (Phase 6) for the errands a character is sent on rather than the responsibilities it holds --
+one job so far, tradeskill combines. Everything else below.
 
 ---
 
@@ -837,6 +839,76 @@ states' landed-effect bookkeeping now being told when a cast did *not* land. Tha
 all new — the first session after this is the one to watch for states reacting to reasons they have
 never seen.
 
+## Phase 6 — Jobs (errands above the chain)
+
+**The jobs layer landed 2026-08-22** (see the Jobs section of ARCHITECTURE.md). Everything before
+this was a *state*: a standing responsibility the chain weighs against the character's others every
+pass. A job is the other kind of work — a whole activity the player sends the character off to do,
+which is not weighed against anything because while it runs it is the only thing happening.
+`jobs/job.lua` is the contract, `jobs/jobs.lua` the registry, and both halves of the wiring are
+mechanisms that already existed: a job registers as a **service** (pulsed every frame, because the
+chain it starves cannot drive it) and as a **priority gate** returning `Priorities.job` (0) while it
+works, which starves every band exactly as a state returning busy would. New section in `/cmenu`,
+new `/job` beside `/state`.
+
+Three deliberate differences from a state, all the same difference — a job is an errand, not a fact
+about the character:
+
+- **the run switch is never persisted.** The setup is; the running is not, so no job is ever going
+  when the script comes up. A character that resumed an errand nobody sent it on this time would be
+  the worst failure this layer could have;
+- **a job ends**, with a reason it keeps and shows, because the reason is the whole output of work
+  that ran while nobody was watching;
+- **the player is not fought.** Closing the container a job is combining in stops it.
+
+**Tradeskill job** (`jobs/tradeskillJob.lua`) is the first one: fill a container, press Combine,
+`/autoinventory` the results, repeat. It reads two facts off the server's own behaviour rather than
+off chat — a recipe is matched by *slots occupied* (so two of a material is two slots, and each is
+picked up singly with `/ctrlkey`, since a whole stack dropped in is destroyed by the first combine),
+and the container being **emptied** is the only reliable "the combine happened", because every
+refusal path leaves it untouched and those refusals are a dozen sentences, several of them composed
+server-side. Limits: a skill level, a number of combines, a number of *successful* ones, the
+recipe going trivial, out of materials, the container closed, Stop. **Which** skill is itself a
+reading rather than a setting — left on Auto the first "You have become better at X!" of the run
+names it, since nothing else is acting while a job holds the chain, and until one arrives the answer
+is nil and the limit has not come due.
+
+**Verified off-game, not in-game.** An eleven-scenario harness drives `Pulse()` against a fake
+client (fake clock, cursor, container and a fake server that clears the container and hands products
+back the way `Object::HandleCombine` does): both container kinds, stop-on-count, stop-on-skill,
+out-of-materials, a refused combine, a failed combine, a non-tradeskill bag, a full inventory, a
+two-slot material, a cursor already loaded at start, and the gate holding only while running. What
+that proves is the step machine; what is still owed is a real forge. The spots to watch:
+
+1. **`/ctrlkey` picking one off a stack.** The client path differs by whether the bag window is
+   open (`PickupItem` falls back to clicking the InvSlot, which can spawn a QuantityWnd). If a whole
+   stack ever lands in the container, that is where it went wrong — and it costs the stack.
+2. ~~**The Combine button as the tradeskill-container reading.**~~ **Confirmed 2026-08-22** — an
+   open brew barrel reports `Container_Combine`, and the run got past the check to the fill on its
+   first try. Still unconfirmed in the other direction: that a plain backpack does *not* report it.
+3. **A world container after a successful combine.** The server sends `OP_ClearObject` and deletes
+   the row; if the RoF2 client *closes* the window on that rather than merely emptying it, every run
+   at a forge stops after one combine with "was closed", and the closed reading needs a settle.
+4. **Products that do not reach the cursor.** `SummonItem` is called with `slotCursor`, but a client
+   that puts a product straight into a bag would leave the collect step with nothing to see; it
+   would still finish (the cursor is already empty) — worth confirming rather than assuming.
+
+Open, in rough order of how much they would be used:
+
+- **More jobs.** The shape is now cheap: a module with `Pulse/Hold/IsEnabled/SetEnabled/Describe`
+  and a page. The obvious next ones are **vendoring** (sell a list to the merchant in front of you),
+  **banking**, and **foraging/fishing**, each of which is the same "stand here and repeat" as this
+  one with a different window.
+- **Jobs that hold at a weaker band.** `Hold()` returns a band, not a boolean, so a job that should
+  let healing through would return `Priorities.heal` and cut only the tail below it. Nothing needs
+  it yet, and the first job that does is the one that proves the shape is right.
+- **A reason worth reading after the fact.** Stop reasons are held in memory and shown on the page;
+  a character that finished an errand three hours ago has nothing to show but the last line. A
+  small per-job history (when it started, what it made, why it stopped) is what a fleet of
+  tradeskilling boxes would actually want.
+- **Saved setups.** One container and one material list per character. A named-recipe list — pick
+  "Bandages", pick "Iron Ration" — is the obvious next thing anyone will ask for.
+
 ## Cross-cutting gaps (no owner yet)
 
 - **Lifecycle events**: zoning, death/rez handling, camp/disconnect detection, GM detect →
@@ -1647,10 +1719,25 @@ never seen.
    on a dragon as much as on a rat. Watch for three things: that the retreat does not fight the follow (with `combat_relax` on, the follow holds
    at 40 and there is nothing to fight — with it *off* and a tight follow distance, the two will
    trade, and that is the configuration to notice rather than a bug to fix at the state); that a
-   character mid-cast does not walk out of it (the movement service should report the move blocked
-   for the cast, and the retreat should resume when it lands); and that the sight stop does what it
+   character mid-cast *does* walk out of it, which is the band move below turning that check on its
+   head -- the retreat outranks the heal now, so a cast in flight is lost to the step back and the
+   next one waits out the walk instead of cancelling it; and that the sight stop does what it
    says — put a pillar behind the caster and it should stop the pass sight goes, say so in
    `/cstandoff`, and *not* start the same walk again while it stands there.
+
+   **Then the band move** (2026-08-21, at the user's direction): the state was at `standoff` = 84,
+   below the rotations, and now sits at 24 -- under the passive band, over cure and heal. Below the
+   rotations, "who backs out" was free (anything with work in hand was busy higher and the pass never
+   reached the state) and free at the wrong price: the healer it was written for was reached between
+   casts, but every retreat it began was cancelled by its own next heal, and a walk that ends short
+   marks the spot as having no room left, so the pass after that would not try. The two things to
+   watch in game are the two the chain used to do for nothing. **A melee dps must not be walked out
+   of a fight**: the state now reads `Me.Combat` and a running stick instead of relying on being
+   starved, so the case to stage is a rooted mob with the tank still running in and a rogue already
+   inside its reach -- the rogue should keep swinging and never take a step back, and a repeated
+   walk-back/walk-in dance is exactly the failure. **And a retreat now starves the healing** for as
+   long as it walks, so time one: a couple of seconds is the shape, and anything approaching the
+   eight-second walk timeout is a group with no heals for eight seconds.
 
    **Then what replaced the setting** (2026-08-20, at the user's direction and in two steps: the
    per-character distance came out in favour of `Mobs.Reach`, then the whole thing was rescoped to
@@ -1682,6 +1769,33 @@ never seen.
      rather than a distance this state should be computing.
 
    None of these is a reason to put a number back on the page.
+
+   **Then the pets** (2026-08-21, at the user's direction). The tank's measurement counted players
+   and nothing else, and a pet is not a player to the client's spawn types — a pet's type is *pet*,
+   so `pc radius` never returned one and the hold was blind to every pet in the camp while standing
+   next to them all fight. It now runs a second `pcpet radius` search over the same ground. What
+   makes this the interesting half is that **nothing meets it coming the other way**: a player inside
+   the tank walks himself back out (`standoffState`) and lets the hold relax, while a pet holds its
+   own melee range on the mob until the fight ends, so the tank gives all of the ground and more of
+   it. Fourteen more headless checks cover the arithmetic, including the same cases run against the
+   old source to see them fail. What a harness cannot answer:
+
+   - **Where a pet actually stands on a rooted mob**, which is the number that decides how far in the
+     tank ends up. If pets sit at 4 or 5, the hold goes to 2 or 3 and the tank is inside everything;
+     if they sit further out on a large model, nothing changes at all. Watch `/cmove` for a fight
+     with a mage or beastlord in the group before deciding it is right.
+   - **Whether the hold chatters as the pet jockeys.** A pet repositions constantly and this is
+     re-derived on the 250 ms cadence, so the stick distance will move with it. A stick following a
+     moving hold is what `SetStickDistance` is for, but a tank shuffling every quarter second is the
+     failure to look for, and the answer if it happens is at the cadence or at the pet's own reading,
+     not a floor.
+   - **`pcpet` on this client, and charm.** MQ types a spawn with a MasterID as a pet and sorts it by
+     the master's type, so a charmed mob a player is holding should read `pcpet` and be counted as
+     one of ours — which is right (it is on our side of the fight) and worth seeing once. A mob's own
+     pet stays out, being a body we are killing rather than one we are arranging.
+   - **Mercenaries are not counted.** MQ types them separately from both PC and pet, so a merc
+     standing inside the tank is the same problem this just fixed for pets and is not fixed. Nobody
+     here runs one; if that changes, the search list is where it goes.
 
    **The assumption underneath.** That a rooted mob on this server hits whoever is in its reach
    rather than only its top hate — which is what makes being nearest worth anything. If it turns out
@@ -1715,3 +1829,100 @@ never seen.
    conversion. On a necromancer: Death Bloom firing once and not again while it is on the bar. And
    the band itself — a shaman with a rotation and a canni slot should spend the beat on canni ahead
    of the nuke while mana is under the ceiling, and never ahead of a heal.
+
+37. **Chasing a mob that runs, in game** (2026-08-21, `Mobs.IsRunning`, `MeleeState.ChaseCurrentTarget`
+   and `holdStationOn` in `states/meleeState.lua`; the model is described in ARCHITECTURE.md,
+   "Chasing a mob that runs"). The report was that a fleeing mob is chased with the stick and the
+   stick catches on corners. It now walks the mob's own route instead — a `Movement.Follow` at melee
+   range with no buffer and `requireSight`, which is `followtarget`'s mover with melee's two numbers
+   on it. Two headless harnesses, and between them they answer the scheduling but not EverQuest:
+
+   - a corridor harness (room, doorway, hall turning west) measuring the honest thing rather than
+     guessing at collision — **where each mover aims**. Chasing a mob a shade faster than the
+     character, the stick aimed at a point it could not walk to on 162 of 168 driving pulses, never
+     left the room and failed with *could not reach the stick target*; the chase aimed through a wall
+     on **0** pulses in every speed case and followed the mob out every time.
+   - a harness over the real `MeleeState.Go()` with the movement service live, checking which mover
+     the pass hands the character to across six scenarios: the corner chase keeps **one** follow task
+     from the flee edge to the catch, a mob the character keeps pace with does not thrash the pair
+     (one task across six in-and-out-of-reach passes), a rear-arc shuffle never leaves the stick, a
+     runner that stops out of sight keeps being walked to until it is *seen*, `stick off` moves
+     nothing, and a runner beyond the engage ring is not taken up until it is inside it.
+
+   What neither can answer:
+
+   - **Whether a chase is worth having.** A mob on this server may simply outrun the character, in
+     which case the whole thing is a walk down a corridor that ends when the mob does. Watch one
+     flee end to end before tuning anything: if it never catches, the question is snare and not
+     movement.
+   - **What the chase runs into on the way.** There is **no leash** — the stick it replaces had none
+     either, but the stick used to stop itself by wedging, and a chase that works is a chase that
+     will follow a mob into the next room. A runner that leads the character into an unpulled camp is
+     the failure mode to watch for, and the answer if it happens is a leash on the *route walked*
+     rather than a timer.
+   - **Facing while chasing.** A follow faces its next breadcrumb, not the mob, and auto attack needs
+     `Status:IsFacingTarget` (±50°). Directly behind a runner those are the same direction, but a
+     tight corner is where they would differ — if swings stop landing mid-chase, that is the spot.
+   - **The hand-back in a real fight.** `stickCanHold` wants the mob in reach, in sight and **not
+     moving**; a mob that dances while it fights would keep the chase a beat longer than it needs to.
+     Harmless in the harness (a parked follow holds range with the keys released, and the swing code
+     runs regardless), but the thing to notice is a character that reaches its mob and does not quite
+     square up to it.
+   - **`states/spellDpsState.lua`'s "once it runs" is now the roster's reading** rather than its own
+     `Moving and Fleeing`, which means it gained the reach gate. It should behave the same for a
+     caster, who is outside a mob's reach by standing where casters stand — but a hybrid in melee
+     with a fleeing timing on a snare is where the two definitions differ, and that slot firing later
+     than it used to would be this.
+
+38. **A tradeskill run, in game** (2026-08-22, `jobs/tradeskillJob.lua`, and with it the whole jobs
+    layer — `jobs/job.lua`, `jobs/jobs.lua`, the `Priorities.job` floor and the Jobs section of
+    `/cmenu`). Nothing here has touched a client. What an off-game harness settled across eleven
+    scenarios: the cycle itself (fill, combine, collect, repeat) for both a bag and a world
+    container; stopping on a combine count, on a skill level, on materials running out, on the
+    container closing, on a refusal, on a bag with no Combine button and on a full inventory; a
+    two-slot material taking two slots and two separate pick-ups; something already in the client's
+    hand at the start being put away rather than posted into the forge; a failed combine counting and
+    the run carrying on; `/combine` firing exactly once per cycle; the gate holding at 0 while
+    running and at nothing while idle; and nothing stranded in the container or on the cursor after
+    any stop. What it cannot answer:
+
+    **First in-game run, 2026-08-22: it stopped on the press with "has no room left" on an empty
+    brew barrel.** `Item.Container` answers 0 for a world container (it reports slots only for an
+    item typed `ITEMTYPE_PACK`, and the client does not type the one it builds from a clicked
+    object that way), and the zero was being spent as a real slot count. Fixed the way the buff
+    cache and the container type were: the unreadable count is an unknown, not a zero — it falls
+    back to the ten slots `enviro1..enviro10` addresses, and the pre-flight size check stands aside
+    rather than refusing on a number nobody gave. That run also **confirmed the Combine button
+    reading** (verify spot 2 above), since it reached the fill. Still owed:
+
+    - **`/ctrlkey` really taking one off a stack.** The whole design leans on it — the server
+      destroys everything in the container on a combine, so a stack that goes in is a stack that is
+      gone. `PickupItem` takes two different paths depending on whether the bag window is open (the
+      closed one clicks the InvSlot and can spawn a QuantityWnd), and only one of them has been read
+      rather than run. **Test it with something worthless before anything else.**
+    - **Whether `Container_Combine` is really only drawn on a tradeskill container.** It is the one
+      reading that tells a forge from a backpack, and it is read off the SIDL rather than off the
+      item. If a plain bag shows it, the check is worthless and the run would try to combine in a
+      backpack; if a real tradeskill container hides it, the run refuses to start on a good forge.
+    - **What a world container does after a successful combine.** The server clears it and deletes
+      the row (`OP_ClearObject`); if this client closes the window on that rather than emptying it,
+      every forge run stops after one combine saying "was closed", and the closed reading needs a
+      settle before it is believed.
+    **A long run then stopped on "You cannot combine items when your hands are full!"** (2026-08-22).
+    The previous combine's product reached the cursor after the fill step had already looked at it —
+    the product arrives on a packet of its own, separate from the one emptying the container, and
+    the collect step moves on the moment the cursor reads empty. Combine was the one step firing
+    without a same-frame cursor test; it has one now, which closes the gap rather than narrowing it,
+    and the refusal is listened for as the one *recoverable* one (client-side, nothing sent, the
+    container untouched) so a run that finds a gap at three in the morning presses again instead of
+    ending with an hour of materials left. Still owed:
+
+    - **Where the products actually land.** `SummonItem` names the cursor, and the collect step
+      exists for exactly that; a client that put a product straight into a bag would leave it with
+      nothing to see. It would still finish -- an empty cursor is what it is waiting for -- but the
+      combine count and "last made" would be the only evidence anything was produced.
+    - **Whether holding the whole chain is what anyone wants.** The floor is 0, so a character
+      tradeskilling will not heal itself, will not stand up, and will not follow. That is the
+      deliberate reading of "a job takes the character", and the first time something walks up and
+      hits a busy crafter is when it gets argued about. `Hold()` already returns a band rather than a
+      boolean, so the answer, if it changes, is a weaker floor and not a new mechanism.

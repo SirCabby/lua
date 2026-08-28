@@ -23,7 +23,7 @@ local ToggleCommand = require("cabby.commands.toggleCommand")
 ---a second reader (a pull state's leash, a tank state's add sweep) should be reading the same
 ---roster rather than assembling its own from scratch.
 ---
----**Four angles, and no single one of them is trusted alone.** Each entry records which of them
+---**Five angles, and no single one of them is trusted alone.** Each entry records which of them
 ---saw it, because *how* we know is what says how much a reader may lean on it:
 ---
 ---- **engaged** -- `Combat.GetTargetId`, what the group is killing. The strongest answer there is:
@@ -33,6 +33,9 @@ local ToggleCommand = require("cabby.commands.toggleCommand")
 ---- **defend** -- the standing `defend` reports, which are the mobs beating on group members. The
 ---  only way this client learns about the add on the healer; it is also the angle that depends on
 ---  somebody else running cabby and speaking, which is why it is not the only one.
+---- **held** -- a mob a state says it is holding still (`Mobs.Hold`). The three angles above all
+---  ask *who is this fighting*, and a mob that is fighting nobody because we took it out of the
+---  fight is the one case where that question answers wrongly. See `Mobs.Hold`.
 ---- **nearby** -- a sweep of the zone for NPCs in combat stance within reach. This is the angle
 ---  the other three cannot cover: the add pathing in that has not picked anybody yet, the mob
 ---  chewing on a pet (on nobody's extended target window and nobody's report), and the whole fight
@@ -64,6 +67,7 @@ local Mobs = {
         engaged = "engaged",
         hater = "hater",
         defend = "defend",
+        held = "held",
         nearby = "nearby"
     },
     _ = {
@@ -72,6 +76,7 @@ local Mobs = {
         entries = {},    -- [id] = MobEntry
         poses = {},      -- [id] = { x, y, z, heading, lastMovedMs } -- survives a rebuild
         rooted = {},     -- [id] = true, for mobs seen held where they stand (see IsRooted)
+        held = {},       -- [id] = true, a state says it is holding this one still (see Hold)
         sweptIds = nil,  -- the last sweep's answer, folded in until the next one replaces it
         lastSweepMs = 0,
         lastPoseMs = 0,
@@ -146,6 +151,50 @@ local function isHostile(spawn)
     if Pet.GetId() == spawn.ID() then return false end
     if spawn.Targetable() == false then return false end
     return true
+end
+
+---Is anybody standing close enough to this mob for it to still be this fight?
+---
+---The question a held mob is judged on, and it is asked of *players* rather than of the roster:
+---what makes a sleeping mob matter is that it will wake up somewhere somebody is standing. This
+---character counts as much as anybody -- the chanter is usually the one stood in the middle of it.
+---
+---Straight-line 3D, not the sweep's cylinder, because the thing being asked is "will this reach
+---somebody" and a mob one floor up a stairwell reaches the people below it. Pets are not counted:
+---a pet can look after itself, and counting them would hold every mob a magician parks a pet near.
+---Read once per rebuild and shared by every held mob, rather than per mob: the group is the same
+---group for all of them, and this is otherwise a position read per player per held mob per pulse.
+---@return number[][] places { y, x, z } each
+local function playerPlaces()
+    local places = {}
+
+    local function place(spawn)
+        local y, x, z = tonumber(spawn.Y()), tonumber(spawn.X()), tonumber(spawn.Z())
+        if y ~= nil and x ~= nil and z ~= nil then places[#places + 1] = { y, x, z } end
+    end
+
+    place(mq.TLO.Me)
+    for index = 1, (tonumber(mq.TLO.Group.Members()) or 0) do
+        local member = mq.TLO.Group.Member(index).Spawn
+        if member.ID() ~= nil then place(member) end
+    end
+
+    return places
+end
+
+---@param spawn any mq spawn TLO
+---@param places number[][] from `playerPlaces`
+---@return boolean isNear
+local function isNearAnyPlayer(spawn, places)
+    local y, x, z = tonumber(spawn.Y()), tonumber(spawn.X()), tonumber(spawn.Z())
+    if y == nil or x == nil or z == nil then return false end
+
+    local radius = MobsConfig.GetHoldRadius()
+    for _, place in ipairs(places) do
+        if Geometry.Distance3D(y, x, z, place[1], place[2], place[3]) <= radius then return true end
+    end
+
+    return false
 end
 
 ---The sweep: NPCs in combat stance within reach.
@@ -318,6 +367,46 @@ function Mobs.Reach(id)
     return mq.TLO.Spawn("id " .. tostring(id)).MaxRangeTo()
 end
 
+---Has this mob turned and run from us?
+---
+---**There is no flag for it**, and the obvious reading is a trap. The client's own `Fleeing` is
+---pure geometry -- `IsMobFleeing` is true whenever the mob's heading falls inside a wide arc of
+---*away from me* -- so standing behind something the tank is holding answers yes for the whole
+---fight. It is asked with two other readings, and what the three mean between them is a mob that
+---has left us:
+---
+---- **moving**, the honest half (`fabs(SpeedRun) > 0`) with no geometry in it, because a mob in
+---  melee with anybody stands still;
+---- **pointed away**, because a mob moving *at* us is arriving rather than leaving;
+---- **out of our reach** (the same `MaxRangeTo` `Mobs.Reach` reads, off the spawn already in
+---  hand), which is what the pair above cannot say on its own. A mob jockeying for position in
+---  melee is moving, and to anybody standing in its rear arc it is pointed away -- which is the
+---  whole of a rogue's fight. Reach is the honest line between a shuffle and a run: inside it we
+---  can hit the mob, so wherever it is standing it has not got away from anybody.
+---
+---Honest rather than perfect, and the ways it is wrong are the cheap ones. A mob running past us
+---at somebody behind reads as running from us, and both readers do something reasonable about that
+---(a snare landed on it; a route walked toward where it went). What it will not do is read yes
+---through a normal fight, which is the failure that would make it meaningless.
+---
+---Read live on every ask rather than sampled, because all three are readings the client keeps
+---current on its own -- a remembered one would be about a mob that has since stopped.
+---@param id number
+---@return boolean isRunning
+function Mobs.IsRunning(id)
+    local spawn = mq.TLO.Spawn("id " .. tostring(id))
+    if (spawn.ID() or 0) < 1 then return false end
+    if spawn.Moving() ~= true or spawn.Fleeing() ~= true then return false end
+
+    -- No reading of the gap is not a run. Both readers of this are deciding whether to *move*, and
+    -- the answer to not knowing is the one standing still already gives.
+    local distance = spawn.Distance3D()
+    local reach = spawn.MaxRangeTo()
+    if distance == nil or reach == nil then return false end
+
+    return distance > reach
+end
+
 ---When this mob was last seen to move or turn, in wall-clock ms.
 ---
 ---Nil when it has never been sampled. Readers compare it against a moment of their own -- "has it
@@ -397,6 +486,48 @@ end
 
 ---Rebuild the roster from all four angles.
 ---
+---Say that this character is holding this mob still, and keep it in the fight while that is true.
+---
+---**The three angles that come from the client being told all ask one question -- who is this mob
+---fighting -- and crowd control is the one job that makes that question answer wrongly.** A mez on
+---this server carries a memory blur (`Enthrall` is SPA 31 plus SPA 63, and the roll is better than
+---a coin toss at ordinary levels): when it fires the mob's hate list is wiped, so it drops off
+---every extended target window, nobody reports it, and the server clears its combat stance so the
+---sweep stops seeing it too. All four angles go dark at once, on the mob we are *most* sure about
+---and least want to lose -- and losing it means the mez is never refreshed, so it wakes up in the
+---middle of camp on a timer nobody is watching.
+---
+---So a holder says so, and the roster keeps the mob while two things stay true: it is still a
+---mob (alive, hostile, targetable -- checked in `rebuild` like every other angle), and somebody is
+---still standing near it (`isNearAnyPlayer`). The second is what stops this from being a way of
+---dragging mobs around forever: a blurred mob nobody is near is one that will come round somewhere
+---harmless, which is what the blur is for, and it is let go.
+---
+---**Sticky rather than re-asserted each pass**, because the holder is a state and a state that the
+---chain is starving cannot promise a cadence -- the same argument that puts the pose sampling in
+---this service rather than in the state that wanted it. It is dropped by `Release`, by the mob
+---dying or despawning, and by a zone.
+---@param id number
+function Mobs.Hold(id)
+    id = tonumber(id)
+    if id == nil or id < 1 then return end
+    Mobs._.held[id] = true
+end
+
+---Stop holding this mob: whatever we were holding it with is no longer something we believe in.
+---@param id number
+function Mobs.Release(id)
+    id = tonumber(id)
+    if id == nil then return end
+    Mobs._.held[id] = nil
+end
+
+---@param id number
+---@return boolean isHeld whether some state here says it is holding this one still
+function Mobs.IsHeld(id)
+    return Mobs._.held[tonumber(id) or 0] == true
+end
+
 ---Order is strongest angle first and, within an angle, the order that angle listed them -- which
 ---for the sweep is nearest first and for the extended target window is the window's own order,
 ---both of which are stable across passes. A reader walking the list to pick one mob out of it
@@ -446,6 +577,22 @@ local function rebuild()
         add(id, Mobs.sources.defend)
     end
 
+    -- Read here rather than kept, and self-clearing: a hold on a spawn the world has taken back is
+    -- a fact about nothing, and the next spawn to wear that id would inherit it. The proximity
+    -- reading is the only one in the roster that can drop a mob *without* anything having changed
+    -- about the mob -- the group walking away is what moves it out of the fight.
+    local places = nil
+    for id in pairs(Mobs._.held) do
+        local spawn = mq.TLO.Spawn("id " .. tostring(id))
+        if spawn.ID() == nil or spawn.Dead() == true then
+            Mobs._.held[id] = nil
+        else
+            -- only paid for when something is actually being held, which is most of the time never
+            places = places or playerPlaces()
+            if isNearAnyPlayer(spawn, places) then add(id, Mobs.sources.held) end
+        end
+    end
+
     for _, id in ipairs(Mobs._.sweptIds or {}) do
         add(id, Mobs.sources.nearby)
     end
@@ -471,12 +618,13 @@ end
 
 ---Was this mob seen by an angle that cannot be wrong about it?
 ---
----The three angles that come from the client being *told* -- our own engagement, our own extended
----target window, a group member's report -- are certain that the mob is in the fight. The sweep is
----not: it says the mob is in combat stance with somebody, which is usually us and sometimes the
----guards across the room. A reader whose mistake is cheap (a mez spent on a mob that was not
----coming for us anyway) reads `GetIds`; one whose mistake is expensive (an AE that would pull the
----room in) asks this first.
+---The angles that come from the client being *told* -- our own engagement, our own extended target
+---window, a group member's report -- are certain that the mob is in the fight, and so is a mob this
+---character put a hold on itself, which is the strongest of the lot: we did not hear about that
+---one, we did it. The sweep is the odd one out: it says the mob is in combat stance with somebody,
+---which is usually us and sometimes the guards across the room. A reader whose mistake is cheap (a
+---mez spent on a mob that was not coming for us anyway) reads `GetIds`; one whose mistake is
+---expensive (an AE that would pull the room in) asks this first.
 ---@param id number
 ---@return boolean isConfirmed
 function Mobs.IsConfirmed(id)
@@ -485,6 +633,7 @@ function Mobs.IsConfirmed(id)
     return entry.sources[Mobs.sources.engaged] == true
         or entry.sources[Mobs.sources.hater] == true
         or entry.sources[Mobs.sources.defend] == true
+        or entry.sources[Mobs.sources.held] == true
 end
 
 ---@param id number
@@ -497,6 +646,7 @@ function Mobs.DescribeSources(id)
     if entry.sources[Mobs.sources.engaged] then words[#words + 1] = "what we are killing" end
     if entry.sources[Mobs.sources.hater] then words[#words + 1] = "on our target window" end
     if entry.sources[Mobs.sources.defend] then words[#words + 1] = "called by the group" end
+    if entry.sources[Mobs.sources.held] then words[#words + 1] = "held still by us" end
     if entry.sources[Mobs.sources.nearby] then words[#words + 1] = "in combat nearby" end
 
     if #words == 0 then return "unknown" end
@@ -532,6 +682,7 @@ function Mobs.Pulse()
         Mobs._.ids = {}
         Mobs._.poses = {}
         Mobs._.rooted = {}
+        Mobs._.held = {}
     end
 
     if Status.IsFleeing() then
@@ -540,6 +691,7 @@ function Mobs.Pulse()
         Mobs._.ids = {}
         Mobs._.poses = {}
         Mobs._.rooted = {}
+        Mobs._.held = {}
         return
     end
 
@@ -598,9 +750,14 @@ function Mobs.Init(stateMachine)
     local cmobsDocs = ChelpDocs.new(function() return {
         "(/cmobs) Reports every mob this character believes is in the fight, and how it knows",
         " -- Usage: /cmobs",
-        " -- The roster is built from four angles: what we are fighting, the extended target",
-        "    window, the group's (defend) reports, and a sweep of the zone for anything in combat",
-        "    stance nearby. Each mob lists which of them saw it.",
+        " -- The roster is built from five angles: what we are fighting, the extended target",
+        "    window, the group's (defend) reports, anything this character is holding still, and a",
+        "    sweep of the zone for anything in combat stance nearby. Each mob lists which saw it.",
+        " -- (held still by us) is the one that is in the fight while fighting nobody: a mez here",
+        "    carries a memory blur, and a mob whose hate list it wipes falls off every other angle",
+        "    at once. It is kept while a player is within " .. tostring(MobsConfig.GetHoldRadius()) ..
+        " of it, and let go past that --",
+        "    a mob that will wake up where nobody is standing is the point of the blur.",
         " -- A mob only the sweep saw is the loose one: it is in combat with somebody, and the",
         "    client cannot say that somebody is us. Anything crowd control must not get wrong",
         "    waits for one of the other three.",

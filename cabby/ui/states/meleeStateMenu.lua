@@ -118,7 +118,7 @@ function MeleeStateMenu.BuildMenu(meleeState)
             MeleeStateConfig.SetRootTank(result)
         end
         ImGui.SameLine()
-        CommonUI.HelpMarker("A mob that is rooted cannot reach whoever it hates most, so it swings at whoever is standing in its reach instead. While this character holds the group's Main Tank role, it closes inside the nearest other player standing near a rooted target -- as far in as zero if that is what being nearest takes -- and relaxes back to melee range once it is the nearest body. Every player body counts, not just group members, because a mob does not check the group window before it swings. Nothing happens on an ordinary mob, or for anyone who is not the tank. The other half is on the Standoff page, where everyone else backs off to behind the tank.")
+        CommonUI.HelpMarker("A mob that is rooted cannot reach whoever it hates most, so it swings at whoever is standing in its reach instead. While this character holds the group's Main Tank role, it closes inside the nearest other body standing near a rooted target -- as far in as zero if that is what being nearest takes -- and relaxes back to melee range once it is the nearest body. Every body counts, not just group members: the raid member from another group, the stranger in the camp, and pets, because a mob does not check the group window before it swings. Pets are the ones that matter most here, since a player inside the tank backs out on their own (the Standoff page) and a pet never does -- it holds its melee range on the mob all fight, so getting inside one is all on the tank and usually costs more ground than a person would. Nothing happens on an ordinary mob, or for anyone who is not the tank.")
 
         ImGui.SameLine()
         ---@type boolean

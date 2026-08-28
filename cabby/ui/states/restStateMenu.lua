@@ -64,6 +64,15 @@ function RestStateMenu.BuildMenu(restState)
         ImGui.SameLine()
         CommonUI.HelpMarker("Get back up once every one of them is at or above this. It is never allowed below the sit point, which would stand the character up on the pass after it sat down.")
 
+        ImGui.SameLine()
+        ImGui.SetNextItemWidth(60)
+        local resumeBelow, resumeChanged = ImGui.DragInt("Sit again below %", RestStateConfig.GetResumeBelowPct(), 1, 1, 100)
+        if resumeChanged then
+            RestStateConfig.SetResumeBelowPct(resumeBelow)
+        end
+        ImGui.SameLine()
+        CommonUI.HelpMarker("How far a pool has to fall after a rest before the next one is worth sitting for. Standing up for being full latches the character topped up, and nothing sits it back down until something reads below this -- so the band between this and the stand point is room for a bar to wobble in without buying a posture change. It needs that room: the reading at the top of a bar is not steady, and a server tick that shows health a point or two above where it really is is put back by the next one, which without a band is read as a pool short of full a moment after standing up for being full -- sit, stand, sit, stand, over health that was never lost. Health that genuinely goes is still worth sitting for and still sits, on the pass it drops below this. Never above the stand point, and set to the same number it is off.")
+
         ImGui.TableNextRow()
         ImGui.TableNextColumn()
 
