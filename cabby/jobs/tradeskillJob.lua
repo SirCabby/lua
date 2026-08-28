@@ -524,8 +524,7 @@ local function recordReveal(ms)
     end
     run.observedRevealMs = worst
 
-    -- unconditional while this is being tuned: the number is the whole point
-    print(string.format("CURSORREVEAL took %dms -- settling reads for %dms",
+    DebugLog(string.format("Reveal took %dms -- settle window now %dms",
         math.floor(ms), math.floor(settleWindow())))
 end
 
@@ -697,17 +696,12 @@ local function putHandsDown(evidenceMs)
         extend(evidenceMs)
     end
 
-    local before = cursorName()
+    -- Stamp what we tried to put down and when. A reveal is timed from here to a DIFFERENT item
+    -- turning up (see recordReveal), which is what sizes the settle when cursorsync.asi is not
+    -- there to publish the real depth.
     if fire("/autoinventory", handsIntervalMs) then
         run.bankFiredAtMs = Time.current_time()
         run.bankItemId    = held
-        -- PROBE (2026-08-27): read the cursor again in the same frame the command ran in. Nothing
-        -- can have come back from the server yet, so if something is already in hand it came out
-        -- of the CLIENT's own cursor queue (pLocalPC->LimboBufferItems) -- which would mean the
-        -- client knows the whole queue and the settle windows are unnecessary. "then <nothing>"
-        -- means it only ever tracks the front and the settles have to stay.
-        print("CURSORPROBE put away [" .. tostring(before) .. "] -- same frame, cursor now [" ..
-            tostring(cursorName() or "<nothing>") .. "]")
     end
 end
 
